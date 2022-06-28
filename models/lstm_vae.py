@@ -122,7 +122,10 @@ class LSTMVAE(BaseVAE):
         :return: (Tensor) List of latent codes
         """
         out, states = self.encoder_rnn1(input)
-        out, states = self.encoder_rnn2(out)
+        out, states  = self.encoder_rnn2(out)
+        # TODO hidden state needs to be passed
+        # https://github.com/chrisvdweth/ml-toolkit\
+        # https://discuss.pytorch.org/t/lstm-autoencoders-in-pytorch/139727
         result = torch.flatten(out, start_dim=1)
 
         # Split the result into mu and var components
@@ -139,9 +142,6 @@ class LSTMVAE(BaseVAE):
         :param z: (Tensor) [B x D]
         :return: (Tensor) [B x C x H x W]
         """
-
-        #result = self.decoder(z)
-
 
         out, states = self.decoder_rnn1(z)
         out, states = self.decoder_rnn2(out)
@@ -162,13 +162,22 @@ class LSTMVAE(BaseVAE):
         return (eps * std) + mu
 
     def forward(self, input: Tensor, **kwargs) -> List[Tensor]:
+        # TODO do not use reshape
+        # https://discuss.pytorch.org/t/for-beginners-do-not-use-view-or-reshape-to-swap-dimensions-of-tensors/75524
         input = input.reshape(input.shape[1], input.shape[0])
+        input_shape = input.shape
         mu, log_var = self.encode(input)
+        mu_shape = mu.shape
+        log_var_shape = log_var.shape
+
+
         z = self.reparameterize(mu, log_var)
+        z_shape = z.shape
 
         input = input.reshape(input.shape[1], input.shape[0])
         result = self.decode(z)
         input = input.reshape(input.shape[1], input.shape[0])
+        result_shape = result.shape
 
         return [result, input, mu, log_var]
 

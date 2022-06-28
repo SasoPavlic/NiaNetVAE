@@ -39,6 +39,8 @@ class ECG5000(Dataset):
         df_train = df_train.astype('float32')
         df_test = df_test.astype('float32')
 
+        #TODO workarround
+        # https://discuss.pytorch.org/t/how-to-handle-last-batch-in-lstm-hidden-state/40858
         df_train = df_train.head(4480)
         df_test = df_test.head(448)
 
