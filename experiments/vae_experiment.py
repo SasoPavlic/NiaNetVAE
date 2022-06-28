@@ -129,29 +129,3 @@ class VAEXperiment(pl.LightningModule):
             return optims
 
 
-class LSTMVAExperiment(pl.LightningModule):
-    def __init__(self,
-                 lstm_vae_model: BaseVAE,
-                 params: dict) -> None:
-        super(LSTMVAExperiment, self).__init__()
-
-        self.model = lstm_vae_model
-        self.params = params
-        self.curr_device = None
-        self.hold_graph = False
-        try:
-            self.hold_graph = self.params['retain_first_backpass']
-        except:
-            pass
-
-    def train_dataloader(self) -> TRAIN_DATALOADERS:
-        pass
-
-    def test_dataloader(self) -> EVAL_DATALOADERS:
-        pass
-
-    def val_dataloader(self) -> EVAL_DATALOADERS:
-        pass
-
-    def predict_dataloader(self) -> EVAL_DATALOADERS:
-        pass

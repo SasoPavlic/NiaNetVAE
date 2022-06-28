@@ -48,6 +48,18 @@ class LSTMVAExperiment(pl.LightningModule):
 
         return train_loss['loss']
 
+    def validation_step(self, batch, batch_idx, optimizer_idx=0):
+        real_signal, labels = batch
+        self.curr_device = real_signal.device
+
+        results = self.forward(real_signal)
+        val_loss = self.model.loss_function(*results,
+                                            M_N=self.params['kld_weight'],  # al_img.shape[0]/ self.num_train_imgs,
+                                            optimizer_idx=optimizer_idx,
+                                            batch_idx=batch_idx)
+
+        self.log_dict({f"val_{key}": val.item() for key, val in val_loss.items()}, sync_dist=True)
+
     def configure_optimizers(self):
         optims = []
         scheds = []

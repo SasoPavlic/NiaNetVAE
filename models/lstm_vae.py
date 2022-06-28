@@ -38,14 +38,14 @@ class LSTMVAE(BaseVAE):
         self.encoder_rnn1 = nn.LSTM(
             input_size=n_features,
             hidden_size=self.hidden_dim,
-            num_layers=1,
+            num_layers=n_features,
             batch_first=True
         )
 
         self.encoder_rnn2 = nn.LSTM(
             input_size=self.hidden_dim,
             hidden_size=embedding_dim,
-            num_layers=1,
+            num_layers=n_features,
             batch_first=True
         )
 
@@ -94,7 +94,7 @@ class LSTMVAE(BaseVAE):
         self.decoder_rnn1 = nn.LSTM(
             input_size=input_dim,
             hidden_size=input_dim,
-            num_layers=1,
+            num_layers=n_features,
             batch_first=True
         )
 
@@ -103,11 +103,11 @@ class LSTMVAE(BaseVAE):
         self.decoder_rnn2 = nn.LSTM(
             input_size=input_dim,
             hidden_size=self.hidden_dim,
-            num_layers=1,
+            num_layers=n_features,
             batch_first=True
         )
 
-        self.decoder_output_layer = nn.Linear(self.hidden_dim, n_features)
+        self.decoder_output_layer = nn.Linear(self.hidden_dim, seq_len)
 
         # self.N = torch.distributions.Normal(0, 1)
         # self.N.loc = self.N.loc.cuda() # hack to get sampling on the GPU
@@ -121,12 +121,20 @@ class LSTMVAE(BaseVAE):
         :param input: (Tensor) Input tensor to encoder [N x C x H x W]
         :return: (Tensor) List of latent codes
         """
-        out, states = self.encoder_rnn1(input)
-        out, states  = self.encoder_rnn2(out)
+        # out, states = self.encoder_rnn1(input)
+        # out, (embedding, _) = self.encoder_rnn2(out)
         # TODO hidden state needs to be passed
         # https://github.com/chrisvdweth/ml-toolkit\
         # https://discuss.pytorch.org/t/lstm-autoencoders-in-pytorch/139727
-        result = torch.flatten(out, start_dim=1)
+
+        x = input.reshape((1, self.seq_len, self.n_features))
+        x, (_, _) = self.encoder_rnn1(input)
+        x, (hidden_n, _) = self.encoder_rnn2(x)
+
+        hidden_n = hidden_n.reshape((self.n_features, self.embedding_dim))
+
+        result = hidden_n
+        #result = torch.flatten(out, start_dim=1)
 
         # Split the result into mu and var components
         # of the latent Gaussian distribution
@@ -142,10 +150,13 @@ class LSTMVAE(BaseVAE):
         :param z: (Tensor) [B x D]
         :return: (Tensor) [B x C x H x W]
         """
+        #x = z.repeat(self.seq_len, self.n_features)
+        x = z.reshape((self.n_features, self.input_dim))
 
-        out, states = self.decoder_rnn1(z)
+        out, states = self.decoder_rnn1(x)
         out, states = self.decoder_rnn2(out)
-        result = self.decoder_output_layer(out)
+        x = out.reshape((self.n_features, self.hidden_dim))
+        result = self.decoder_output_layer(x)
 
         return result
 
@@ -176,7 +187,7 @@ class LSTMVAE(BaseVAE):
 
         input = input.reshape(input.shape[1], input.shape[0])
         result = self.decode(z)
-        input = input.reshape(input.shape[1], input.shape[0])
+        #input = input.reshape(input.shape[1], input.shape[0])
         result_shape = result.shape
 
         return [result, input, mu, log_var]
