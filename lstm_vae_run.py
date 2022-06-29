@@ -32,7 +32,7 @@ tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
 seed_everything(config['exp_params']['manual_seed'], True)
 
 model = vae_models[config['model_params']['name']](**config['model_params'])
-experiment = LSTMVAExperiment(model, config['exp_params'])
+experiment = LSTMVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
 
 data = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
 

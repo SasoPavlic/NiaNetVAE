@@ -66,22 +66,25 @@ class ECG5000(Dataset):
         Dataloader sa quando finisce una epoca e vanno re-indicizzati e mischiati
         i dati.
         """
-        return self.x_train.shape[0]
+        shape = self.x_train.shape[0]
+        return shape
 
     def __getitem__(self, index):
         """
         Questa invece è la funzione che fa il lavoro pesante. Estrae i dati che
         servono e li passa al modello.
         """
-        return self.x_train[index], self.y_train[index]
+        input, label = self.x_train[index], self.y_train[index]
+        return input, label
 
 
 class TimeSeriesDataset(LightningDataModule):
     def __init__(
             self,
             data_path: str,
-            train_batch_size: int = 8,
-            val_batch_size: int = 8,
+            train_batch_size: int = 64,
+            test_batch_size: int = 64,
+            val_batch_size: int = 64,
             patch_size: Union[int, Sequence[int]] = (256, 256),
             num_workers: int = 0,
             pin_memory: bool = False,
@@ -91,6 +94,7 @@ class TimeSeriesDataset(LightningDataModule):
 
         self.data_dir = data_path
         self.train_batch_size = train_batch_size
+        self.test_batch_size = test_batch_size
         self.val_batch_size = val_batch_size
         self.patch_size = patch_size
         self.num_workers = num_workers
@@ -112,6 +116,18 @@ class TimeSeriesDataset(LightningDataModule):
 
         return temp
 
+    def test_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
+        temp = DataLoader(
+            self.val_dataset,
+            batch_size=self.test_batch_size,
+            num_workers=self.num_workers,
+            shuffle=True,
+            pin_memory=self.pin_memory,
+            persistent_workers=True
+        )
+        return temp
+
+
     def val_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
         temp = DataLoader(
             self.val_dataset,
@@ -123,13 +139,3 @@ class TimeSeriesDataset(LightningDataModule):
         )
         return temp
 
-    def test_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
-        temp = DataLoader(
-            self.val_dataset,
-            batch_size=144,
-            num_workers=self.num_workers,
-            shuffle=True,
-            pin_memory=self.pin_memory,
-            persistent_workers=True
-        )
-        return temp
