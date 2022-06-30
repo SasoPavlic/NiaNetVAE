@@ -1,17 +1,12 @@
 import torch
 from .base import BaseVAE
-from torch import nn
-from torch.nn import functional as F
 from .types_ import *
-
-torch.manual_seed(0)
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils
 import torch.distributions
-import torchvision
-import numpy as np
-import matplotlib.pyplot as plt;
+
+torch.manual_seed(0)
 
 
 class LSTMVAE(BaseVAE):
@@ -22,12 +17,10 @@ class LSTMVAE(BaseVAE):
                  **kwargs) -> None:
         super(LSTMVAE, self).__init__()
 
-        self.seq_len, self.n_features = seq_len, n_features
-        self.embedding_dim, self.hidden_dim = embedding_dim, 2 * embedding_dim
-
-        # TODO decouple data size from algorithm
-        # TODO TUPLE TO TENSOR
-        # https://stackoverflow.com/questions/53032586/attributeerror-tuple-object-has-no-attribute-dim-when-feeding-input-to-pyt
+        self.seq_len = seq_len
+        self.n_features = n_features
+        self.embedding_dim = embedding_dim
+        self.hidden_dim = 2 * embedding_dim
 
         self.encoder_rnn1 = nn.LSTM(
             input_size=n_features,
@@ -46,10 +39,10 @@ class LSTMVAE(BaseVAE):
         self.fc_mu = nn.Linear(self.embedding_dim, self.embedding_dim)
         self.fc_var = nn.Linear(self.embedding_dim, self.embedding_dim)
 
-        self.seq_len, self.input_dim = seq_len, self.embedding_dim
-        self.hidden_dim, self.n_features = 2 * self.embedding_dim, self.n_features
-
-        # TODO decouple data size from algorithm
+        self.seq_len = seq_len
+        self.input_dim = self.embedding_dim
+        self.hidden_dim = 2 * self.embedding_dim
+        self.n_features = self.n_features
 
         self.decoder_rnn1 = nn.LSTM(
             input_size=self.input_dim,
@@ -67,11 +60,6 @@ class LSTMVAE(BaseVAE):
 
         self.decoder_output_layer = nn.Linear(self.hidden_dim, seq_len)
 
-        # self.N = torch.distributions.Normal(0, 1)
-        # self.N.loc = self.N.loc.cuda() # hack to get sampling on the GPU
-        # self.N.scale = self.N.scale.cuda()
-        self.kl = 0.0005
-
     def encode(self, input: Tensor) -> List[Tensor]:
         """
         Encodes the input by passing through the encoder network
@@ -79,35 +67,33 @@ class LSTMVAE(BaseVAE):
         :param input: (Tensor) Input tensor to encoder [N x C x H x W]
         :return: (Tensor) List of latent codes
         """
-        # out, states = self.encoder_rnn1(input)
-        # out, (embedding, _) = self.encoder_rnn2(out)
-        # TODO hidden state needs to be passed
-        # https://github.com/chrisvdweth/ml-toolkit\
-        # https://discuss.pytorch.org/t/lstm-autoencoders-in-pytorch/139727
 
-        # Tensor (140, 64)
+        # input = Tensor (140, 1)
 
         x = input.reshape((1, self.seq_len, self.n_features))
-        # Tensor(1,140,64)
+        # x = Tensor(1,140,1)
 
-        x, (_, _) = self.encoder_rnn1(input)
-        # Tensor(140,256)
+        x, (_, _) = self.encoder_rnn1(x)
+        # x = Tensor(140,256)
 
         x, (hidden_n, _) = self.encoder_rnn2(x)
-        # Tensor(140, 128)
+        # hidden_n = Tensor(140, 128)
 
+        # TODO Why hidden state needs to be passed
+        # https://github.com/chrisvdweth/ml-toolkit\
+        # https://discuss.pytorch.org/t/lstm-autoencoders-in-pytorch/139727
         hidden_n = hidden_n.reshape((self.n_features, self.embedding_dim))
-        # Tensor(64, 128)
+        # hidden_n = Tensor(1, 128)
 
         result = hidden_n
 
         # Split the result into mu and var components
         # of the latent Gaussian distribution
         mu = self.fc_mu(result)
-        # Tensor(64, 128)
+        # mu = Tensor(1, 128)
 
         log_var = self.fc_var(result)
-        # Tensor(64, 128)
+        # log_var = Tensor(1, 128)
 
         return [mu, log_var]
 
@@ -118,22 +104,22 @@ class LSTMVAE(BaseVAE):
         :param z: (Tensor) [B x D]
         :return: (Tensor) [B x C x H x W]
         """
-        # Tensor (64, 128)
+        # z = Tensor (1, 128)
         # x = z.repeat(self.seq_len, self.n_features)
 
         x = z.reshape((self.n_features, self.input_dim))
-        # Tensor (64, 128)
+        # x = Tensor (1, 128)
 
         out, states = self.decoder_rnn1(x)
-        # Tensor (64, 128)
+        # out = Tensor (1, 128)
 
         out, states = self.decoder_rnn2(out)
-        # Tensor (64, 256)
+        # out = Tensor (1, 256)
 
         x = out.reshape((self.n_features, self.hidden_dim))
-        # Tensor (64, 256)
+        # x = Tensor (1, 256)
         result = self.decoder_output_layer(x)
-        # Tensor (64, 140)
+        # result = Tensor (1, 140)
         return result
 
     def reparameterize(self, mu: Tensor, logvar: Tensor) -> Tensor:
@@ -149,21 +135,24 @@ class LSTMVAE(BaseVAE):
         return (eps * std) + mu
 
     def forward(self, input: Tensor, **kwargs) -> List[Tensor]:
-        # TODO do not use reshape
+        # TODO Try not to use tensor.reshape
         # https://discuss.pytorch.org/t/for-beginners-do-not-use-view-or-reshape-to-swap-dimensions-of-tensors/75524
+        # input = Tensor(140, 1)
+
         input = input.reshape(input.shape[1], input.shape[0])
-        input_shape = input.shape
+        # input = Tensor(140,1)
+
         mu, log_var = self.encode(input)
-        mu_shape = mu.shape
-        log_var_shape = log_var.shape
+        # mu = Tensor(1,128)
+        # log_var = Tensor(1,128)
 
         z = self.reparameterize(mu, log_var)
-        z_shape = z.shape
+        # z = Tensor(1,128)
 
         input = input.reshape(input.shape[1], input.shape[0])
+        # input = Tensor(1, 140)
         result = self.decode(z)
-        # input = input.reshape(input.shape[1], input.shape[0])
-        result_shape = result.shape
+        # result = Tensor(1, 140)
 
         return [result, input, mu, log_var]
 

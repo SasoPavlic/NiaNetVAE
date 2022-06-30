@@ -8,7 +8,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities.seed import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
-from datasets.lstm_vae_dataset import TimeSeriesDataset
+from datasets.time_series import TimeSeriesDataset
 from pytorch_lightning.plugins import DDPPlugin
 
 parser = argparse.ArgumentParser(description='Generic runner for LSTM VAE models')

@@ -1,21 +1,10 @@
 import os
 import torch
-from pytorch_lightning.utilities.types import EVAL_DATALOADERS, TRAIN_DATALOADERS
-from torch import Tensor
-from pathlib import Path
 from typing import List, Optional, Sequence, Union, Any, Callable
-from torchvision.datasets.folder import default_loader
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms, datasets
-from torchvision.datasets import CelebA
-import zipfile
-
 from arff2pandas import *
-from sklearn.model_selection import train_test_split
 
-
-# Add your custom dataset class here
 
 class ECG5000(Dataset):
     # https://github.com/gmguarino/ecg-anomaly-detection-vae/blob/master/ecg_dataset.py
@@ -25,9 +14,9 @@ class ECG5000(Dataset):
     """
 
     def __init__(self):
-        with open(os.path.join('data/ECG500/ECG5000_TEST.arff')) as f:
-            x_train, y_train = arff.loadarff(f)
         with open(os.path.join('data/ECG500/ECG5000_TRAIN.arff')) as f:
+            x_train, y_train = arff.loadarff(f)
+        with open(os.path.join('data/ECG500/ECG5000_TEST.arff')) as f:
             x_test, y_test = arff.loadarff(f)
 
         df_train = pd.DataFrame(x_train)
@@ -39,11 +28,10 @@ class ECG5000(Dataset):
         df_train = df_train.astype('float32')
         df_test = df_test.astype('float32')
 
-        #TODO workarround
+        # TODO Workaround to to handle last batch in LSTM hidden state
         # https://discuss.pytorch.org/t/how-to-handle-last-batch-in-lstm-hidden-state/40858
         df_train = df_train.head(4480)
         df_test = df_test.head(448)
-
 
         self.y_train = df_train['target']
         self.y_test = df_test['target']
@@ -82,11 +70,11 @@ class TimeSeriesDataset(LightningDataModule):
     def __init__(
             self,
             data_path: str,
-            train_batch_size: int = 64,
-            test_batch_size: int = 64,
-            val_batch_size: int = 64,
+            train_batch_size: int = 1,
+            test_batch_size: int = 1,
+            val_batch_size: int = 1,
             patch_size: Union[int, Sequence[int]] = (256, 256),
-            num_workers: int = 0,
+            num_workers: int = 16,
             pin_memory: bool = False,
             **kwargs,
     ):
@@ -105,7 +93,7 @@ class TimeSeriesDataset(LightningDataModule):
         self.val_dataset = ECG5000()
 
     def train_dataloader(self) -> DataLoader:
-        temp = DataLoader(
+        data = DataLoader(
             self.train_dataset,
             batch_size=self.train_batch_size,
             num_workers=self.num_workers,
@@ -114,10 +102,10 @@ class TimeSeriesDataset(LightningDataModule):
             persistent_workers=True
         )
 
-        return temp
+        return data
 
     def test_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
-        temp = DataLoader(
+        data = DataLoader(
             self.val_dataset,
             batch_size=self.test_batch_size,
             num_workers=self.num_workers,
@@ -125,11 +113,10 @@ class TimeSeriesDataset(LightningDataModule):
             pin_memory=self.pin_memory,
             persistent_workers=True
         )
-        return temp
-
+        return data
 
     def val_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
-        temp = DataLoader(
+        data = DataLoader(
             self.val_dataset,
             batch_size=self.val_batch_size,
             num_workers=self.num_workers,
@@ -137,5 +124,4 @@ class TimeSeriesDataset(LightningDataModule):
             pin_memory=self.pin_memory,
             persistent_workers=True
         )
-        return temp
-
+        return data

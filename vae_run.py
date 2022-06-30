@@ -2,13 +2,13 @@ import os
 import yaml
 import argparse
 from pathlib import Path
+from datasets.mnist import VAEDataset
 from models import *
 from experiments.vae_experiment import VAEXperiment
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities.seed import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
-from datasets.vae_dataset import TimeSeriesDataset
 from pytorch_lightning.plugins import DDPPlugin
 
 
@@ -37,8 +37,8 @@ model = vae_models[config['model_params']['name']](**config['model_params'])
 experiment = VAEXperiment(model, config['exp_params'])
 
 
-#data = VAEDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
-data = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
+data = VAEDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
+
 
 data.setup()
 runner = Trainer(logger=tb_logger,

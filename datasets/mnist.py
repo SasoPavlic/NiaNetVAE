@@ -1,21 +1,9 @@
-import os
-import torch
-from pytorch_lightning.utilities.types import EVAL_DATALOADERS, TRAIN_DATALOADERS
-from torch import Tensor
-from pathlib import Path
 from typing import List, Optional, Sequence, Union, Any, Callable
-from torchvision.datasets.folder import default_loader
 from pytorch_lightning import LightningDataModule
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
-from torchvision.datasets import CelebA
-import zipfile
-
-from arff2pandas import *
-from sklearn.model_selection import train_test_split
 
 # Add your custom dataset class here
-
 class VAEDataset(LightningDataModule):
     """
     PyTorch Lightning data module 

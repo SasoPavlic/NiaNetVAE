@@ -1,18 +1,12 @@
 import torch
 from .base import BaseVAE
-from torch import nn
-from torch.nn import functional as F
 from .types_ import *
-
-torch.manual_seed(0)
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils
 import torch.distributions
-import torchvision
-import numpy as np
-import matplotlib.pyplot as plt;
 
+torch.manual_seed(0)
 
 class VanillaVAE(BaseVAE):
     def __init__(self,
@@ -24,8 +18,6 @@ class VanillaVAE(BaseVAE):
 
         self.latent_dims = latent_dims
 
-
-        # TODO decouple data size from algorithm
         self.encoder = nn.Sequential(
             nn.Linear(in_features, 512),
             nn.Linear(512, 256),
@@ -34,7 +26,7 @@ class VanillaVAE(BaseVAE):
 
         self.fc_mu = nn.Linear(self.latent_dims, self.latent_dims)
         self.fc_var = nn.Linear(self.latent_dims, self.latent_dims)
-        # TODO decouple data size from algorithm
+
         self.decoder = nn.Sequential(
             nn.Linear(self.latent_dims, 256),
             nn.ReLU(),
