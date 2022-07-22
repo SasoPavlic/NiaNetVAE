@@ -2,7 +2,7 @@ model_params:
   name: 'LSTMVAE'
   seq_len: 140
   n_features: 1 #Multiple features problem https://stackoverflow.com/questions/71565854/lstm-autoencoder-set-up-for-multiple-features-using-pytorch
-  embedding_dim: 64
+  embedding_dim: 80
 
 data_params:
   data_path: "data/"
