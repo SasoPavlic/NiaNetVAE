@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 
 import numpy as np
@@ -13,6 +14,7 @@ import random
 
 class LSTMVAE(BaseVAE, nn.Module):
     def __init__(self,
+                 solution,
                  seq_len,
                  n_features,
                  embedding_dim,
@@ -31,11 +33,6 @@ class LSTMVAE(BaseVAE, nn.Module):
             y7: optimizer algorithm.
         """
 
-        solution = [0.1, 0.220, 0.7, 0.1, 0.1, 0.1, 0.1]  # Symmetrical AE
-        #solution = [0.1, 0.01, 0.99, 0.1, 0.1, 0.1, 0.1]  # Symmetrical AE
-
-        #solution = [0.6, 0.01, 0.7, 0.1, 0.1, 0.1, 0.1]  # Asymmetrical AE
-        #solution = [0.6, 0.15, 0.37, 0.1, 0.1, 0.1, 0.1]  # Asymmetrical AE
 
         self.encoding_layers = nn.ModuleList()
         self.decoding_layers = nn.ModuleList()
@@ -51,8 +48,8 @@ class LSTMVAE(BaseVAE, nn.Module):
         self.bottleneck_size = embedding_dim
         self.seq_len = seq_len
         self.n_features = n_features
-        self.embedding_dim = embedding_dim
-        self.hidden_dim = 2 * embedding_dim
+        #self.embedding_dim = embedding_dim
+        #self.hidden_dim = 2 * embedding_dim
 
         self.generate_autoencoder(self.shape,
                                   self.layers,
@@ -416,7 +413,7 @@ class LSTMVAE(BaseVAE, nn.Module):
             hidden_dimension = dataset_shape[1]
             last_decoder_layer_flag = True
 
-            if layers == 1 or layers == 2:
+            if layers == 1:
                 self.encoding_layers.append(nn.LSTM(
                     input_size=input_dimension,
                     hidden_size=hidden_dimension,
@@ -431,7 +428,7 @@ class LSTMVAE(BaseVAE, nn.Module):
                     batch_first=True
                 ))
 
-            if layers >= 3:
+            if layers >= 2:
                 random.seed(datetime.now())
                 layers_encoder = random.randint(1, layers)
                 layers_decoder = layers - layers_encoder
@@ -482,7 +479,7 @@ class LSTMVAE(BaseVAE, nn.Module):
 
                     if layers_decoder == 1:
                         self.decoding_layers.insert(0, nn.LSTM(
-                            input_size=input,
+                            input_size=hidden_dimension,
                             hidden_size=dataset_shape[1],
                             num_layers=1,
                             batch_first=True

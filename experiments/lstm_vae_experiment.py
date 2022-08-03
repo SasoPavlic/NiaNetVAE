@@ -1,9 +1,43 @@
+import math
 import os
+import sys
+import torch
+import torchmetrics
+from sklearn.metrics import mean_squared_error
 from torch import optim
 from models.types_ import *
 from models import BaseVAE
 import pytorch_lightning as pl
 import torchvision.utils as vutils
+
+from typing import Any
+
+import torch
+from torch import Tensor, tensor
+
+
+class RMSE(torchmetrics.Metric):
+
+    def __init__(self, **kwargs: Any, ) -> None:
+        super().__init__(**kwargs)
+
+        self.add_state("sum_squared_error", default=tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("n_observations", default=tensor(0), dist_reduce_fx="sum")
+
+    def update(self, preds: Tensor, target: Tensor) -> None:  # type: ignore
+        """Update state with predictions and targets.
+
+        Args:
+            preds: Predictions from model
+            target: Ground truth values
+        """
+
+        self.sum_squared_error += torch.sum((preds - target) ** 2)
+        self.n_observations += preds.numel()
+
+    def compute(self) -> Tensor:
+        """Computes mean squared error over state."""
+        return torch.sqrt(self.sum_squared_error / self.n_observations)
 
 
 class LSTMVAExperiment(pl.LightningModule):
@@ -18,6 +52,13 @@ class LSTMVAExperiment(pl.LightningModule):
         self.n_features = n_features
         self.curr_device = None
         self.hold_graph = False
+        self.training_loss = sys.maxsize
+        self.validation_loss = sys.maxsize
+        self.training_RMSE_metric = RMSE()
+        self.validation_RMSE_metric = RMSE()
+        self.train_RMSE = None
+        self.val_RMSE = None
+
         try:
             self.hold_graph = self.params['retain_first_backpass']
         except:
@@ -38,8 +79,15 @@ class LSTMVAExperiment(pl.LightningModule):
                                               batch_idx=batch_idx)
 
         self.log_dict({key: val.item() for key, val in train_loss.items()}, sync_dist=True)
-
+        self.log('train_MSE_step', self.training_RMSE_metric(results[0], real_signal), on_step=True, on_epoch=False)
         return train_loss['loss']
+
+    def training_epoch_end(self, outputs):
+        self.log('train_MSE_epoch', self.training_RMSE_metric.compute())
+
+    def on_train_end(self) -> None:
+        # TODO ADD RMSE https://www.pytorchlightning.ai/blog/torchmetrics-pytorch-metrics-built-to-scale
+        self.train_RMSE = self.training_RMSE_metric.compute()
 
     def validation_step(self, batch, batch_idx, optimizer_idx=0):
         real_signal, labels = batch
@@ -51,10 +99,20 @@ class LSTMVAExperiment(pl.LightningModule):
                                             optimizer_idx=optimizer_idx,
                                             batch_idx=batch_idx)
 
+        for key, val in val_loss.items():
+            if key == 'loss':
+                if not math.isnan(val.item()):
+                    self.validation_loss = val.item()
+                else:
+                    continue
+
         self.log_dict({f"val_{key}": val.item() for key, val in val_loss.items()}, sync_dist=True)
+        self.log('validaiton_MSE_step', self.validation_RMSE_metric(results[0], real_signal), on_step=True,
+                 on_epoch=False)
 
     def on_validation_end(self) -> None:
-        self.sample_signals()
+        # self.sample_signals()
+        self.val_RMSE = self.validation_RMSE_metric.compute()
 
     def sample_signals(self):
         # Get sample reconstruction image
@@ -64,7 +122,7 @@ class LSTMVAExperiment(pl.LightningModule):
 
         #         test_input, test_label = batch
         recons = self.model.generate(test_input, labels=test_label)
-
+        # TODO implement for time-series
         vutils.save_image(recons,
                           os.path.join(self.logger.log_dir,
                                        "Reconstructions",

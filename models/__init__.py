@@ -8,3 +8,5 @@ LSTMVAE = LSTMVAE
 
 vae_models = {'VanillaVAE':VAE,
               'LSTMVAE':LSTMVAE}
+
+
