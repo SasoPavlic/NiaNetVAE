@@ -17,7 +17,7 @@ from torch import Tensor, tensor
 
 
 class RMSE(torchmetrics.Metric):
-
+    # https: // www.pytorchlightning.ai / blog / torchmetrics - pytorch - metrics - built - to - scale
     def __init__(self, **kwargs: Any, ) -> None:
         super().__init__(**kwargs)
 
@@ -52,8 +52,6 @@ class LSTMVAExperiment(pl.LightningModule):
         self.n_features = n_features
         self.curr_device = None
         self.hold_graph = False
-        self.training_loss = sys.maxsize
-        self.validation_loss = sys.maxsize
         self.training_RMSE_metric = RMSE()
         self.validation_RMSE_metric = RMSE()
         self.train_RMSE = None
@@ -65,7 +63,6 @@ class LSTMVAExperiment(pl.LightningModule):
             pass
 
     def forward(self, input: Tensor, **kwargs) -> Tensor:
-
         return self.model(input, **kwargs)
 
     def training_step(self, batch, batch_idx, optimizer_idx=0):
@@ -79,14 +76,13 @@ class LSTMVAExperiment(pl.LightningModule):
                                               batch_idx=batch_idx)
 
         self.log_dict({key: val.item() for key, val in train_loss.items()}, sync_dist=True)
-        self.log('train_MSE_step', self.training_RMSE_metric(results[0], real_signal), on_step=True, on_epoch=False)
+        self.training_RMSE_metric(results[0], real_signal)
         return train_loss['loss']
 
     def training_epoch_end(self, outputs):
         self.log('train_MSE_epoch', self.training_RMSE_metric.compute())
 
     def on_train_end(self) -> None:
-        # TODO ADD RMSE https://www.pytorchlightning.ai/blog/torchmetrics-pytorch-metrics-built-to-scale
         self.train_RMSE = self.training_RMSE_metric.compute()
 
     def validation_step(self, batch, batch_idx, optimizer_idx=0):
@@ -99,13 +95,6 @@ class LSTMVAExperiment(pl.LightningModule):
                                             optimizer_idx=optimizer_idx,
                                             batch_idx=batch_idx)
 
-        for key, val in val_loss.items():
-            if key == 'loss':
-                if not math.isnan(val.item()):
-                    self.validation_loss = val.item()
-                else:
-                    continue
-
         self.log_dict({f"val_{key}": val.item() for key, val in val_loss.items()}, sync_dist=True)
         self.log('validaiton_MSE_step', self.validation_RMSE_metric(results[0], real_signal), on_step=True,
                  on_epoch=False)
@@ -113,35 +102,6 @@ class LSTMVAExperiment(pl.LightningModule):
     def on_validation_end(self) -> None:
         # self.sample_signals()
         self.val_RMSE = self.validation_RMSE_metric.compute()
-
-    def sample_signals(self):
-        # Get sample reconstruction image
-        test_input, test_label = next(iter(self.trainer.datamodule.test_dataloader()))
-        test_input = test_input.to(self.curr_device)
-        test_label = test_label.to(self.curr_device)
-
-        #         test_input, test_label = batch
-        recons = self.model.generate(test_input, labels=test_label)
-        # TODO implement for time-series
-        vutils.save_image(recons,
-                          os.path.join(self.logger.log_dir,
-                                       "Reconstructions",
-                                       f"recons_{self.logger.name}_Epoch_{self.current_epoch}.png"),
-                          normalize=True,
-                          nrow=8, )
-
-        try:
-            samples = self.model.sample(self.n_features,
-                                        self.curr_device,
-                                        labels=test_label)
-            vutils.save_image(samples.cpu().data,
-                              os.path.join(self.logger.log_dir,
-                                           "Samples",
-                                           f"{self.logger.name}_Epoch_{self.current_epoch}.png"),
-                              normalize=True,
-                              nrow=8)
-        except Warning:
-            pass
 
     def configure_optimizers(self):
         optims = []
@@ -178,3 +138,32 @@ class LSTMVAExperiment(pl.LightningModule):
                 return optims, scheds
         except:
             return optims
+
+    def sample_signals(self):
+        # Get sample reconstruction image
+        test_input, test_label = next(iter(self.trainer.datamodule.test_dataloader()))
+        test_input = test_input.to(self.curr_device)
+        test_label = test_label.to(self.curr_device)
+
+        #         test_input, test_label = batch
+        recons = self.model.generate(test_input, labels=test_label)
+        # TODO implement for time-series instead of images
+        vutils.save_image(recons,
+                          os.path.join(self.logger.log_dir,
+                                       "Reconstructions",
+                                       f"recons_{self.logger.name}_Epoch_{self.current_epoch}.png"),
+                          normalize=True,
+                          nrow=8, )
+
+        try:
+            samples = self.model.sample(self.n_features,
+                                        self.curr_device,
+                                        labels=test_label)
+            vutils.save_image(samples.cpu().data,
+                              os.path.join(self.logger.log_dir,
+                                           "Samples",
+                                           f"{self.logger.name}_Epoch_{self.current_epoch}.png"),
+                              normalize=True,
+                              nrow=8)
+        except Warning:
+            pass

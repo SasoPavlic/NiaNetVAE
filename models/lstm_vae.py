@@ -361,6 +361,7 @@ class LSTMVAE(BaseVAE, nn.Module):
 
             i = dataset_shape[1]
             z = dataset_shape[1] - layer_step
+            all_layers = layers
             input = self.n_features
             hidden_dim = self.seq_len
             last_decoder_layer_flag = True
@@ -369,6 +370,30 @@ class LSTMVAE(BaseVAE, nn.Module):
                 """Minimum depth reached"""
                 # TODO Check negatives
                 if hidden_dim < 1:
+                    break
+
+                if all_layers == 1:
+                    self.encoding_layers.append(nn.LSTM(
+                        input_size=input,
+                        hidden_size=hidden_dim,
+                        num_layers=1,
+                        batch_first=True
+                    ))
+
+                    self.encoding_layers.append(nn.LSTM(
+                        input_size=hidden_dim,
+                        hidden_size=hidden_dim - layer_step,
+                        num_layers=1,
+                        batch_first=True
+                    ))
+
+                    self.decoding_layers.insert(0, nn.LSTM(
+                        input_size=hidden_dim - layer_step,
+                        hidden_size=hidden_dim,
+                        num_layers=1,
+                        batch_first=True
+                    ))
+
                     break
 
                 self.encoding_layers.append(nn.LSTM(

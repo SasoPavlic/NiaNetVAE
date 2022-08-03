@@ -22,20 +22,6 @@ from niapy.problems import Problem
 from niapy.algorithms.basic import *
 from niapy.algorithms.modified import *
 
-
-class MetricsCallback(Callback):
-    """PyTorch Lightning metric callback."""
-    # https://forums.pytorchlightning.ai/t/how-to-access-the-logged-results-such-as-losses/155
-
-    def __init__(self):
-        super().__init__()
-        self.metrics = []
-
-    def on_validation_epoch_end(self, trainer, pl_module):
-        each_me = copy.deepcopy(trainer.callback_metrics)
-        self.metrics.append(each_me)
-
-
 parser = argparse.ArgumentParser(description='Generic runner for LSTM VAE models')
 parser.add_argument('--config', '-c',
                     dest="filename",
@@ -55,26 +41,17 @@ tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
 
 # For reproducibility
 seed_everything(config['exp_params']['manual_seed'], True)
-metrics = MetricsCallback()
-solution = [0.1, 0.220, 0.7, 0.1, 0.1, 0.1, 0.1]  # Symmetrical AE
 
 
-# solution = [0.1, 0.01, 0.99, 0.1, 0.1, 0.1, 0.1]  # Symmetrical AE
+class VariationalAutoencoderArchitecture(Problem):
 
-# solution = [0.6, 0.01, 0.7, 0.1, 0.1, 0.1, 0.1]  # Asymmetrical AE
-# solution = [0.6, 0.15, 0.37, 0.1, 0.1, 0.1, 0.1]  # Asymmetrical AE
-
-
-class AutoencoderArchitecture(Problem):
-
-    def __init__(self, dimension, alpha=0.99):
+    def __init__(self, dimension):
         super().__init__(dimension=dimension, lower=0, upper=1)
-        self.alpha = alpha
         self.iteration = 0
 
     def _evaluate(self, solution):
-        #solution = [0.15161603,0.50030629,0.51998326,0.48736799,0.71555138,0.97241088,0.99732743]
-        #solution = [0.6, 0.15, 0.37, 0.1, 0.1, 0.1, 0.1]
+        #solution = [0.18068983, 0.05792889, 0.55358249, 0.3777263, 0.57080761, 0.67469747, 0.49576287]
+
         print("=================================================================================================")
         print(f"ITERATION IS: {self.iteration}")
         print(f"SOLUTION: {solution}")
@@ -89,10 +66,10 @@ class AutoencoderArchitecture(Problem):
             return fitness
 
         experiment = LSTMVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
-
         data = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
-
+        config['trainer_params']['max_epochs'] = model.epochs
         data.setup()
+
         runner = Trainer(logger=tb_logger,
                          callbacks=[
                              LearningRateMonitor(),
@@ -100,7 +77,6 @@ class AutoencoderArchitecture(Problem):
                                              dirpath=os.path.join(tb_logger.log_dir, "checkpoints"),
                                              monitor="val_loss",
                                              save_last=True),
-                             metrics,
                          ],
                          strategy=DDPPlugin(find_unused_parameters=False),
 
@@ -125,81 +101,50 @@ class AutoencoderArchitecture(Problem):
             return fitness
 
 
+if __name__ == '__main__':
 
+    """
+    Dimensionality:
+    y1: topology shape,
+    y2: number of neurons per layer
+    y3: number of layers,
+    y4: activation function
+    y5: number of epochs,
+    y6: learning rate
+    y7: optimizer algorithm.
+    """
+    DIMENSIONALITY = 7
 
+    runner = Runner(
+        dimension=DIMENSIONALITY,
+        max_evals=1,
+        runs=1,
+        algorithms=[
+            ParticleSwarmAlgorithm(),
+            DifferentialEvolution(),
+            FireflyAlgorithm(),
+            SelfAdaptiveDifferentialEvolution(),
+            GeneticAlgorithm()
+        ],
+        problems=[
+            VariationalAutoencoderArchitecture(DIMENSIONALITY)
+        ]
+    )
 
-"""
-Dimensionality:
-y1: topology shape,
-y2: number of neurons per layer
-y3: number of layers,
-y4: activation function
-y5: number of epochs,
-y6: learning rate
-y7: optimizer algorithm.
-"""
-DIMENSIONALITY = 7
+    print("=================================================================================================")
+    final_solutions = runner.run(export='json', verbose=True)
+    best_fitness = sys.maxsize
+    best_solution = None
 
+    for algorithm in final_solutions:
+        fitness = final_solutions[algorithm]['VariationalAutoencoderArchitecture'][0][1]
+        solution = final_solutions[algorithm]['VariationalAutoencoderArchitecture'][0][0]
+        print(f"{algorithm}'s fitness: {fitness}")
+        print(f"{algorithm}'s solution: {solution}")
 
-runner = Runner(
-    dimension=DIMENSIONALITY,
-    max_evals=3,
-    runs=1,
-    algorithms=[
-        ParticleSwarmAlgorithm(),
-        DifferentialEvolution(),
-        FireflyAlgorithm(),
-        SelfAdaptiveDifferentialEvolution(),
-        GeneticAlgorithm()
-    ],
-    problems=[
-        AutoencoderArchitecture(DIMENSIONALITY)
-    ]
-)
+        if best_fitness > fitness:
+            best_fitness = fitness
+            best_solution = final_solutions[algorithm]['VariationalAutoencoderArchitecture'][0][0]
 
-print("=================================================================================================")
-final_solutions = runner.run(export='json', verbose=True)
-best_fitness = sys.maxsize
-best_solution = None
-
-for algorithm in final_solutions:
-    fitness = final_solutions[algorithm]['AutoencoderArchitecture'][0][1]
-    solution = final_solutions[algorithm]['AutoencoderArchitecture'][0][0]
-    print(f"{algorithm}'s fitness: {fitness}")
-    print(f"{algorithm}'s solution: {solution}")
-
-    if best_fitness > fitness:
-        best_fitness = fitness
-        best_solution = final_solutions[algorithm]['AutoencoderArchitecture'][0][0]
-
-
-
-
-
-# for x in range(0, 3):
-#     model = vae_models[config['model_params']['name']](solution, **config['model_params'])
-#     # config['trainer_params']['max_epochs'] = model.epochs
-#     experiment = LSTMVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
-#
-#     data = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
-#
-#     data.setup()
-#     runner = Trainer(logger=tb_logger,
-#                      callbacks=[
-#                          LearningRateMonitor(),
-#                          ModelCheckpoint(save_top_k=2,
-#                                          dirpath=os.path.join(tb_logger.log_dir, "checkpoints"),
-#                                          monitor="val_loss",
-#                                          save_last=True),
-#                      ],
-#                      strategy=DDPPlugin(find_unused_parameters=False),
-#
-#                      **config['trainer_params'])
-#
-#     Path(f"{tb_logger.log_dir}/Samples").mkdir(exist_ok=True, parents=True)
-#     Path(f"{tb_logger.log_dir}/Reconstructions").mkdir(exist_ok=True, parents=True)
-#
-#     print(f"======= Training {config['model_params']['name']} =======")
-#     runner.fit(experiment, datamodule=data)
-#
-#     torch.save(model, f"LSTMVAE_model_{config['trainer_params']['max_epochs']}_{x}_epochs.pt")
+    best_model = vae_models[config['model_params']['name']](best_solution, **config['model_params'])
+    torch.save(best_model, f"LSTMVAE_model_{config['trainer_params']['max_epochs']}_epochs.pt")
