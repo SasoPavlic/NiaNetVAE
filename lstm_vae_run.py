@@ -112,18 +112,19 @@ if __name__ == '__main__':
     """
     Dimensionality:
     y1: topology shape,
-    y2: number of neurons per layer
-    y3: number of layers,
-    y4: activation function
-    y5: number of epochs,
-    y6: learning rate
-    y7: optimizer algorithm.
+    y2: layer type
+    y3: number of neurons per layer,
+    y4: number of layers,
+    y5: activation function
+    y6: number of epochs,
+    y7: learning rate
+    y8: optimizer algorithm.
     """
-    DIMENSIONALITY = 7
+    DIMENSIONALITY = 8
 
     runner = Runner(
         dimension=DIMENSIONALITY,
-        max_evals=5,
+        max_evals=50,
         runs=1,
         algorithms=[
             ParticleSwarmAlgorithm(),
@@ -141,6 +142,7 @@ if __name__ == '__main__':
     final_solutions = runner.run(export='json', verbose=True)
     best_fitness = sys.maxsize
     best_solution = None
+    best_algorithm = None
 
     for algorithm in final_solutions:
         fitness = final_solutions[algorithm]['VariationalAutoencoderArchitecture'][0][1]
@@ -150,8 +152,10 @@ if __name__ == '__main__':
 
         if best_fitness > fitness:
             best_fitness = fitness
+            best_algorithm = algorithm
             best_solution = final_solutions[algorithm]['VariationalAutoencoderArchitecture'][0][0]
 
+    print(f"Best algorithm: {best_algorithm}")
     best_model = vae_models[config['model_params']['name']](best_solution, **config['model_params'])
     torch.save(best_model, f"LSTMVAE_model_{config['trainer_params']['max_epochs']}_epochs.pt")
 

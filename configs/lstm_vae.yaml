@@ -2,7 +2,7 @@ model_params:
   name: 'LSTMVAE'
   seq_len: 140
   n_features: 1 #Multiple features problem https://stackoverflow.com/questions/71565854/lstm-autoencoder-set-up-for-multiple-features-using-pytorch
-  embedding_dim: 98 # It is calculated dynamically. Can be removed.
+  embedding_dim: 35 # It is calculated dynamically. Can be removed.
 
 data_params:
   data_path: "data/"
@@ -20,7 +20,8 @@ exp_params:
 
 trainer_params:
   gpus: [ 0 ]
-  max_epochs: 1
+  min_epochs: 3
+  max_epochs: 10
 
 early_stop:
   monitor: "val_loss"

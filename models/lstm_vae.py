@@ -1,7 +1,7 @@
 from datetime import datetime
-
 import numpy as np
 import torch
+
 from .base import BaseVAE
 from .types_ import *
 import torch.nn as nn
@@ -9,6 +9,8 @@ import torch.nn.functional as F
 import torch.utils
 import torch.distributions
 import random
+
+
 
 
 class LSTMVAE(BaseVAE, nn.Module):
@@ -23,51 +25,57 @@ class LSTMVAE(BaseVAE, nn.Module):
 
         """
         Dimensionality:
-            y1: topology shape,
-            y2: number of neurons per layer
-            y3: number of layers,
-            y4: activation function
-            y5: number of epochs,
-            y6: learning rate
-            y7: optimizer algorithm.
+        y1: topology shape,
+        y2: layer type
+        y3: number of neurons per layer,
+        y4: number of layers,
+        y5: activation function
+        y6: number of epochs,
+        y7: learning rate
+        y8: optimizer algorithm.
         """
 
         self.encoding_layers = nn.ModuleList()
         self.decoding_layers = nn.ModuleList()
 
         self.shape = self.get_shape(solution[0])
-        self.layer_step = self.get_layer_step(solution[1], dataset_shape)
-        self.layers = self.get_layers(solution[2], self.layer_step, dataset_shape)
+        self.layer_type = self.get_layer_type(solution[1])
+        self.layer_step = self.get_layer_step(solution[2], dataset_shape)
+        self.layers = self.get_layers(solution[3], self.layer_step, dataset_shape)
         # https://ai.stackexchange.com/questions/3156/how-to-select-number-of-hidden-layers-and-number-of-memory-cells-in-an-lstm
-        self.activation = self.get_activation(solution[3])
-        self.epochs = self.get_epochs(solution[4])
-        self.learning_rate = self.get_learning_rate(solution[5])
+        self.activation = self.get_activation(solution[4])
+        self.epochs = self.get_epochs(solution[5])
+        self.learning_rate = self.get_learning_rate(solution[6])
 
         self.bottleneck_size = embedding_dim
         self.seq_len = seq_len
         self.n_features = n_features
 
         self.generate_autoencoder(self.shape,
+                                  self.layer_type,
                                   self.layers,
                                   dataset_shape,
                                   self.layer_step)
 
-        # For testing:
-        # self.encoding_layers.append(nn.LSTM(
+        """For testing:"""
+        # self.encoding_layers.append(get_layer_type(
+        #     layer_type=self.layer_type,
         #     input_size=1,
         #     hidden_size=140,
         #     num_layers=1,
         #     batch_first=True
         # ))
         #
-        # self.encoding_layers.append(nn.LSTM(
+        # self.encoding_layers.append(get_layer_type(
+        #     layer_type=self.layer_type,
         #     input_size=140,
         #     hidden_size=70,
         #     num_layers=1,
         #     batch_first=True
         # ))
         #
-        # self.encoding_layers.append(nn.LSTM(
+        # self.encoding_layers.append(get_layer_type(
+        #     layer_type=self.layer_type,
         #     input_size=70,
         #     hidden_size=35,
         #     num_layers=1,
@@ -77,39 +85,42 @@ class LSTMVAE(BaseVAE, nn.Module):
         # self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
         # self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
         #
-        # # self.decoding_layers.append(nn.LSTM(
-        # #     input_size=35,
-        # #     hidden_size=70,
-        # #     num_layers=1,
-        # #     batch_first=True
-        # # ))
-        # #
-        # # self.decoding_layers.append(nn.LSTM(
-        # #     input_size=35,
-        # #     hidden_size=140,
-        # #     num_layers=1,
-        # #     batch_first=True
-        # # ))
-        #
-        # self.decoding_layers.append(nn.LSTM(
+        # self.decoding_layers.append(get_layer_type(
+        #     layer_type=self.layer_type,
         #     input_size=35,
+        #     hidden_size=70,
+        #     num_layers=1,
+        #     batch_first=True
+        # ))
+        #
+        # self.decoding_layers.append(get_layer_type(
+        #     layer_type=self.layer_type,
+        #     input_size=70,
         #     hidden_size=140,
         #     num_layers=1,
         #     batch_first=True
         # ))
         #
+        # self.decoding_layers.append(get_layer_type(
+        #     layer_type=self.layer_type,
+        #     input_size=140,
+        #     hidden_size=140,
+        #     num_layers=1,
+        #     batch_first=True
+        # ))
         # self.decoding_layers.append(nn.Linear(140, self.seq_len))
 
-        self.optimizer = self.get_optimizer(solution[6])
+        self.optimizer = self.get_optimizer(solution[7])
 
         print(
             f"y1: Shape: {self.shape}\n"
-            f"y2: Layer step: {self.layer_step}\n"
-            f"y3: Layers: {self.layers}\n"
-            f"y4: Activation function: {self.activation}\n"
-            f"y5: Epochs: {self.epochs}\n"
-            f"y6: Learning rate: {self.learning_rate}\n"
-            f"y7: Optimizer: {self.optimizer}\n"
+            f"y2: Layer type: {self.layer_type}\n"
+            f"y3: Layer step: {self.layer_step}\n"
+            f"y4: Layers: {self.layers}\n"
+            f"y5: Activation function: {self.activation}\n"
+            f"y6: Epochs: {self.epochs}\n"
+            f"y7: Learning rate: {self.learning_rate}\n"
+            f"y8: Optimizer: {self.optimizer}\n"
             f"Bottleneck size: {self.bottleneck_size}\n"
             f"Encoder: {self.encoding_layers}\n"
             f"Decoder: {self.decoding_layers}\n")
@@ -126,7 +137,12 @@ class LSTMVAE(BaseVAE, nn.Module):
         x, (hidden_n, cell_n) = x, (None, None)
 
         for layer in self.encoding_layers[:-2]:
-            x, (hidden_n, cell_n) = layer(x)
+            if layer.mode == 'LSTM':
+                x, (hidden_n, cell_n) = layer(x)
+            elif layer.mode == 'GRU':
+                x, hidden_n = layer(x)
+            elif layer.mode == 'RNN_TANH':
+                x, hidden_n = layer(x)
 
         # # TODO Why hidden state needs to be passed
         # # https://github.com/chrisvdweth/ml-toolkit\
@@ -146,10 +162,14 @@ class LSTMVAE(BaseVAE, nn.Module):
         """
 
         x = z.reshape((self.n_features, self.bottleneck_size))
-        x, (hidden_n, cell_n) = x, (None, None)
 
         for layer in self.decoding_layers[:-1]:
-            x, (hidden_n, cell_n) = layer(x)
+            if layer.mode == 'LSTM':
+                x, (hidden_n, cell_n) = layer(x)
+            elif layer.mode == 'GRU':
+                x, hidden_n = layer(x)
+            elif layer.mode == 'RNN_TANH':
+                x, hidden_n = layer(x)
 
         reconstructed = self.decoding_layers[-1](x)
 
@@ -231,6 +251,31 @@ class LSTMVAE(BaseVAE, nn.Module):
         reconstructed = self.forward(x)[0]
         return reconstructed
 
+    def get_layer_object(self, input_size, hidden_size, num_layers, batch_first):
+        if self.layer_step == 'LSTM':
+            return nn.LSTM(
+                input_size=input_size,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                batch_first=batch_first
+            )
+
+        elif self.layer_type == 'GRU':
+            return nn.GRU(
+                input_size=input_size,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                batch_first=batch_first
+            )
+
+        elif self.layer_step == 'RNN_TANH':
+            return nn.RNN(
+                input_size=input_size,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                batch_first=batch_first
+            )
+
     def get_shape(self, gene):
         gene = np.array([gene])
         bins = np.array([0.0, 0.5])
@@ -241,6 +286,24 @@ class LSTMVAE(BaseVAE, nn.Module):
 
         elif inds[0] - 1 == 1:
             return "A-SYMMETRICAL"
+
+        else:
+            raise ValueError(f"Value not between boundaries 0.0 and 1.0. Value is: {inds[0] - 1}")
+
+    def get_layer_type(self, gene):
+        gene = np.array([gene])
+        bins = np.array([0.33, 0.66, 1.01])
+        inds = np.digitize(gene, bins)
+        bin = inds[0]
+
+        if bin == 0:
+            return "LSTM"
+
+        elif bin == 1:
+            return "GRU"
+
+        elif bin == 2:
+            return "RNN_TANH"
 
         else:
             raise ValueError(f"Value not between boundaries 0.0 and 1.0. Value is: {inds[0] - 1}")
@@ -336,7 +399,7 @@ class LSTMVAE(BaseVAE, nn.Module):
 
         return lr
 
-    def generate_autoencoder(self, shape, layers, dataset_shape, layer_step):
+    def generate_autoencoder(self, shape, layer_type, layers, dataset_shape, layer_step):
 
         if shape == "SYMMETRICAL":
 
@@ -354,21 +417,21 @@ class LSTMVAE(BaseVAE, nn.Module):
                     break
 
                 if num_of_layers == 1:
-                    self.encoding_layers.append(nn.LSTM(
+                    self.encoding_layers.append(self.get_layer_object(
                         input_size=input,
                         hidden_size=hidden_dim,
                         num_layers=1,
                         batch_first=True
                     ))
 
-                    self.encoding_layers.append(nn.LSTM(
+                    self.encoding_layers.append(self.get_layer_object(
                         input_size=hidden_dim,
                         hidden_size=hidden_dim - layer_step,
                         num_layers=1,
                         batch_first=True
                     ))
 
-                    self.decoding_layers.insert(0, nn.LSTM(
+                    self.decoding_layers.insert(0, self.get_layer_object(
                         input_size=hidden_dim - layer_step,
                         hidden_size=hidden_dim,
                         num_layers=1,
@@ -377,7 +440,7 @@ class LSTMVAE(BaseVAE, nn.Module):
 
                     break
 
-                self.encoding_layers.append(nn.LSTM(
+                self.encoding_layers.append(self.get_layer_object(
                     input_size=input,
                     hidden_size=hidden_dim,
                     num_layers=1,
@@ -389,7 +452,7 @@ class LSTMVAE(BaseVAE, nn.Module):
                     input = input * hidden_dim
                     last_decoder_layer_flag = False
 
-                self.decoding_layers.insert(0, nn.LSTM(
+                self.decoding_layers.insert(0, self.get_layer_object(
                     input_size=hidden_dim,
                     hidden_size=input,
                     num_layers=1,
@@ -419,14 +482,14 @@ class LSTMVAE(BaseVAE, nn.Module):
             hidden_dimension = dataset_shape[1]
 
             if layers == 1:
-                self.encoding_layers.append(nn.LSTM(
+                self.encoding_layers.append(self.get_layer_object(
                     input_size=input_dimension,
                     hidden_size=hidden_dimension,
                     num_layers=1,
                     batch_first=True
                 ))
 
-                self.decoding_layers.insert(0, nn.LSTM(
+                self.decoding_layers.insert(0, self.get_layer_object(
                     input_size=hidden_dimension,
                     hidden_size=hidden_dimension,
                     num_layers=1,
@@ -454,7 +517,7 @@ class LSTMVAE(BaseVAE, nn.Module):
                         hidden_dimension += layer_step
                         break
 
-                    self.encoding_layers.append(nn.LSTM(
+                    self.encoding_layers.append(self.get_layer_object(
                         input_size=input_dimension,
                         hidden_size=hidden_dimension,
                         num_layers=1,
@@ -474,7 +537,7 @@ class LSTMVAE(BaseVAE, nn.Module):
                     if layers_encoder == 1 and layers_decoder >= layers_encoder:
 
                         for layer in range(layers_decoder):
-                            self.decoding_layers.append(nn.LSTM(
+                            self.decoding_layers.append(self.get_layer_object(
                                 input_size=dataset_shape[1],
                                 hidden_size=dataset_shape[1],
                                 num_layers=1,
@@ -483,7 +546,7 @@ class LSTMVAE(BaseVAE, nn.Module):
                         break
 
                     if layers_decoder == 1:
-                        self.decoding_layers.insert(0, nn.LSTM(
+                        self.decoding_layers.insert(0, self.get_layer_object(
                             input_size=hidden_dimension,
                             hidden_size=dataset_shape[1],
                             num_layers=1,
@@ -498,7 +561,7 @@ class LSTMVAE(BaseVAE, nn.Module):
 
                     if layers_decoder > layers_encoder:
 
-                        self.decoding_layers.append(nn.LSTM(
+                        self.decoding_layers.append(self.get_layer_object(
                             input_size=hidden_dimension,
                             hidden_size=i,
                             num_layers=1,
@@ -507,7 +570,7 @@ class LSTMVAE(BaseVAE, nn.Module):
                         hidden_dimension = i
 
                     else:
-                        self.decoding_layers.append(nn.LSTM(
+                        self.decoding_layers.append(self.get_layer_object(
                             input_size=hidden_dimension,
                             hidden_size=i,
                             num_layers=1,

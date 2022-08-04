@@ -89,7 +89,7 @@ class LSTMVAExperiment(pl.LightningModule):
 
         results = self.forward(real_signal)
         val_loss = self.model.loss_function(*results,
-                                            M_N=self.params['kld_weight'],  # al_img.shape[0]/ self.num_train_imgs,
+                                            M_N=self.params['kld_weight'],
                                             optimizer_idx=optimizer_idx,
                                             batch_idx=batch_idx)
 
@@ -106,9 +106,6 @@ class LSTMVAExperiment(pl.LightningModule):
         scheds = []
 
         optimizer = self.model.optimizer
-        # optimizer = optim.Adam(self.model.parameters(),
-        #                        lr=self.params['LR'],
-        #                        weight_decay=self.params['weight_decay'])
         optims.append(optimizer)
         # Check if more than 1 optimizer is required (Used for adversarial training)
         try:
