@@ -30,8 +30,8 @@ class ECG5000(Dataset):
 
         # TODO Workaround to to handle last batch in LSTM hidden state
         # https://discuss.pytorch.org/t/how-to-handle-last-batch-in-lstm-hidden-state/40858
-        df_train = df_train.head(4480)
-        df_test = df_test.head(448)
+        df_train = df_train.head(448)
+        df_test = df_test.head(44)
 
         self.y_train = df_train['target']
         self.y_test = df_test['target']

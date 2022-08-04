@@ -1,4 +1,3 @@
-import math
 from datetime import datetime
 
 import numpy as np
@@ -33,7 +32,6 @@ class LSTMVAE(BaseVAE, nn.Module):
             y7: optimizer algorithm.
         """
 
-
         self.encoding_layers = nn.ModuleList()
         self.decoding_layers = nn.ModuleList()
 
@@ -48,8 +46,6 @@ class LSTMVAE(BaseVAE, nn.Module):
         self.bottleneck_size = embedding_dim
         self.seq_len = seq_len
         self.n_features = n_features
-        #self.embedding_dim = embedding_dim
-        #self.hidden_dim = 2 * embedding_dim
 
         self.generate_autoencoder(self.shape,
                                   self.layers,
@@ -126,13 +122,9 @@ class LSTMVAE(BaseVAE, nn.Module):
         :return: (Tensor) List of latent codes
         """
 
-        # input = Tensor (140, 1)
-
-        # batch_size=1, seq_len=140, n_features=1
         x = x.reshape((1, self.seq_len, self.n_features))
-        # x = Tensor(1,140,1)
-
         x, (hidden_n, cell_n) = x, (None, None)
+
         for layer in self.encoding_layers[:-2]:
             x, (hidden_n, cell_n) = layer(x)
 
@@ -152,14 +144,10 @@ class LSTMVAE(BaseVAE, nn.Module):
         :param z: (Tensor) [B x D]
         :return: (Tensor) [B x C x H x W]
         """
-        # z = Tensor (1, 128)
-        # x = z.repeat(self.seq_len, self.n_features)
 
         x = z.reshape((self.n_features, self.bottleneck_size))
-        # x = Tensor (1, 128)
-
         x, (hidden_n, cell_n) = x, (None, None)
-        # TODO self.layers depends on AE shape
+
         for layer in self.decoding_layers[:-1]:
             x, (hidden_n, cell_n) = layer(x)
 
@@ -182,22 +170,14 @@ class LSTMVAE(BaseVAE, nn.Module):
     def forward(self, input: Tensor, **kwargs) -> List[Tensor]:
         # TODO Try not to use tensor.reshape
         # https://discuss.pytorch.org/t/for-beginners-do-not-use-view-or-reshape-to-swap-dimensions-of-tensors/75524
-        # input = Tensor(140, 1)
 
         input = input.reshape(input.shape[1], input.shape[0])
-        # input = Tensor(140,1)
-
         mu, log_var = self.encode(input)
-        # mu = Tensor(1,128)
-        # log_var = Tensor(1,128)
 
         z = self.reparameterize(mu, log_var)
-        # z = Tensor(1,128)
 
         input = input.reshape(input.shape[1], input.shape[0])
-        # input = Tensor(1, 140)
         reconstructed = self.decode(z)
-        # reconstructed = Tensor(1, 140)
 
         return [reconstructed, input, mu, log_var]
 
@@ -357,11 +337,12 @@ class LSTMVAE(BaseVAE, nn.Module):
         return lr
 
     def generate_autoencoder(self, shape, layers, dataset_shape, layer_step):
+
         if shape == "SYMMETRICAL":
 
             i = dataset_shape[1]
             z = dataset_shape[1] - layer_step
-            all_layers = layers
+            num_of_layers = layers
             input = self.n_features
             hidden_dim = self.seq_len
             last_decoder_layer_flag = True
@@ -372,7 +353,7 @@ class LSTMVAE(BaseVAE, nn.Module):
                 if hidden_dim < 1:
                     break
 
-                if all_layers == 1:
+                if num_of_layers == 1:
                     self.encoding_layers.append(nn.LSTM(
                         input_size=input,
                         hidden_size=hidden_dim,
@@ -436,7 +417,6 @@ class LSTMVAE(BaseVAE, nn.Module):
 
             input_dimension = 1
             hidden_dimension = dataset_shape[1]
-            last_decoder_layer_flag = True
 
             if layers == 1:
                 self.encoding_layers.append(nn.LSTM(

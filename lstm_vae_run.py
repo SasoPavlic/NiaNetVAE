@@ -1,19 +1,14 @@
-import copy
 import os
 import sys
-
 import yaml
 import argparse
-from pathlib import Path
-
-from sklearn.metrics import mean_squared_error
 
 from models import *
 from experiments.lstm_vae_experiment import LSTMVAExperiment
 from pytorch_lightning import Trainer, Callback
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities.seed import seed_everything
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
 from datasets.time_series import TimeSeriesDataset
 from pytorch_lightning.plugins import DDPPlugin
 
@@ -70,6 +65,8 @@ class VariationalAutoencoderArchitecture(Problem):
         config['trainer_params']['max_epochs'] = model.epochs
         data.setup()
 
+        early_stop_callback = EarlyStopping(monitor="val_loss", min_delta=0.00, patience=3, verbose=False,
+                                            mode="max")
         runner = Trainer(logger=tb_logger,
                          callbacks=[
                              LearningRateMonitor(),
@@ -77,6 +74,7 @@ class VariationalAutoencoderArchitecture(Problem):
                                              dirpath=os.path.join(tb_logger.log_dir, "checkpoints"),
                                              monitor="val_loss",
                                              save_last=True),
+                             early_stop_callback,
                          ],
                          strategy=DDPPlugin(find_unused_parameters=False),
 
@@ -117,7 +115,7 @@ if __name__ == '__main__':
 
     runner = Runner(
         dimension=DIMENSIONALITY,
-        max_evals=1,
+        max_evals=3,
         runs=1,
         algorithms=[
             ParticleSwarmAlgorithm(),
