@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 import yaml
@@ -34,6 +35,12 @@ with open(args.filename, 'r') as file:
 tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
                               name=config['model_params']['name'], )
 
+early_stop_callback = EarlyStopping(monitor=config['early_stop']['monitor'],
+                                    min_delta=config['early_stop']['min_delta'],
+                                    patience=config['early_stop']['patience'],
+                                    verbose=False,
+                                    check_finite=True,
+                                    mode="max")
 # For reproducibility
 seed_everything(config['exp_params']['manual_seed'], True)
 
@@ -45,7 +52,7 @@ class VariationalAutoencoderArchitecture(Problem):
         self.iteration = 0
 
     def _evaluate(self, solution):
-        #solution = [0.18068983, 0.05792889, 0.55358249, 0.3777263, 0.57080761, 0.67469747, 0.49576287]
+        # solution = [0.18068983, 0.05792889, 0.55358249, 0.3777263, 0.57080761, 0.67469747, 0.49576287]
 
         print("=================================================================================================")
         print(f"ITERATION IS: {self.iteration}")
@@ -65,8 +72,6 @@ class VariationalAutoencoderArchitecture(Problem):
         config['trainer_params']['max_epochs'] = model.epochs
         data.setup()
 
-        early_stop_callback = EarlyStopping(monitor="val_loss", min_delta=0.00, patience=3, verbose=False,
-                                            mode="max")
         runner = Trainer(logger=tb_logger,
                          callbacks=[
                              LearningRateMonitor(),
@@ -81,7 +86,10 @@ class VariationalAutoencoderArchitecture(Problem):
                          **config['trainer_params'])
 
         print(f"======= Training {config['model_params']['name']} =======")
+
+        print(f'\nTraining start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
         runner.fit(experiment, datamodule=data)
+        print(f'\nTraining end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
 
         # Known problem: https://discuss.pytorch.org/t/why-my-model-returns-nan/24329/5
         if math.isnan(experiment.val_RMSE.item()):
@@ -91,7 +99,7 @@ class VariationalAutoencoderArchitecture(Problem):
 
         else:
             RMSE = experiment.val_RMSE.item()
-            complexity = (int(model.epochs) ** 2) + (model.layers * 100) + (model.bottleneck_size * 10)
+            complexity = (model.epochs ** 2) + (model.layers * 100) + (model.bottleneck_size * 10)
             fitness = (RMSE * 1000) + (complexity / 100)
             print(f"RMSE: {RMSE}")
             print(f"Complexity: {complexity}")
@@ -100,7 +108,7 @@ class VariationalAutoencoderArchitecture(Problem):
 
 
 if __name__ == '__main__':
-
+    print(f'Program start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
     """
     Dimensionality:
     y1: topology shape,
@@ -115,7 +123,7 @@ if __name__ == '__main__':
 
     runner = Runner(
         dimension=DIMENSIONALITY,
-        max_evals=3,
+        max_evals=5,
         runs=1,
         algorithms=[
             ParticleSwarmAlgorithm(),
@@ -146,3 +154,6 @@ if __name__ == '__main__':
 
     best_model = vae_models[config['model_params']['name']](best_solution, **config['model_params'])
     torch.save(best_model, f"LSTMVAE_model_{config['trainer_params']['max_epochs']}_epochs.pt")
+
+    end = datetime.now().strftime("%H:%M:%S-%d/%m/%Y")
+    print(f"\n Program end: {end}")

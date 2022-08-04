@@ -280,7 +280,7 @@ class LSTMVAE(BaseVAE, nn.Module):
             bins[-1] = 1.01
             inds = np.digitize(gene, bins)
 
-            return inds[0]
+            return int(inds[0])
 
     def get_activation(self, gene):
         gene = np.array([gene])
@@ -320,7 +320,7 @@ class LSTMVAE(BaseVAE, nn.Module):
         bins = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.60, 0.7, 0.8, 0.9, 1.01])
         inds = np.digitize(gene, bins)
 
-        return inds[0] * 10 + 100
+        return int(inds[0]) * 10 + 100
 
     def get_learning_rate(self, gene):
         gene = np.array([gene])
@@ -406,7 +406,7 @@ class LSTMVAE(BaseVAE, nn.Module):
             if len(self.encoding_layers) == 0:
                 self.bottleneck_size = 0
             else:
-                self.bottleneck_size = self.encoding_layers[-1].hidden_size
+                self.bottleneck_size = int(self.encoding_layers[-1].hidden_size)
                 self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
                 self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
                 self.decoding_layers.append(nn.Linear(dataset_shape[1], self.seq_len))
@@ -521,7 +521,7 @@ class LSTMVAE(BaseVAE, nn.Module):
             if len(self.encoding_layers) == 0:
                 self.bottleneck_size = 0
             else:
-                self.bottleneck_size = self.encoding_layers[-1].hidden_size
+                self.bottleneck_size = int(self.encoding_layers[-1].hidden_size)
                 self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
                 self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
                 self.decoding_layers.append(nn.Linear(dataset_shape[1], self.seq_len))
