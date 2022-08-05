@@ -1,29 +1,31 @@
 import math
 import os
 import sys
+import time
+
 import yaml
 import argparse
-
+import evaluate
 from models import *
-from experiments.lstm_vae_experiment import LSTMVAExperiment
+from experiments.rnn_vae_experiment import RNNVAExperiment
 from pytorch_lightning import Trainer, Callback
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities.seed import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
 from datasets.time_series import TimeSeriesDataset
 from pytorch_lightning.plugins import DDPPlugin
-
 from niapy import Runner
 from niapy.problems import Problem
 from niapy.algorithms.basic import *
 from niapy.algorithms.modified import *
 
+RUN_ID = int(time.time())
 parser = argparse.ArgumentParser(description='Generic runner for LSTM VAE models')
 parser.add_argument('--config', '-c',
                     dest="filename",
                     metavar='FILE',
                     help='path to the config file',
-                    default='configs/lstm_vae.yaml')
+                    default='configs/rnn_vae.yaml')
 
 args = parser.parse_args()
 with open(args.filename, 'r') as file:
@@ -31,9 +33,6 @@ with open(args.filename, 'r') as file:
         config = yaml.safe_load(file)
     except yaml.YAMLError as exc:
         print(exc)
-
-tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
-                              name=config['model_params']['name'], )
 
 early_stop_callback = EarlyStopping(monitor=config['early_stop']['monitor'],
                                     min_delta=config['early_stop']['min_delta'],
@@ -45,14 +44,13 @@ early_stop_callback = EarlyStopping(monitor=config['early_stop']['monitor'],
 seed_everything(config['exp_params']['manual_seed'], True)
 
 
-class VariationalAutoencoderArchitecture(Problem):
+class RNNVAEAEArchitecture(Problem):
 
     def __init__(self, dimension):
         super().__init__(dimension=dimension, lower=0, upper=1)
         self.iteration = 0
 
     def _evaluate(self, solution):
-        # solution = [0.18068983, 0.05792889, 0.55358249, 0.3777263, 0.57080761, 0.67469747, 0.49576287]
 
         print("=================================================================================================")
         print(f"ITERATION IS: {self.iteration}")
@@ -67,12 +65,18 @@ class VariationalAutoencoderArchitecture(Problem):
             print(f"Fitness: {fitness}")
             return fitness
 
-        experiment = LSTMVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
+        experiment = RNNVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
         data = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
         config['trainer_params']['max_epochs'] = model.epochs
         data.setup()
 
+        tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
+                                      name=config['model_params']['name'] + model.id,
+                                      )
+
         runner = Trainer(logger=tb_logger,
+                         progress_bar_refresh_rate=0,
+                         weights_summary=None,
                          callbacks=[
                              LearningRateMonitor(),
                              ModelCheckpoint(save_top_k=2,
@@ -124,7 +128,7 @@ if __name__ == '__main__':
 
     runner = Runner(
         dimension=DIMENSIONALITY,
-        max_evals=50,
+        max_evals=10,
         runs=1,
         algorithms=[
             ParticleSwarmAlgorithm(),
@@ -134,7 +138,7 @@ if __name__ == '__main__':
             GeneticAlgorithm()
         ],
         problems=[
-            VariationalAutoencoderArchitecture(DIMENSIONALITY)
+            RNNVAEAEArchitecture(DIMENSIONALITY)
         ]
     )
 
@@ -145,19 +149,23 @@ if __name__ == '__main__':
     best_algorithm = None
 
     for algorithm in final_solutions:
-        fitness = final_solutions[algorithm]['VariationalAutoencoderArchitecture'][0][1]
-        solution = final_solutions[algorithm]['VariationalAutoencoderArchitecture'][0][0]
+        fitness = final_solutions[algorithm]['RNNVAEAEArchitecture'][0][1]
+        solution = final_solutions[algorithm]['RNNVAEAEArchitecture'][0][0]
         print(f"{algorithm}'s fitness: {fitness}")
         print(f"{algorithm}'s solution: {solution}")
 
         if best_fitness > fitness:
             best_fitness = fitness
             best_algorithm = algorithm
-            best_solution = final_solutions[algorithm]['VariationalAutoencoderArchitecture'][0][0]
+            best_solution = final_solutions[algorithm]['RNNVAEAEArchitecture'][0][0]
 
     print(f"Best algorithm: {best_algorithm}")
     best_model = vae_models[config['model_params']['name']](best_solution, **config['model_params'])
-    torch.save(best_model, f"LSTMVAE_model_{config['trainer_params']['max_epochs']}_epochs.pt")
+    model_file = f"{best_algorithm}_{RUN_ID}.pt"
+    torch.save(best_model, model_file)
 
-    end = datetime.now().strftime("%H:%M:%S-%d/%m/%Y")
-    print(f"\n Program end: {end}")
+    evaluate.fittest_model(existing_model=True,
+                           solution=best_solution,
+                           model_path=model_file)
+
+    print(f'\n Program end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')

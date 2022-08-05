@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 import numpy as np
 import torch
@@ -13,14 +14,14 @@ import random
 
 
 
-class LSTMVAE(BaseVAE, nn.Module):
+class RNNVAE(BaseVAE, nn.Module):
     def __init__(self,
                  solution,
                  seq_len,
                  n_features,
                  embedding_dim,
                  **kwargs) -> None:
-        super(LSTMVAE, self).__init__()
+        super(RNNVAE, self).__init__()
 
         """
         Dimensionality:
@@ -33,6 +34,7 @@ class LSTMVAE(BaseVAE, nn.Module):
         y7: learning rate
         y8: optimizer algorithm.
         """
+        self.id = str(int(time.time())).strip()
         self.dataset_shape = [n_features, seq_len]
         self.encoding_layers = nn.ModuleList()
         self.decoding_layers = nn.ModuleList()
@@ -112,6 +114,7 @@ class LSTMVAE(BaseVAE, nn.Module):
         self.optimizer = self.get_optimizer(solution[7])
 
         print(
+            f"ID: {self.id}\n"
             f"y1: Shape: {self.shape}\n"
             f"y2: Layer type: {self.layer_type}\n"
             f"y3: Layer step: {self.layer_step}\n"

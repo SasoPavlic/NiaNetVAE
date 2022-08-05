@@ -38,12 +38,12 @@ class RMSE(torchmetrics.Metric):
         return torch.sqrt(self.sum_squared_error / self.n_observations)
 
 
-class LSTMVAExperiment(pl.LightningModule):
+class RNNVAExperiment(pl.LightningModule):
     def __init__(self,
                  lstm_vae_model: BaseVAE,
                  params: dict,
                  n_features: int) -> None:
-        super(LSTMVAExperiment, self).__init__()
+        super(RNNVAExperiment, self).__init__()
 
         self.model = lstm_vae_model
         self.params = params

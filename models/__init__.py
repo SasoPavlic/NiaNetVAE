@@ -1,12 +1,12 @@
 from .base import *
 from .vanilla_vae import *
-from .lstm_vae import *
+from .rnn_vae import *
 
 # Aliases
 VAE = VanillaVAE
-LSTMVAE = LSTMVAE
+RNNVAE = RNNVAE
 
 vae_models = {'VanillaVAE':VAE,
-              'LSTMVAE':LSTMVAE}
+              'RNNVAE':RNNVAE}
 
 
