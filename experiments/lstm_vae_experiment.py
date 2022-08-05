@@ -94,7 +94,7 @@ class LSTMVAExperiment(pl.LightningModule):
                                             batch_idx=batch_idx)
 
         self.log_dict({f"val_{key}": val.item() for key, val in val_loss.items()}, sync_dist=True)
-        self.log('validaiton_MSE_step', self.validation_RMSE_metric(results[0], real_signal), on_step=True,
+        self.log('validation_MSE_step', self.validation_RMSE_metric(results[0], real_signal), on_step=True,
                  on_epoch=False)
 
     def on_validation_end(self) -> None:

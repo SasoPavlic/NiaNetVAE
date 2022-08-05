@@ -19,7 +19,6 @@ class LSTMVAE(BaseVAE, nn.Module):
                  seq_len,
                  n_features,
                  embedding_dim,
-                 dataset_shape=[1, 140],
                  **kwargs) -> None:
         super(LSTMVAE, self).__init__()
 
@@ -34,14 +33,14 @@ class LSTMVAE(BaseVAE, nn.Module):
         y7: learning rate
         y8: optimizer algorithm.
         """
-
+        self.dataset_shape = [n_features, seq_len]
         self.encoding_layers = nn.ModuleList()
         self.decoding_layers = nn.ModuleList()
 
         self.shape = self.get_shape(solution[0])
         self.layer_type = self.get_layer_type(solution[1])
-        self.layer_step = self.get_layer_step(solution[2], dataset_shape)
-        self.layers = self.get_layers(solution[3], self.layer_step, dataset_shape)
+        self.layer_step = self.get_layer_step(solution[2], self.dataset_shape)
+        self.layers = self.get_layers(solution[3], self.layer_step, self.dataset_shape)
         # https://ai.stackexchange.com/questions/3156/how-to-select-number-of-hidden-layers-and-number-of-memory-cells-in-an-lstm
         self.activation = self.get_activation(solution[4])
         self.epochs = self.get_epochs(solution[5])
@@ -54,7 +53,7 @@ class LSTMVAE(BaseVAE, nn.Module):
         self.generate_autoencoder(self.shape,
                                   self.layer_type,
                                   self.layers,
-                                  dataset_shape,
+                                  self.dataset_shape,
                                   self.layer_step)
 
         """For testing:"""
@@ -252,7 +251,7 @@ class LSTMVAE(BaseVAE, nn.Module):
         return reconstructed
 
     def get_layer_object(self, input_size, hidden_size, num_layers, batch_first):
-        if self.layer_step == 'LSTM':
+        if self.layer_type == 'LSTM':
             return nn.LSTM(
                 input_size=input_size,
                 hidden_size=hidden_size,
@@ -268,7 +267,7 @@ class LSTMVAE(BaseVAE, nn.Module):
                 batch_first=batch_first
             )
 
-        elif self.layer_step == 'RNN_TANH':
+        elif self.layer_type == 'RNN_TANH':
             return nn.RNN(
                 input_size=input_size,
                 hidden_size=hidden_size,
