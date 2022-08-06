@@ -1,3 +1,4 @@
+import os
 import time
 from datetime import datetime
 import numpy as np
@@ -10,8 +11,8 @@ import torch.nn.functional as F
 import torch.utils
 import torch.distributions
 import random
-
-
+import hashlib
+from tabulate import tabulate
 
 
 class RNNVAE(BaseVAE, nn.Module):
@@ -39,22 +40,22 @@ class RNNVAE(BaseVAE, nn.Module):
         self.encoding_layers = nn.ModuleList()
         self.decoding_layers = nn.ModuleList()
 
-        self.shape = self.get_shape(solution[0])
-        self.layer_type = self.get_layer_type(solution[1])
-        self.layer_step = self.get_layer_step(solution[2], self.dataset_shape)
-        self.layers = self.get_layers(solution[3], self.layer_step, self.dataset_shape)
+        self.topology_shape = self.map_shape(solution[0])
+        self.layer_type = self.map_layer_type(solution[1])
+        self.layer_step = self.map_layer_step(solution[2], self.dataset_shape)
+        self.num_layers = self.map_num_layers(solution[3], self.layer_step, self.dataset_shape)
         # https://ai.stackexchange.com/questions/3156/how-to-select-number-of-hidden-layers-and-number-of-memory-cells-in-an-lstm
-        self.activation = self.get_activation(solution[4])
-        self.epochs = self.get_epochs(solution[5])
-        self.learning_rate = self.get_learning_rate(solution[6])
+        self.activation = self.map_activation(solution[4])
+        self.num_epochs = self.map_num_epochs(solution[5])
+        self.learning_rate = self.map_learning_rate(solution[6])
 
         self.bottleneck_size = embedding_dim
         self.seq_len = seq_len
         self.n_features = n_features
 
-        self.generate_autoencoder(self.shape,
+        self.generate_autoencoder(self.topology_shape,
                                   self.layer_type,
-                                  self.layers,
+                                  self.num_layers,
                                   self.dataset_shape,
                                   self.layer_step)
 
@@ -111,21 +112,49 @@ class RNNVAE(BaseVAE, nn.Module):
         # ))
         # self.decoding_layers.append(nn.Linear(140, self.seq_len))
 
-        self.optimizer = self.get_optimizer(solution[7])
+        self.optimizer = self.map_optimizer(solution[7])
+        self.get_hash()
+        outputs = []
 
-        print(
-            f"ID: {self.id}\n"
-            f"y1: Shape: {self.shape}\n"
-            f"y2: Layer type: {self.layer_type}\n"
-            f"y3: Layer step: {self.layer_step}\n"
-            f"y4: Layers: {self.layers}\n"
-            f"y5: Activation function: {self.activation}\n"
-            f"y6: Epochs: {self.epochs}\n"
-            f"y7: Learning rate: {self.learning_rate}\n"
-            f"y8: Optimizer: {self.optimizer}\n"
-            f"Bottleneck size: {self.bottleneck_size}\n"
-            f"Encoder: {self.encoding_layers}\n"
-            f"Decoder: {self.decoding_layers}\n")
+        outputs.append([self.hash_id,
+                        self.topology_shape,
+                        self.layer_type,
+                        self.layer_step,
+                        self.num_layers,
+                        self.activation_name,
+                        self.num_epochs,
+                        self.learning_rate,
+                        self.optimizer_name,
+                        self.bottleneck_size,
+                        self.encoding_layers,
+                        self.decoding_layers])
+
+        print(tabulate(outputs, headers=["ID",
+                                         "Shape (y1)",
+                                         "Layer type (y2)",
+                                         "Layer step (y3)",
+                                         "Layers (y4)",
+                                         "Activation func. (y5)",
+                                         "Epochs (y6)",
+                                         "Learning rate (y7)",
+                                         "Optimizer (y8)",
+                                         "Bottleneck size",
+                                         "Encoder",
+                                         "Decoder", ], tablefmt="pretty"))
+    def get_hash(self):
+
+        self.hash_id = hashlib.sha1(str(str(self.topology_shape) +
+                                        str(self.layer_type) +
+                                        str(self.layer_step) +
+                                        str(self.num_layers) +
+                                        str(self.activation_name) +
+                                        str(self.num_epochs) +
+                                        str(self.learning_rate) +
+                                        str(self.optimizer_name) +
+                                        str(self.bottleneck_size) +
+                                        str(self.encoding_layers) +
+                                        str(self.decoding_layers)).encode('utf-8')).hexdigest()
+        return self.hash_id
 
     def encode(self, x: Tensor) -> List[Tensor]:
         """
@@ -278,7 +307,7 @@ class RNNVAE(BaseVAE, nn.Module):
                 batch_first=batch_first
             )
 
-    def get_shape(self, gene):
+    def map_shape(self, gene):
         gene = np.array([gene])
         bins = np.array([0.0, 0.5])
         inds = np.digitize(gene, bins)
@@ -292,7 +321,7 @@ class RNNVAE(BaseVAE, nn.Module):
         else:
             raise ValueError(f"Value not between boundaries 0.0 and 1.0. Value is: {inds[0] - 1}")
 
-    def get_layer_type(self, gene):
+    def map_layer_type(self, gene):
         gene = np.array([gene])
         bins = np.array([0.33, 0.66, 1.01])
         inds = np.digitize(gene, bins)
@@ -310,7 +339,7 @@ class RNNVAE(BaseVAE, nn.Module):
         else:
             raise ValueError(f"Value not between boundaries 0.0 and 1.0. Value is: {inds[0] - 1}")
 
-    def get_layer_step(self, gene, dataset_shape):
+    def map_layer_step(self, gene, dataset_shape):
         gene = np.array([gene])
         bins = []
         value = 1 / dataset_shape[1]
@@ -322,7 +351,7 @@ class RNNVAE(BaseVAE, nn.Module):
         inds = np.digitize(gene, bins)
         return inds[0]
 
-    def get_layers(self, gene, layer_step, dataset_shape):
+    def map_num_layers(self, gene, layer_step, dataset_shape):
         if layer_step == 0:
             max_layers = dataset_shape[1]
             return max_layers
@@ -347,47 +376,55 @@ class RNNVAE(BaseVAE, nn.Module):
 
             return int(inds[0])
 
-    def get_activation(self, gene):
+    def map_activation(self, gene):
         gene = np.array([gene])
         bins = np.array([0.0, 0.125, 0.25, 0.375, 0.500, 0.625, 0.750, 0.875, 1.01])
         inds = np.digitize(gene, bins)
 
         if inds[0] - 1 == 0:
+            self.activation_name = "ELU"
             return F.elu
 
         elif inds[0] - 1 == 1:
+            self.activation_name = "RELU"
             return F.relu
 
         elif inds[0] - 1 == 2:
+            self.activation_name = "Leaky RELU"
             return F.leaky_relu
 
         elif inds[0] - 1 == 3:
+            self.activation_name = "RRELU"
             return F.rrelu
 
         elif inds[0] - 1 == 4:
+            self.activation_name = "SELU"
             return F.selu
 
         elif inds[0] - 1 == 5:
+            self.activation_name = "CELU"
             return F.celu
 
         elif inds[0] - 1 == 6:
+            self.activation_name = "GELU"
             return F.gelu
 
         elif inds[0] - 1 == 7:
+            self.activation_name = "TANH"
             return torch.tanh
 
         else:
 
             raise ValueError(f"Value not between boundaries 0.0 and 1.0. Value is: {inds[0] - 1}")
 
-    def get_epochs(self, gene):
+    def map_num_epochs(self, gene):
         gene = np.array([gene])
         bins = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.60, 0.7, 0.8, 0.9, 1.01])
         inds = np.digitize(gene, bins)
 
         return int(inds[0]) * 10 + 100
 
-    def get_learning_rate(self, gene):
+    def map_learning_rate(self, gene):
         gene = np.array([gene])
         bins = []
         value = 1 / 1000
@@ -399,7 +436,7 @@ class RNNVAE(BaseVAE, nn.Module):
         inds = np.digitize(gene, bins)
         lr = np.array(bins)[inds[0]]
 
-        return lr
+        return round(lr, 3)
 
     def generate_autoencoder(self, shape, layer_type, layers, dataset_shape, layer_step):
 
@@ -591,32 +628,39 @@ class RNNVAE(BaseVAE, nn.Module):
                 self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
                 self.decoding_layers.append(nn.Linear(dataset_shape[1], self.seq_len))
 
-    def get_optimizer(self, gene):
+    def map_optimizer(self, gene):
         gene = np.array([gene])
         bins = np.array([0.0, 0.167, 0.334, 0.50, 0.667, 0.834, 1.01])
         inds = np.digitize(gene, bins)
 
         """When AE does not have any layers"""
         if len(list(self.parameters())) == 0:
+            self.optimizer_name = "Empty"
             return None
 
         # TODO add weight decay to solution array
         if inds[0] - 1 == 0:
+            self.optimizer_name = "Adam"
             return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
         elif inds[0] - 1 == 1:
+            self.optimizer_name = "Adagrad"
             return torch.optim.Adagrad(self.parameters(), lr=self.learning_rate)
 
         elif inds[0] - 1 == 2:
+            self.optimizer_name = "SGD"
             return torch.optim.SGD(self.parameters(), lr=self.learning_rate)
 
         elif inds[0] - 1 == 3:
+            self.optimizer_name = "RAdam"
             return torch.optim.RAdam(self.parameters(), lr=self.learning_rate)
 
         elif inds[0] - 1 == 4:
+            self.optimizer_name = "ASGD"
             return torch.optim.ASGD(self.parameters(), lr=self.learning_rate)
 
         elif inds[0] - 1 == 5:
+            self.optimizer_name = "RPROP"
             return torch.optim.Rprop(self.parameters(), lr=self.learning_rate)
 
         else:

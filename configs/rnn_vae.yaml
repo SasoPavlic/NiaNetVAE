@@ -30,4 +30,5 @@ early_stop:
 
 logging_params:
   save_dir: "logs/"
+  db_storage: "solution.db"
   name: "RNNVAE"
