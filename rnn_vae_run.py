@@ -1,13 +1,8 @@
 import math
 import sys
-import pandas as pd
 import yaml
 import argparse
-from tabulate import tabulate
-from peewee import SqliteDatabase
-
 import evaluate
-import storage.database
 from models import *
 from experiments.rnn_vae_experiment import RNNVAExperiment
 from pytorch_lightning import Trainer, Callback
@@ -20,7 +15,7 @@ from niapy import Runner
 from niapy.problems import Problem
 from niapy.algorithms.basic import *
 from niapy.algorithms.modified import *
-import sqlite3 as sq
+from storage.database import SQLiteConnector
 
 parser = argparse.ArgumentParser(description='Generic runner for LSTM VAE models')
 parser.add_argument('--config', '-c',
@@ -42,11 +37,12 @@ early_stop_callback = EarlyStopping(monitor=config['early_stop']['monitor'],
                                     verbose=False,
                                     check_finite=True,
                                     mode="max")
+
+conn = SQLiteConnector((config['logging_params']['db_storage']))
+
 # For reproducibility
 seed_everything(config['exp_params']['manual_seed'], True)
 
-db = SqliteDatabase(config['logging_params']['db_storage'])
-table_name = "solution"
 
 class RNNVAEAEArchitecture(Problem):
 
@@ -55,94 +51,65 @@ class RNNVAEAEArchitecture(Problem):
         self.iteration = 0
 
     def _evaluate(self, solution):
-        # solution = [0.38641122, 0.02673898, 0.55739414, 0.96943802, 0.67513284, 0.10191641, 0.6720203, 0.94043456]
-
         print("=================================================================================================")
         print(f"ITERATION IS: {self.iteration}")
         print(f"SOLUTION: {solution}")
         self.iteration += 1
 
         model = vae_models[config['model_params']['name']](solution, **config['model_params'])
-        conn = sq.connect(f'{table_name}.sqlite')
-        existing_entry = pd.read_sql(f"select * from {table_name} where hash_id='{model.hash_id}'", conn)
+        existing_entry = conn.get_entries(hash_id=model.hash_id)
 
         if existing_entry.shape[0] > 0:
             fitness = existing_entry['fitness'][0]
-            conn.close()
             return fitness
 
         else:
-
             """Punishing bad decisions"""
             if len(model.encoding_layers) == 0 or len(model.decoding_layers) == 0:
-                fitness = sys.maxsize
-                print(f"Fitness: {fitness}")
-                return fitness
-
-            experiment = RNNVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
-            data = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
-            config['trainer_params']['max_epochs'] = model.num_epochs
-            data.setup()
-
-            tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
-                                          name=config['model_params']['name'] + model.hash_id,
-                                          )
-
-            runner = Trainer(logger=tb_logger,
-                             progress_bar_refresh_rate=0,
-                             weights_summary=None,
-                             callbacks=[
-                                 LearningRateMonitor(),
-                                 ModelCheckpoint(save_top_k=2,
-                                                 dirpath=os.path.join(tb_logger.log_dir, "checkpoints"),
-                                                 monitor="val_loss",
-                                                 save_last=True),
-                                 early_stop_callback,
-                             ],
-                             strategy=DDPPlugin(find_unused_parameters=False),
-
-                             **config['trainer_params'])
-
-            print(f"======= Training {config['model_params']['name']} =======")
-
-            print(f'\nTraining start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
-            runner.fit(experiment, datamodule=data)
-            print(f'\nTraining end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
-
-            # Known problem: https://discuss.pytorch.org/t/why-my-model-returns-nan/24329/5
-            if math.isnan(experiment.val_RMSE.item()):
                 RMSE = sys.maxsize
-                complexity = (model.num_epochs ** 2) + (model.num_layers * 100) + (model.bottleneck_size * 10)
-                fitness = sys.maxsize
-                print(f"Fitness: {fitness}")
-
             else:
-                RMSE = experiment.val_RMSE.item()
-                complexity = (model.num_epochs ** 2) + (model.num_layers * 100) + (model.bottleneck_size * 10)
-                fitness = (RMSE * 1000) + (complexity / 100)
-                print(f"RMSE: {RMSE}")
-                print(f"Complexity: {complexity}")
-                print(f"Fitness: {fitness}")
+                experiment = RNNVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
+                data = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
+                config['trainer_params']['max_epochs'] = model.num_epochs
+                data.setup()
 
-            # TODO add solution array and algorithm name
-            # TODO move to database.py
-            df = pd.DataFrame({'hash_id': model.hash_id,
-                               'timestamp': datetime.now().strftime("%H:%M %d-%m-%Y"),
-                               'encoding_layers': str(model.encoding_layers),
-                               'decoding_layers': str(model.decoding_layers),
-                               'topology_shape': model.topology_shape,
-                               'layer_type': model.layer_type,
-                               'num_layers': model.num_layers,
-                               'activation': str(model.activation_name),
-                               'num_epochs': model.num_epochs,
-                               'learning_rate': model.learning_rate,
-                               'optimizer': str(model.optimizer_name),
-                               'bottleneck_size': model.bottleneck_size,
-                               'RMSE': RMSE,
-                               'complexity': complexity,
-                               'fitness': fitness}, index=[0])
-            df.to_sql(table_name, conn, if_exists='append', index=False)  # writes to file
-            conn.close()  # good practice: close connection
+                tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
+                                              name=config['model_params']['name'] + model.hash_id,
+                                              )
+
+                runner = Trainer(logger=tb_logger,
+                                 progress_bar_refresh_rate=0,
+                                 weights_summary=None,
+                                 callbacks=[
+                                     LearningRateMonitor(),
+                                     ModelCheckpoint(save_top_k=2,
+                                                     dirpath=os.path.join(tb_logger.log_dir, "checkpoints"),
+                                                     monitor="val_loss",
+                                                     save_last=True),
+                                     early_stop_callback,
+                                 ],
+                                 strategy=DDPPlugin(find_unused_parameters=False),
+
+                                 **config['trainer_params'])
+
+                print(f"======= Training {config['model_params']['name']} =======")
+
+                print(f'\nTraining start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
+                runner.fit(experiment, datamodule=data)
+                print(f'\nTraining end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
+
+                # Known problem: https://discuss.pytorch.org/t/why-my-model-returns-nan/24329/5
+                if math.isnan(experiment.val_RMSE.item()):
+                    RMSE = sys.maxsize
+                else:
+                    RMSE = experiment.val_RMSE.item()
+
+            # TODO add algorithm name
+            complexity = (model.num_epochs ** 2) + (model.num_layers * 100) + (model.bottleneck_size * 10)
+            fitness = (RMSE * 1000) + (complexity / 100)
+
+            print(tabulate([[RMSE, complexity, fitness]], headers=["RMSE", "Complexity", "Fitness"], tablefmt="pretty"))
+            conn.post_entries(model, fitness, solution, RMSE, complexity)
 
             return fitness
 
