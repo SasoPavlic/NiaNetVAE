@@ -16,7 +16,10 @@ from niapy.problems import Problem
 from niapy.algorithms.basic import *
 from niapy.algorithms.modified import *
 from storage.database import SQLiteConnector
+import uuid
+from pathlib import Path
 
+RUN_UUID = uuid.uuid4().hex
 parser = argparse.ArgumentParser(description='Generic runner for LSTM VAE models')
 parser.add_argument('--config', '-c',
                     dest="filename",
@@ -31,6 +34,9 @@ with open(args.filename, 'r') as file:
     except yaml.YAMLError as exc:
         print(exc)
 
+config['logging_params']['save_dir'] += RUN_UUID + '/'
+Path(config['logging_params']['save_dir']).mkdir(parents=True, exist_ok=True)
+
 early_stop_callback = EarlyStopping(monitor=config['early_stop']['monitor'],
                                     min_delta=config['early_stop']['min_delta'],
                                     patience=config['early_stop']['patience'],
@@ -38,9 +44,7 @@ early_stop_callback = EarlyStopping(monitor=config['early_stop']['monitor'],
                                     check_finite=True,
                                     mode="max")
 
-conn = SQLiteConnector((config['logging_params']['db_storage']))
-
-# For reproducibility
+conn = SQLiteConnector(config['logging_params']['db_storage'], f"solution_{RUN_UUID}")
 seed_everything(config['exp_params']['manual_seed'], True)
 
 
@@ -50,10 +54,10 @@ class RNNVAEAEArchitecture(Problem):
         super().__init__(dimension=dimension, lower=0, upper=1)
         self.iteration = 0
 
-    def _evaluate(self, solution):
+    def _evaluate(self, solution, alg_name):
         print("=================================================================================================")
-        print(f"ITERATION IS: {self.iteration}")
-        print(f"SOLUTION: {solution}")
+        print(f"ITERATION: {self.iteration}")
+        print(f"SOLUTION : {solution}")
         self.iteration += 1
 
         model = vae_models[config['model_params']['name']](solution, **config['model_params'])
@@ -61,6 +65,7 @@ class RNNVAEAEArchitecture(Problem):
 
         if existing_entry.shape[0] > 0:
             fitness = existing_entry['fitness'][0]
+            print(f"Model for this solution already exists")
             return fitness
 
         else:
@@ -73,8 +78,8 @@ class RNNVAEAEArchitecture(Problem):
                 config['trainer_params']['max_epochs'] = model.num_epochs
                 data.setup()
 
-                tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
-                                              name=config['model_params']['name'] + model.hash_id,
+                tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'] + 'all_models/',
+                                              name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id,
                                               )
 
                 runner = Trainer(logger=tb_logger,
@@ -93,7 +98,6 @@ class RNNVAEAEArchitecture(Problem):
                                  **config['trainer_params'])
 
                 print(f"======= Training {config['model_params']['name']} =======")
-
                 print(f'\nTraining start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
                 runner.fit(experiment, datamodule=data)
                 print(f'\nTraining end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
@@ -104,18 +108,18 @@ class RNNVAEAEArchitecture(Problem):
                 else:
                     RMSE = experiment.val_RMSE.item()
 
-            # TODO add algorithm name
             complexity = (model.num_epochs ** 2) + (model.num_layers * 100) + (model.bottleneck_size * 10)
             fitness = (RMSE * 1000) + (complexity / 100)
 
             print(tabulate([[RMSE, complexity, fitness]], headers=["RMSE", "Complexity", "Fitness"], tablefmt="pretty"))
-            conn.post_entries(model, fitness, solution, RMSE, complexity)
+            conn.post_entries(model, fitness, solution, RMSE, complexity, alg_name, self.iteration)
 
             return fitness
 
 
 if __name__ == '__main__':
     print(f'Program start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
+    print(f"RUN UUID: {RUN_UUID}")
     """
     Dimensionality:
     y1: topology shape,
@@ -130,9 +134,10 @@ if __name__ == '__main__':
     DIMENSIONALITY = 8
 
     runner = Runner(
+        dirpath=config['logging_params']['save_dir'],
         dimension=DIMENSIONALITY,
-        max_evals=20,
-        runs=2,
+        max_evals=1,
+        runs=1,
         algorithms=[
             ParticleSwarmAlgorithm(),
             DifferentialEvolution(),
@@ -145,32 +150,15 @@ if __name__ == '__main__':
         ]
     )
 
-    print("=================================================================================================")
+    print("=====================================SEARCH STARTED==============================================")
     final_solutions = runner.run(export='json', verbose=True)
-    print("=================================================================================================")
-    best_fitness = sys.maxsize
-    best_solution = None
-    best_algorithm = None
-    outputs = []
+    print("=====================================SEARCH COMPLETED============================================")
 
-    for algorithm in final_solutions:
-        fitness = final_solutions[algorithm]['RNNVAEAEArchitecture'][0][1]
-        solution = str(final_solutions[algorithm]['RNNVAEAEArchitecture'][0][0]).strip()
-
-        outputs.append([algorithm, fitness, solution])
-
-        if best_fitness > fitness:
-            best_fitness = fitness
-            best_algorithm = algorithm
-            best_solution = final_solutions[algorithm]['RNNVAEAEArchitecture'][0][0]
-
-    print(tabulate(outputs, headers=["Algorithm", "Fitness", "Solution"]))
-    print("=================================================================================================")
-    print(f"Best algorithm: {best_algorithm}")
-    print(f"Best solution: {best_solution}")
+    best_solution, best_algorithm = conn.best_results()
     best_model = vae_models[config['model_params']['name']](best_solution, **config['model_params'])
-    model_file = f"{best_algorithm}_{best_model.hash_id}.pt"
+    model_file = config['logging_params']['save_dir'] + f"{best_algorithm}_{best_model.hash_id}.pt"
     torch.save(best_model, model_file)
+    print(f"Best model saved to: {model_file}")
 
     evaluate.fittest_model(existing_model=True,
                            solution=best_solution,

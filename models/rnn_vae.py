@@ -425,18 +425,19 @@ class RNNVAE(BaseVAE, nn.Module):
         return int(inds[0]) * 10 + 100
 
     def map_learning_rate(self, gene):
+        # https://www.jeremyjordan.me/nn-learning-rate/
         gene = np.array([gene])
         bins = []
-        value = 1 / 1000
+        value = 1 / 100
         step = value
-        for col in range(0, 1000):
+        for col in range(0, 100):
             bins.append(step)
             step += value
         bins[-1] = 1.01
         inds = np.digitize(gene, bins)
         lr = np.array(bins)[inds[0]]
 
-        return round(lr, 3)
+        return round(lr, 2)
 
     def generate_autoencoder(self, shape, layer_type, layers, dataset_shape, layer_step):
 
@@ -639,6 +640,7 @@ class RNNVAE(BaseVAE, nn.Module):
             return None
 
         # TODO add weight decay to solution array
+        # https://towardsdatascience.com/l1-and-l2-regularization-methods-ce25e7fc831c
         if inds[0] - 1 == 0:
             self.optimizer_name = "Adam"
             return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
