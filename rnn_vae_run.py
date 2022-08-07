@@ -47,6 +47,9 @@ early_stop_callback = EarlyStopping(monitor=config['early_stop']['monitor'],
 conn = SQLiteConnector(config['logging_params']['db_storage'], f"solution_{RUN_UUID}")
 seed_everything(config['exp_params']['manual_seed'], True)
 
+data = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
+data.setup()
+
 
 class RNNVAEAEArchitecture(Problem):
 
@@ -71,13 +74,11 @@ class RNNVAEAEArchitecture(Problem):
         else:
             """Punishing bad decisions"""
             if len(model.encoding_layers) == 0 or len(model.decoding_layers) == 0:
+                # TODO Python int too large to convert to SQLite INTEGER
                 RMSE = sys.maxsize
             else:
                 experiment = RNNVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
-                data = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
                 config['trainer_params']['max_epochs'] = model.num_epochs
-                data.setup()
-
                 tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'] + 'all_models/',
                                               name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id,
                                               )
