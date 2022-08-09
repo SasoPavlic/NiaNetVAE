@@ -18,9 +18,6 @@ from tabulate import tabulate
 class RNNVAE(BaseVAE, nn.Module):
     def __init__(self,
                  solution,
-                 seq_len,
-                 n_features,
-                 embedding_dim,
                  **kwargs) -> None:
         super(RNNVAE, self).__init__()
 
@@ -35,6 +32,10 @@ class RNNVAE(BaseVAE, nn.Module):
         y7: learning rate
         y8: optimizer algorithm.
         """
+        n_features = kwargs['model_params']['n_features']
+        seq_len = kwargs['model_params']['seq_len']
+        train_batch_size = kwargs['data_params']['batch_size']
+
         self.id = str(int(time.time())).strip()
         self.dataset_shape = [n_features, seq_len]
         self.encoding_layers = nn.ModuleList()
@@ -49,9 +50,10 @@ class RNNVAE(BaseVAE, nn.Module):
         self.num_epochs = self.map_num_epochs(solution[5])
         self.learning_rate = self.map_learning_rate(solution[6])
 
-        self.bottleneck_size = embedding_dim
+        self.bottleneck_size = 0
         self.seq_len = seq_len
         self.n_features = n_features
+        self.batch_size = train_batch_size
 
         self.generate_autoencoder(self.topology_shape,
                                   self.layer_type,
@@ -164,7 +166,7 @@ class RNNVAE(BaseVAE, nn.Module):
         :return: (Tensor) List of latent codes
         """
 
-        x = x.reshape((1, self.seq_len, self.n_features))
+        x = x.reshape((self.batch_size, self.seq_len, self.n_features))
         x, (hidden_n, cell_n) = x, (None, None)
 
         for layer in self.encoding_layers[:-2]:
@@ -178,7 +180,7 @@ class RNNVAE(BaseVAE, nn.Module):
         # # TODO Why hidden state needs to be passed
         # # https://github.com/chrisvdweth/ml-toolkit\
         # # https://discuss.pytorch.org/t/lstm-autoencoders-in-pytorch/139727
-        hidden_n = hidden_n.reshape((self.n_features, self.bottleneck_size))
+        hidden_n = hidden_n.reshape((self.batch_size, self.bottleneck_size))
         mu = self.encoding_layers[-2](hidden_n)
         log_var = self.encoding_layers[-1](hidden_n)
 
@@ -192,7 +194,7 @@ class RNNVAE(BaseVAE, nn.Module):
         :return: (Tensor) [B x C x H x W]
         """
 
-        x = z.reshape((self.n_features, self.bottleneck_size))
+        x = z.reshape((self.batch_size, self.bottleneck_size))
 
         for layer in self.decoding_layers[:-1]:
             if layer.mode == 'LSTM':

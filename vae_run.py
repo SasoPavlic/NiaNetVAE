@@ -2,7 +2,7 @@ import os
 import yaml
 import argparse
 from pathlib import Path
-from datasets.mnist import VAEDataset
+from dataloaders.mnist import VAEDataset
 from models import *
 from experiments.vae_experiment import VAEXperiment
 from pytorch_lightning import Trainer

@@ -2,19 +2,14 @@ model_params:
   name: 'RNNVAE'
   seq_len: 140
   n_features: 1 #Multiple features problem https://stackoverflow.com/questions/71565854/lstm-autoencoder-set-up-for-multiple-features-using-pytorch
-  embedding_dim: 35 # It is calculated dynamically. Can be removed.
 
 data_params:
   data_path: "data/"
-  train_batch_size: 1
-  test_batch_size: 1
-  val_batch_size: 1
+  batch_size: 1
   patch_size: 0
   num_workers: 0
 
-# TODO remove unused parameters
 exp_params:
-  LR: 0.001
   weight_decay: 0.0
   kld_weight: 0.1
   manual_seed: 1265
@@ -22,7 +17,7 @@ exp_params:
 trainer_params:
   gpus: [ 0 ]
   min_epochs: 1
-  max_epochs: 1
+  max_epochs: 200
 
 early_stop:
   monitor: "val_loss"
@@ -30,6 +25,6 @@ early_stop:
   min_delta: 0.00
 
 logging_params:
+  name: "RNNVAE"
   save_dir: "logs/"
   db_storage: "solution.db"
-  name: "RNNVAE"

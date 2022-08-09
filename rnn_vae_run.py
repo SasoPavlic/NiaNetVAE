@@ -1,23 +1,26 @@
 import math
-import sys
+
+import torch
 import yaml
 import argparse
+
+from tabulate import tabulate
+
 import evaluate
-from models import *
 from experiments.rnn_vae_experiment import RNNVAExperiment
 from pytorch_lightning import Trainer, Callback
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities.seed import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
-from datasets.time_series import TimeSeriesDataset
+from dataloaders.time_series import TimeSeriesDataset
 from pytorch_lightning.plugins import DDPPlugin
-from niapy import Runner
-from niapy.problems import Problem
-from niapy.algorithms.basic import *
 from niapy.algorithms.modified import *
+
+from models import vae_models
 from storage.database import SQLiteConnector
 import uuid
 from pathlib import Path
+from niapy_extension.wrapper import *
 
 RUN_UUID = uuid.uuid4().hex
 parser = argparse.ArgumentParser(description='Generic runner for LSTM VAE models')
@@ -51,7 +54,7 @@ data = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer
 data.setup()
 
 
-class RNNVAEAEArchitecture(Problem):
+class RNNVAEAEArchitecture(ExtendedProblem):
 
     def __init__(self, dimension):
         super().__init__(dimension=dimension, lower=0, upper=1)
@@ -63,7 +66,7 @@ class RNNVAEAEArchitecture(Problem):
         print(f"SOLUTION : {solution}")
         self.iteration += 1
 
-        model = vae_models[config['model_params']['name']](solution, **config['model_params'])
+        model = vae_models[config['model_params']['name']](solution, **config)
         existing_entry = conn.get_entries(hash_id=model.hash_id)
 
         if existing_entry.shape[0] > 0:
@@ -74,8 +77,7 @@ class RNNVAEAEArchitecture(Problem):
         else:
             """Punishing bad decisions"""
             if len(model.encoding_layers) == 0 or len(model.decoding_layers) == 0:
-                # TODO Python int too large to convert to SQLite INTEGER
-                RMSE = sys.maxsize
+                RMSE = int(9e10)
             else:
                 experiment = RNNVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
                 config['trainer_params']['max_epochs'] = model.num_epochs
@@ -105,7 +107,7 @@ class RNNVAEAEArchitecture(Problem):
 
                 # Known problem: https://discuss.pytorch.org/t/why-my-model-returns-nan/24329/5
                 if math.isnan(experiment.val_RMSE.item()):
-                    RMSE = sys.maxsize
+                    RMSE = int(9e10)
                 else:
                     RMSE = experiment.val_RMSE.item()
 
@@ -134,11 +136,11 @@ if __name__ == '__main__':
     """
     DIMENSIONALITY = 8
 
-    runner = Runner(
-        dirpath=config['logging_params']['save_dir'],
+    runner = ExtendedRunner(
+        config['logging_params']['save_dir'],
         dimension=DIMENSIONALITY,
-        max_evals=1,
-        runs=1,
+        max_evals=25,
+        runs=2,
         algorithms=[
             ParticleSwarmAlgorithm(),
             DifferentialEvolution(),
@@ -156,7 +158,7 @@ if __name__ == '__main__':
     print("=====================================SEARCH COMPLETED============================================")
 
     best_solution, best_algorithm = conn.best_results()
-    best_model = vae_models[config['model_params']['name']](best_solution, **config['model_params'])
+    best_model = vae_models[config['model_params']['name']](best_solution, **config)
     model_file = config['logging_params']['save_dir'] + f"{best_algorithm}_{best_model.hash_id}.pt"
     torch.save(best_model, model_file)
     print(f"Best model saved to: {model_file}")

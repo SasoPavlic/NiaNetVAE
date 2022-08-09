@@ -13,10 +13,10 @@ class ECG5000(Dataset):
     modello. Ha tre metodi principali, __init__, __len__ e __get_item__.
     """
 
-    def __init__(self):
-        with open(os.path.join('data/ECG500/ECG5000_TRAIN.arff')) as f:
-            x_train, y_train = arff.loadarff(f)
+    def __init__(self, train_batch_size, test_batch_size):
         with open(os.path.join('data/ECG500/ECG5000_TEST.arff')) as f:
+            x_train, y_train = arff.loadarff(f)
+        with open(os.path.join('data/ECG500/ECG5000_TRAIN.arff')) as f:
             x_test, y_test = arff.loadarff(f)
 
         df_train = pd.DataFrame(x_train)
@@ -30,8 +30,21 @@ class ECG5000(Dataset):
 
         # TODO Workaround to to handle last batch in LSTM hidden state
         # https://discuss.pytorch.org/t/how-to-handle-last-batch-in-lstm-hidden-state/40858
-        df_train = df_train.head(4480)
-        df_test = df_test.head(448)
+
+        train_size = 0
+        if df_train.shape[0] % train_batch_size == 0:
+            train_size = df_train.shape[0]
+        else:
+            train_size = df_train.shape[0] - (df_train.shape[0] % train_batch_size)
+
+        test_size = 0
+        if df_test.shape[0] % test_batch_size == 0:
+            test_size = df_test.shape[0]
+        else:
+            test_size = df_test.shape[0] - (df_test.shape[0] % test_batch_size)
+
+        df_train = df_train.head(train_size)
+        df_test = df_test.head(test_size)
 
         self.y_train = df_train['target']
         self.y_test = df_test['target']
@@ -70,9 +83,7 @@ class TimeSeriesDataset(LightningDataModule):
     def __init__(
             self,
             data_path: str,
-            train_batch_size: int = 1,
-            test_batch_size: int = 1,
-            val_batch_size: int = 1,
+            batch_size: int = 1,
             patch_size: Union[int, Sequence[int]] = (256, 256),
             num_workers: int = 16,
             pin_memory: bool = False,
@@ -81,21 +92,20 @@ class TimeSeriesDataset(LightningDataModule):
         super().__init__()
 
         self.data_dir = data_path
-        self.train_batch_size = train_batch_size
-        self.test_batch_size = test_batch_size
-        self.val_batch_size = val_batch_size
+        self.batch_size = batch_size
         self.patch_size = patch_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
 
     def setup(self, stage: Optional[str] = None) -> None:
-        self.train_dataset = ECG5000()
-        self.val_dataset = ECG5000()
+        self.train_dataset = ECG5000(self.batch_size, self.batch_size)
+        # TODO make
+        self.val_dataset = ECG5000(self.batch_size, self.batch_size)
 
     def train_dataloader(self) -> DataLoader:
         data = DataLoader(
             self.train_dataset,
-            batch_size=self.train_batch_size,
+            batch_size=self.batch_size,
             num_workers=self.num_workers,
             shuffle=True,
             pin_memory=self.pin_memory,
@@ -107,7 +117,7 @@ class TimeSeriesDataset(LightningDataModule):
     def test_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
         data = DataLoader(
             self.val_dataset,
-            batch_size=self.test_batch_size,
+            batch_size=self.batch_size,
             num_workers=self.num_workers,
             shuffle=True,
             pin_memory=self.pin_memory,
@@ -118,7 +128,7 @@ class TimeSeriesDataset(LightningDataModule):
     def val_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
         data = DataLoader(
             self.val_dataset,
-            batch_size=self.val_batch_size,
+            batch_size=self.batch_size,
             num_workers=self.num_workers,
             shuffle=False,
             pin_memory=self.pin_memory,
