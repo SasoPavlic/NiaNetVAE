@@ -34,7 +34,7 @@ class RNNVAE(BaseVAE, nn.Module):
         """
         n_features = kwargs['model_params']['n_features']
         seq_len = kwargs['model_params']['seq_len']
-        train_batch_size = kwargs['data_params']['batch_size']
+        batch_size = kwargs['data_params']['batch_size']
 
         self.id = str(int(time.time())).strip()
         self.dataset_shape = [n_features, seq_len]
@@ -53,7 +53,7 @@ class RNNVAE(BaseVAE, nn.Module):
         self.bottleneck_size = 0
         self.seq_len = seq_len
         self.n_features = n_features
-        self.batch_size = train_batch_size
+        self.batch_size = batch_size
 
         self.generate_autoencoder(self.topology_shape,
                                   self.layer_type,
@@ -62,51 +62,45 @@ class RNNVAE(BaseVAE, nn.Module):
                                   self.layer_step)
 
         """For testing:"""
-        # self.encoding_layers.append(get_layer_type(
-        #     layer_type=self.layer_type,
+        # self.encoding_layers.append(self.get_layer_object(
         #     input_size=1,
         #     hidden_size=140,
         #     num_layers=1,
         #     batch_first=True
         # ))
         #
-        # self.encoding_layers.append(get_layer_type(
-        #     layer_type=self.layer_type,
+        # self.encoding_layers.append(self.get_layer_object(
         #     input_size=140,
         #     hidden_size=70,
         #     num_layers=1,
         #     batch_first=True
         # ))
         #
-        # self.encoding_layers.append(get_layer_type(
-        #     layer_type=self.layer_type,
+        # self.encoding_layers.append(self.get_layer_object(
         #     input_size=70,
         #     hidden_size=35,
         #     num_layers=1,
         #     batch_first=True
         # ))
-        #
+        # self.bottleneck_size = 35
         # self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
         # self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
         #
-        # self.decoding_layers.append(get_layer_type(
-        #     layer_type=self.layer_type,
+        # self.decoding_layers.append(self.get_layer_object(
         #     input_size=35,
         #     hidden_size=70,
         #     num_layers=1,
         #     batch_first=True
         # ))
         #
-        # self.decoding_layers.append(get_layer_type(
-        #     layer_type=self.layer_type,
+        # self.decoding_layers.append(self.get_layer_object(
         #     input_size=70,
         #     hidden_size=140,
         #     num_layers=1,
         #     batch_first=True
         # ))
         #
-        # self.decoding_layers.append(get_layer_type(
-        #     layer_type=self.layer_type,
+        # self.decoding_layers.append(self.get_layer_object(
         #     input_size=140,
         #     hidden_size=140,
         #     num_layers=1,

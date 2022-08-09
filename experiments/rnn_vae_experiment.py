@@ -135,6 +135,7 @@ class RNNVAExperiment(pl.LightningModule):
             return optims
 
     def sample_signals(self):
+        # TODO evaluate model on test dataset
         # Get sample reconstruction image
         test_input, test_label = next(iter(self.trainer.datamodule.test_dataloader()))
         test_input = test_input.to(self.curr_device)

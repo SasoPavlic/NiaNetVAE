@@ -1,6 +1,8 @@
 import os
 import statistics
+import uuid
 from datetime import datetime
+from pathlib import Path
 
 import torch
 import yaml
@@ -15,6 +17,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, Ea
 from dataloaders.time_series import TimeSeriesDataset
 from pytorch_lightning.plugins import DDPPlugin
 
+RUN_UUID = uuid.uuid4().hex
 parser = argparse.ArgumentParser(description='Generic runner for LSTM VAE models')
 parser.add_argument('--config', '-c',
                     dest="filename",
@@ -29,8 +32,8 @@ with open(args.filename, 'r') as file:
     except yaml.YAMLError as exc:
         print(exc)
 
-tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
-                              name=config['model_params']['name'], )
+config['logging_params']['save_dir'] += RUN_UUID + '/'
+Path(config['logging_params']['save_dir']).mkdir(parents=True, exist_ok=True)
 
 early_stop_callback = EarlyStopping(monitor=config['early_stop']['monitor'],
                                     min_delta=config['early_stop']['min_delta'],
@@ -43,14 +46,18 @@ seed_everything(config['exp_params']['manual_seed'], True)
 
 
 def fittest_model(existing_model, **kwargs):
-    dataloader = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
-    dataloader.setup()
+    datamodule = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
+    datamodule.setup()
 
     if existing_model:
         model = torch.load(kwargs["model_path"])
     else:
         model = vae_models[config['model_params']['name']](kwargs["solution"], **config)
         experiment = RNNVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
+        config['trainer_params']['max_epochs'] = model.num_epochs
+        tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'] + 'all_models/',
+                                      name=str("Manual" + "_" + model.hash_id))
+
         runner = Trainer(logger=tb_logger,
                          callbacks=[
                              LearningRateMonitor(),
@@ -67,10 +74,10 @@ def fittest_model(existing_model, **kwargs):
         print(f"======= Training {config['model_params']['name']} =======")
 
         print(f'\nTraining start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
-        runner.fit(experiment, datamodule=dataloader)
+        runner.fit(experiment, datamodule=datamodule)
         print(f'\nTraining end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
 
-    dataloader_iterator = iter(dataloader.test_dataloader())
+    dataloader_iterator = iter(datamodule.test_dataloader())
     list_RMSE = list()
 
     while True:
@@ -89,7 +96,8 @@ def fittest_model(existing_model, **kwargs):
 if __name__ == '__main__':
     print(f'Program start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
     fittest_model(existing_model=True,
-                  solution=None,
-                  model_path=None)
+                  solution=[0.33453974, 0.42341855, 0.86770103, 0.466438, 0.63439439, 0.03518198, 0.69187014,
+                            0.75762833],
+                  model_path="FireflyAlgorithm_497dec739e724234ba2b68e2e29e659c4033b73b.pt")
 
     print(f'\n Program end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')

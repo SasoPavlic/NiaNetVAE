@@ -6,7 +6,6 @@ import argparse
 
 from tabulate import tabulate
 
-import evaluate
 from experiments.rnn_vae_experiment import RNNVAExperiment
 from pytorch_lightning import Trainer, Callback
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -50,8 +49,8 @@ early_stop_callback = EarlyStopping(monitor=config['early_stop']['monitor'],
 conn = SQLiteConnector(config['logging_params']['db_storage'], f"solution_{RUN_UUID}")
 seed_everything(config['exp_params']['manual_seed'], True)
 
-data = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
-data.setup()
+datamodule = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
+datamodule.setup()
 
 
 class RNNVAEAEArchitecture(ExtendedProblem):
@@ -82,11 +81,9 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 experiment = RNNVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
                 config['trainer_params']['max_epochs'] = model.num_epochs
                 tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'] + 'all_models/',
-                                              name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id,
-                                              )
+                                              name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id)
 
                 runner = Trainer(logger=tb_logger,
-                                 progress_bar_refresh_rate=0,
                                  weights_summary=None,
                                  callbacks=[
                                      LearningRateMonitor(),
@@ -102,7 +99,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
 
                 print(f"======= Training {config['model_params']['name']} =======")
                 print(f'\nTraining start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
-                runner.fit(experiment, datamodule=data)
+                runner.fit(experiment, datamodule=datamodule)
                 print(f'\nTraining end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
 
                 # Known problem: https://discuss.pytorch.org/t/why-my-model-returns-nan/24329/5
@@ -139,8 +136,8 @@ if __name__ == '__main__':
     runner = ExtendedRunner(
         config['logging_params']['save_dir'],
         dimension=DIMENSIONALITY,
-        max_evals=25,
-        runs=2,
+        max_evals=1,
+        runs=1,
         algorithms=[
             ParticleSwarmAlgorithm(),
             DifferentialEvolution(),
@@ -162,9 +159,4 @@ if __name__ == '__main__':
     model_file = config['logging_params']['save_dir'] + f"{best_algorithm}_{best_model.hash_id}.pt"
     torch.save(best_model, model_file)
     print(f"Best model saved to: {model_file}")
-
-    evaluate.fittest_model(existing_model=True,
-                           solution=best_solution,
-                           model_path=model_file)
-
     print(f'\n Program end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
