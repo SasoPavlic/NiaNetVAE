@@ -1,11 +1,8 @@
 import math
-
 import torch
 import yaml
 import argparse
-
 from tabulate import tabulate
-
 from experiments.rnn_vae_experiment import RNNVAExperiment
 from pytorch_lightning import Trainer, Callback
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -79,12 +76,12 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 RMSE = int(9e10)
             else:
                 experiment = RNNVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
-                config['trainer_params']['max_epochs'] = model.num_epochs
+                config['trainer_params']['min_epochs'] = model.num_epochs
                 tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'] + 'all_models/',
                                               name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id)
 
                 runner = Trainer(logger=tb_logger,
-                                 weights_summary=None,
+                                 #progress_bar_refresh_rate=0,
                                  callbacks=[
                                      LearningRateMonitor(),
                                      ModelCheckpoint(save_top_k=2,
@@ -136,7 +133,7 @@ if __name__ == '__main__':
     runner = ExtendedRunner(
         config['logging_params']['save_dir'],
         dimension=DIMENSIONALITY,
-        max_evals=50,
+        max_evals=100,
         runs=2,
         algorithms=[
             ParticleSwarmAlgorithm(),

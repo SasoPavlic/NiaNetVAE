@@ -1,19 +1,11 @@
-import math
-import os
-import statistics
-import sys
-import torch
 import torchmetrics
 from pytorch_lightning import LightningModule
-from sklearn.metrics import mean_squared_error
 from torch import optim
-from models.types_ import *
 from models import BaseVAE
-import pytorch_lightning as pl
-import torchvision.utils as vutils
 from typing import Any
 import torch
 from torch import Tensor, tensor
+
 
 class RMSE(torchmetrics.Metric):
     # https: // www.pytorchlightning.ai / blog / torchmetrics - pytorch - metrics - built - to - scale
@@ -37,6 +29,7 @@ class RMSE(torchmetrics.Metric):
     def compute(self) -> Tensor:
         """Computes mean squared error over state."""
         return torch.sqrt(self.sum_squared_error / self.n_observations)
+
 
 class RNNVAExperiment(LightningModule):
     def __init__(self,
@@ -98,14 +91,13 @@ class RNNVAExperiment(LightningModule):
     def training_step(self, batch, batch_idx, optimizer_idx=0):
         real_signal, labels = batch
         self.curr_device = real_signal.device
-
         results = self.forward(real_signal)
         train_loss = self.model.loss_function(*results,
                                               M_N=self.params['kld_weight'],
                                               optimizer_idx=optimizer_idx,
                                               batch_idx=batch_idx)
 
-        self.log_dict({key: val.item() for key, val in train_loss.items()}, sync_dist=True)
+        self.log_dict({key: val.item() for key, val in train_loss.items()}, sync_dist=True, on_step=False, on_epoch=True)
         return train_loss['loss']
 
     def validation_step(self, batch, batch_idx, optimizer_idx=0):
@@ -118,12 +110,14 @@ class RNNVAExperiment(LightningModule):
                                             optimizer_idx=optimizer_idx,
                                             batch_idx=batch_idx)
 
-        self.log_dict({f"val_{key}": val.item() for key, val in val_loss.items()}, sync_dist=True)
+        self.log_dict({f"val_{key}": val.item() for key, val in val_loss.items()}, sync_dist=True, on_step=False, on_epoch=True)
         # TODO add more metrics
         # https: // github.com / Lightning - AI / metrics / issues / 340  # issuecomment-872073730
+        return val_loss['loss']
 
     def on_fit_end(self) -> None:
         self.test_model()
+        self.test_RMSE = self.testing_RMSE_metric.compute()
 
     def test_model(self):
 
@@ -138,8 +132,6 @@ class RNNVAExperiment(LightningModule):
                 self.testing_RMSE_metric.to('cuda')
                 recons = self.model.generate(data, labels=target)
                 self.testing_RMSE_metric.update(recons, data)
-
-        self.test_RMSE = self.testing_RMSE_metric.compute()
 
     def sample_signals(self):
         try:
