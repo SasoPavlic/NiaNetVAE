@@ -3,6 +3,8 @@ import time
 from datetime import datetime
 import numpy as np
 import torch
+import torchmetrics
+from torch import tensor
 
 from .base import BaseVAE
 from .types_ import *
@@ -13,6 +15,29 @@ import torch.distributions
 import random
 import hashlib
 from tabulate import tabulate
+
+class RMSE(torchmetrics.Metric):
+    # https: // www.pytorchlightning.ai / blog / torchmetrics - pytorch - metrics - built - to - scale
+    def __init__(self, **kwargs: Any, ) -> None:
+        super().__init__(**kwargs)
+
+        self.add_state("sum_squared_error", default=tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("n_observations", default=tensor(0), dist_reduce_fx="sum")
+
+    def update(self, preds: Tensor, target: Tensor) -> None:  # type: ignore
+        """Update state with predictions and targets.
+
+        Args:
+            preds: Predictions from model
+            target: Ground truth values
+        """
+
+        self.sum_squared_error += torch.sum((preds - target) ** 2)
+        self.n_observations += preds.numel()
+
+    def compute(self) -> Tensor:
+        """Computes mean squared error over state."""
+        return torch.sqrt(self.sum_squared_error / self.n_observations)
 
 
 class RNNVAE(BaseVAE, nn.Module):
@@ -35,6 +60,9 @@ class RNNVAE(BaseVAE, nn.Module):
         n_features = kwargs['model_params']['n_features']
         seq_len = kwargs['model_params']['seq_len']
         batch_size = kwargs['data_params']['batch_size']
+
+        # https://torchmetrics.readthedocs.io/en/latest/pages/overview.html#metrics-and-devices
+        self.testing_RMSE_metric = RMSE()
 
         self.id = str(int(time.time())).strip()
         self.dataset_shape = [n_features, seq_len]

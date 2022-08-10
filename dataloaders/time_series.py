@@ -16,7 +16,7 @@ class ECG5000_train(Dataset):
         df_train["target"] = pd.to_numeric(df_train["target"])
         df_train = df_train.astype('float32')
 
-        # TODO Workaround to to handle last batch in LSTM hidden state
+        # Workaround to to handle last batch in LSTM hidden state
         # https://discuss.pytorch.org/t/how-to-handle-last-batch-in-lstm-hidden-state/40858
 
         train_size = 0
@@ -25,6 +25,7 @@ class ECG5000_train(Dataset):
         else:
             train_size = df_train.shape[0] - (df_train.shape[0] % batch_size)
 
+        # TODO Add dynamic size reduction
         df_train = df_train.head(train_size - 500)
         self.y_train = df_train['target']
         df_train = df_train.drop("target", axis=1)

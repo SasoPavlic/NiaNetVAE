@@ -103,10 +103,10 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 print(f'\nTraining end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
 
                 # Known problem: https://discuss.pytorch.org/t/why-my-model-returns-nan/24329/5
-                if math.isnan(experiment.val_RMSE.item()):
+                if math.isnan(experiment.test_RMSE.item()):
                     RMSE = int(9e10)
                 else:
-                    RMSE = experiment.val_RMSE.item()
+                    RMSE = experiment.test_RMSE.item()
 
             complexity = (model.num_epochs ** 2) + (model.num_layers * 100) + (model.bottleneck_size * 10)
             fitness = (RMSE * 1000) + (complexity / 100)
@@ -136,8 +136,8 @@ if __name__ == '__main__':
     runner = ExtendedRunner(
         config['logging_params']['save_dir'],
         dimension=DIMENSIONALITY,
-        max_evals=1,
-        runs=1,
+        max_evals=50,
+        runs=2,
         algorithms=[
             ParticleSwarmAlgorithm(),
             DifferentialEvolution(),

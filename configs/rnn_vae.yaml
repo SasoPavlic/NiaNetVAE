@@ -5,7 +5,7 @@ model_params:
 
 data_params:
   data_path: "data/"
-  batch_size: 100
+  batch_size: 1
   num_workers: 0
 
 exp_params:
@@ -15,12 +15,12 @@ exp_params:
 
 trainer_params:
   gpus: [ 0 ]
-  min_epochs: 1
-  max_epochs: 1
+  min_epochs: 50
+  max_epochs: 250
 
 early_stop:
   monitor: "val_loss"
-  patience: 1
+  patience: 200
   min_delta: 0.00
 
 logging_params:
