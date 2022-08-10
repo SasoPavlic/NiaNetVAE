@@ -15,6 +15,28 @@ from typing import Any
 import torch
 from torch import Tensor, tensor
 
+class RMSE(torchmetrics.Metric):
+    # https: // www.pytorchlightning.ai / blog / torchmetrics - pytorch - metrics - built - to - scale
+    def __init__(self, **kwargs: Any, ) -> None:
+        super().__init__(**kwargs)
+
+        self.add_state("sum_squared_error", default=tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("n_observations", default=tensor(0), dist_reduce_fx="sum")
+
+    def update(self, preds: Tensor, target: Tensor) -> None:  # type: ignore
+        """Update state with predictions and targets.
+
+        Args:
+            preds: Predictions from model
+            target: Ground truth values
+        """
+
+        self.sum_squared_error += torch.sum((preds - target) ** 2)
+        self.n_observations += preds.numel()
+
+    def compute(self) -> Tensor:
+        """Computes mean squared error over state."""
+        return torch.sqrt(self.sum_squared_error / self.n_observations)
 
 class RNNVAExperiment(LightningModule):
     def __init__(self,
@@ -28,6 +50,8 @@ class RNNVAExperiment(LightningModule):
         self.n_features = n_features
         self.curr_device = None
         self.hold_graph = False
+        # https://torchmetrics.readthedocs.io/en/latest/pages/overview.html#metrics-and-devices
+        self.testing_RMSE_metric = RMSE()
         self.test_RMSE = None
 
         try:
@@ -111,11 +135,11 @@ class RNNVAExperiment(LightningModule):
             except StopIteration:
                 break
             finally:
-                self.model.testing_RMSE_metric.to('cuda')
+                self.testing_RMSE_metric.to('cuda')
                 recons = self.model.generate(data, labels=target)
-                self.model.testing_RMSE_metric.update(recons, data)
+                self.testing_RMSE_metric.update(recons, data)
 
-        self.test_RMSE = self.model.testing_RMSE_metric.compute()
+        self.test_RMSE = self.testing_RMSE_metric.compute()
 
     def sample_signals(self):
         try:
