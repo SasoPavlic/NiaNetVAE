@@ -110,9 +110,10 @@ class RNNVAExperiment(LightningModule):
                                             optimizer_idx=optimizer_idx,
                                             batch_idx=batch_idx)
 
-        self.log_dict({f"val_{key}": val.item() for key, val in val_loss.items()}, sync_dist=True, on_step=False, on_epoch=True)
+        self.log_dict({f"val_{key}": val.item() for key, val in val_loss.items()}, sync_dist=True, on_step=False,
+                      on_epoch=True)
         # TODO add more metrics
-        # https: // github.com / Lightning - AI / metrics / issues / 340  # issuecomment-872073730
+        # https://github.com/Lightning-AI/metrics/issues/340#issuecomment-872073730
         return val_loss['loss']
 
     def on_fit_end(self) -> None:

@@ -6,7 +6,10 @@ model_params:
 data_params:
   data_path: "data/"
   batch_size: 1
-  num_workers: 8
+  train_size: 0.8
+  val_size: 0.1
+  test_size: 0.1
+  num_workers: 0
 
 exp_params:
   weight_decay: 0.0
