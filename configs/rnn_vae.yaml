@@ -9,7 +9,7 @@ data_params:
   train_size: 0.8
   val_size: 0.1
   test_size: 0.1
-  num_workers: 0
+  num_workers: 1
 
 exp_params:
   weight_decay: 0.0
@@ -17,7 +17,6 @@ exp_params:
   manual_seed: 1265
 
 trainer_params:
-  gpus: [ 0 ]
   min_epochs: from_solution_array
   max_epochs: 250
 

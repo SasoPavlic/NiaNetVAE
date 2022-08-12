@@ -46,7 +46,7 @@ early_stop_callback = EarlyStopping(monitor=config['early_stop']['monitor'],
 conn = SQLiteConnector(config['logging_params']['db_storage'], f"solution_{RUN_UUID}")
 seed_everything(config['exp_params']['manual_seed'], True)
 
-datamodule = TimeSeriesDataset(**config["data_params"], pin_memory=len(config['trainer_params']['gpus']) != 0)
+datamodule = TimeSeriesDataset(**config["data_params"], pin_memory=True)
 datamodule.setup()
 
 
@@ -82,6 +82,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
 
                 runner = Trainer(logger=tb_logger,
                                  #progress_bar_refresh_rate=0,
+                                 auto_select_gpus=True,
                                  callbacks=[
                                      LearningRateMonitor(),
                                      ModelCheckpoint(save_top_k=2,
@@ -91,7 +92,6 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                      early_stop_callback,
                                  ],
                                  strategy=DDPPlugin(find_unused_parameters=False),
-
                                  **config['trainer_params'])
 
                 print(f"======= Training {config['model_params']['name']} =======")
