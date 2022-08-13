@@ -19,7 +19,7 @@ The proposed method NiaNet attempts to pick hyperparameters and AE architecture 
 ### What it can do? 👀
 
 * **Construct novel RNN-VAR-AE's architecture** using nature-inspired algorithms.
-* It can be utilized for **any kind of dataset**, which has **numerical** values.
+* It can be utilized for **any kind of time-series dataset**, which has **numerical** values.
 
 ### Installation ✅
 
