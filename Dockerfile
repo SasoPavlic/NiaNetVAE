@@ -1,12 +1,14 @@
+# README
+# https://github.com/NVIDIA/nvidia-docker
+# https://forum.manjaro.org/t/howto-installing-docker-and-nvidia-runtime-my-experience-and-howto/97017
+# https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#install-guide
+# https://github.com/Lightning-AI/lightning/tree/master/dockers
+
 ARG PYTHON_VERSION=3.9
 ARG PYTORCH_VERSION=1.11
 ARG CUDA_VERSION=11.3.1
 
 FROM pytorchlightning/pytorch_lightning:base-cuda-py${PYTHON_VERSION}-torch${PYTORCH_VERSION}-cuda${CUDA_VERSION}
-
-# https://forum.manjaro.org/t/howto-installing-docker-and-nvidia-runtime-my-experience-and-howto/97017
-# https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#install-guide
-# https://unix.stackexchange.com/questions/203168/docker-says-no-space-left-on-device-but-system-has-plenty-of-space
 
 LABEL maintainer="Lightning-AI <https://github.com/Lightning-AI>"
 
