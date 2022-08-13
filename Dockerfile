@@ -22,7 +22,6 @@ ADD arff2pandas arff2pandas
 ADD configs configs
 ADD data data
 ADD dataloaders dataloaders
-ADD datasets datasets
 ADD experiments experiments
 ADD models models
 ADD niapy_extension niapy_extension
