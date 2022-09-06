@@ -85,7 +85,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                  auto_select_gpus=True,
                                  callbacks=[
                                      LearningRateMonitor(),
-                                     ModelCheckpoint(save_top_k=2,
+                                     ModelCheckpoint(save_top_k=1,
                                                      dirpath=os.path.join(tb_logger.log_dir, "checkpoints"),
                                                      monitor="val_loss",
                                                      save_last=True),
