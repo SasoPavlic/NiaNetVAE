@@ -82,6 +82,8 @@ class RNNVAEAEArchitecture(ExtendedProblem):
 
                 runner = Trainer(logger=tb_logger,
                                  #progress_bar_refresh_rate=0,
+                                 accelerator="gpu",
+                                 devices=-1,
                                  auto_select_gpus=True,
                                  callbacks=[
                                      LearningRateMonitor(),
