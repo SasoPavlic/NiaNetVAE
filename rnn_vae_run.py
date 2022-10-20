@@ -81,7 +81,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                               name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id)
 
                 runner = Trainer(logger=tb_logger,
-                                 #progress_bar_refresh_rate=0,
+                                 # progress_bar_refresh_rate=0,
                                  accelerator="gpu",
                                  devices=-1,
                                  auto_select_gpus=True,
@@ -136,13 +136,13 @@ if __name__ == '__main__':
         config['logging_params']['save_dir'],
         dimension=DIMENSIONALITY,
         max_evals=100,
-        runs=2,
+        runs=1,
         algorithms=[
-            ParticleSwarmAlgorithm(),
-            DifferentialEvolution(),
-            FireflyAlgorithm(),
-            SelfAdaptiveDifferentialEvolution(),
-            GeneticAlgorithm()
+            ParticleSwarmAlgorithm()
+            # DifferentialEvolution(),
+            # FireflyAlgorithm(),
+            # SelfAdaptiveDifferentialEvolution(),
+            # GeneticAlgorithm()
         ],
         problems=[
             RNNVAEAEArchitecture(DIMENSIONALITY)
