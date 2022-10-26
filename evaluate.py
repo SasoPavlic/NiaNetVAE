@@ -67,7 +67,7 @@ def fittest_model(existing_model, **kwargs):
                                              save_last=True),
                              early_stop_callback,
                          ],
-                         strategy=DDPPlugin(find_unused_parameters=False),
+                         #strategy=DDPPlugin(find_unused_parameters=False),
 
                          **config['trainer_params'])
 

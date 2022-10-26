@@ -5,8 +5,8 @@
 # https://github.com/Lightning-AI/lightning/tree/master/dockers
 
 ARG PYTHON_VERSION=3.9
-ARG PYTORCH_VERSION=1.12
-ARG CUDA_VERSION=11.4
+ARG PYTORCH_VERSION=1.11
+ARG CUDA_VERSION=11.3.1
 
 FROM pytorchlightning/pytorch_lightning:base-cuda-py${PYTHON_VERSION}-torch${PYTORCH_VERSION}-cuda${CUDA_VERSION}
 
@@ -33,4 +33,4 @@ COPY evaluate.py /app
 COPY rnn_vae_run.py /app
 
 RUN python -c "import torch ; print(torch.__version__)" >> torch_version.info
-CMD [ "python" , "rnn_vae_run.py"]
+#CMD [ "python" , "rnn_vae_run.py"]

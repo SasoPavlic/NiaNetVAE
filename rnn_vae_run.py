@@ -93,7 +93,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                                      save_last=True),
                                      early_stop_callback,
                                  ],
-                                 strategy=DDPPlugin(find_unused_parameters=False),
+                                 #strategy="ddp",
                                  **config['trainer_params'])
 
                 print(f"======= Training {config['model_params']['name']} =======")

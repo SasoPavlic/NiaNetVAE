@@ -22,7 +22,8 @@ class SQLiteConnector():
             existing_entry = pd.read_sql(f"select * from {self.table_name} where hash_id='{hash_id}'", self.connection)
             self.connection.close()
         except Exception as e:
-            print(e)
+            print(f"Could not get existing entries:\n {e}")
+            existing_entry = pd.DataFrame()
 
         return existing_entry
 
