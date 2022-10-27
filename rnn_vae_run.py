@@ -81,7 +81,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                               name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id)
 
                 runner = Trainer(logger=tb_logger,
-                                 # progress_bar_refresh_rate=0,
+                                 enable_progress_bar=False,
                                  accelerator="gpu",
                                  devices=-1,
                                  auto_select_gpus=True,
@@ -93,7 +93,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                                      save_last=True),
                                      early_stop_callback,
                                  ],
-                                 #strategy="ddp",
+                                 # strategy="ddp",
                                  **config['trainer_params'])
 
                 print(f"======= Training {config['model_params']['name']} =======")
