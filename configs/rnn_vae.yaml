@@ -22,7 +22,7 @@ trainer_params:
 
 early_stop:
   monitor: "val_loss"
-  patience: 50
+  patience: 5
   min_delta: 0.00
 
 logging_params:

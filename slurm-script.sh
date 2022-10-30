@@ -4,8 +4,8 @@
 #SBATCH -e nianet-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem-per-cpu=8GB
+#SBATCH --cores-per-socket=16
+#SBATCH --mem=8G
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:4
 #SBATCH --time=8:00:00

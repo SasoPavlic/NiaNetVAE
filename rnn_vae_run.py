@@ -1,22 +1,21 @@
-import math
-import torch
-import yaml
 import argparse
-from tabulate import tabulate
-from experiments.rnn_vae_experiment import RNNVAExperiment
-from pytorch_lightning import Trainer, Callback
-from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.utilities.seed import seed_everything
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
-from dataloaders.time_series import TimeSeriesDataset
-from pytorch_lightning.plugins import DDPPlugin
-from niapy.algorithms.modified import *
-
-from models import vae_models
-from storage.database import SQLiteConnector
+import math
 import uuid
 from pathlib import Path
+
+import torch
+import yaml
+from pytorch_lightning import Trainer
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.utilities.seed import seed_everything
+from tabulate import tabulate
+
+from dataloaders.time_series import TimeSeriesDataset
+from experiments.rnn_vae_experiment import RNNVAExperiment
+from models import vae_models
 from niapy_extension.wrapper import *
+from storage.database import SQLiteConnector
 
 RUN_UUID = uuid.uuid4().hex
 parser = argparse.ArgumentParser(description='Generic runner for LSTM VAE models')
@@ -64,6 +63,8 @@ class RNNVAEAEArchitecture(ExtendedProblem):
 
         model = vae_models[config['model_params']['name']](solution, **config)
         existing_entry = conn.get_entries(hash_id=model.hash_id)
+        # TODO Remove
+        model.num_epochs = 10
 
         if existing_entry.shape[0] > 0:
             fitness = existing_entry['fitness'][0]

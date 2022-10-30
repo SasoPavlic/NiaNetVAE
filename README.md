@@ -85,11 +85,11 @@ You can run the NiaNet script once your setup is complete.
 ```docker build --tag spartan300/nianet:latest . ```
 
 ```
-docker run /
-  --name=nianet /
-  -it /
-  -v ./logs:/app/logs:z /
-  -gpus all spartan300/nianet:latest /
+docker run \
+  --name=nianet \
+  -it \
+  -v $(pwd):/app/logs \
+  --gpus all spartan300/nianet:latest \
   python ./rnn_vae_run.py
 ```
 
