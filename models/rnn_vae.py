@@ -46,6 +46,7 @@ class RNNVAE(BaseVAE, nn.Module):
         self.layer_step = self.map_layer_step(solution[2], self.dataset_shape)
         self.num_layers = self.map_num_layers(solution[3], self.layer_step, self.dataset_shape)
         # https://ai.stackexchange.com/questions/3156/how-to-select-number-of-hidden-layers-and-number-of-memory-cells-in-an-lstm
+        # TODO ADD activation function call after each layer
         self.activation = self.map_activation(solution[4])
         self.num_epochs = self.map_num_epochs(solution[5])
         self.learning_rate = self.map_learning_rate(solution[6])
