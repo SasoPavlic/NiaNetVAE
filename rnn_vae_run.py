@@ -8,6 +8,7 @@ import yaml
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.plugins import DDPPlugin
 from pytorch_lightning.utilities.seed import seed_everything
 from tabulate import tabulate
 
@@ -63,8 +64,6 @@ class RNNVAEAEArchitecture(ExtendedProblem):
 
         model = vae_models[config['model_params']['name']](solution, **config)
         existing_entry = conn.get_entries(hash_id=model.hash_id)
-        # TODO Remove
-        model.num_epochs = 10
 
         if existing_entry.shape[0] > 0:
             fitness = existing_entry['fitness'][0]
@@ -84,7 +83,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 runner = Trainer(logger=tb_logger,
                                  enable_progress_bar=False,
                                  accelerator="gpu",
-                                 devices=-1,
+                                 devices=1,
                                  auto_select_gpus=True,
                                  callbacks=[
                                      LearningRateMonitor(),
@@ -94,7 +93,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                                      save_last=True),
                                      early_stop_callback,
                                  ],
-                                 # strategy="ddp",
+                                 # strategy=DDPPlugin(find_unused_parameters=False),
                                  **config['trainer_params'])
 
                 print(f"======= Training {config['model_params']['name']} =======")
@@ -136,7 +135,7 @@ if __name__ == '__main__':
     runner = ExtendedRunner(
         config['logging_params']['save_dir'],
         dimension=DIMENSIONALITY,
-        max_evals=10,
+        max_evals=100,
         runs=1,
         algorithms=[
             ParticleSwarmAlgorithm()

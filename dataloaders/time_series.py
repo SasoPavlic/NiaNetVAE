@@ -127,7 +127,8 @@ class TimeSeriesDataset(LightningDataModule):
         self.val_dataset = ECG5000_val(self.batch_size, x_val, y_train)
         self.test_dataset = ECG5000_test(self.batch_size, x_test, y_test)
 
-
+    # TODO Implement re-usable datalaoder process
+    # https://github.com/pytorch/pytorch/issues/15849#issuecomment-573921048
     def train_dataloader(self) -> DataLoader:
         data = DataLoader(
             self.train_dataset,
@@ -135,7 +136,7 @@ class TimeSeriesDataset(LightningDataModule):
             num_workers=self.num_workers,
             shuffle=True,
             pin_memory=self.pin_memory,
-            persistent_workers=True
+            # persistent_workers=True
         )
 
         return data
@@ -147,7 +148,7 @@ class TimeSeriesDataset(LightningDataModule):
             num_workers=self.num_workers,
             shuffle=False,
             pin_memory=self.pin_memory,
-            persistent_workers=True
+            # persistent_workers=True
         )
         return data
 
@@ -158,6 +159,6 @@ class TimeSeriesDataset(LightningDataModule):
             num_workers=self.num_workers,
             shuffle=True,
             pin_memory=self.pin_memory,
-            persistent_workers=True
+            # persistent_workers=True
         )
         return data
