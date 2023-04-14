@@ -1,7 +1,7 @@
 import os
 import torch
 from typing import List, Optional, Sequence, Union, Any, Callable
-from pytorch_lightning import LightningDataModule
+from lightning.pytorch import LightningDataModule
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
 from arff2pandas import *

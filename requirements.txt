@@ -1,5 +1,5 @@
-PyYAML==6.0
-torch>=1.6.1
+PyYAML
+torch
 torchvision
 numpy
 torchmetrics
@@ -9,4 +9,4 @@ scipy
 scikit-learn
 matplotlib
 niapy
-pytorch-lightning
+lightning

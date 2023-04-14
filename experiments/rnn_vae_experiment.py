@@ -1,5 +1,5 @@
 import torchmetrics
-from pytorch_lightning import LightningModule
+from lightning.pytorch import LightningModule
 from torch import optim
 from models import BaseVAE
 from typing import Any

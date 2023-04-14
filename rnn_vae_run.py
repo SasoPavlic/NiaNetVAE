@@ -5,11 +5,11 @@ from pathlib import Path
 
 import torch
 import yaml
-from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
-from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.plugins import DDPPlugin
-from pytorch_lightning.utilities.seed import seed_everything
+from lightning.pytorch import Trainer
+from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
+from lightning.pytorch.loggers import TensorBoardLogger
+#from lightning.pytorch.plugins import DDPPlugin
+from lightning.pytorch import seed_everything
 from tabulate import tabulate
 
 from dataloaders.time_series import TimeSeriesDataset
