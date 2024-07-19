@@ -84,7 +84,6 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                  enable_progress_bar=False,
                                  accelerator="gpu",
                                  devices=1,
-                                 auto_select_gpus=True,
                                  callbacks=[
                                      LearningRateMonitor(),
                                      ModelCheckpoint(save_top_k=1,
