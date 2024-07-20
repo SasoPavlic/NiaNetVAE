@@ -1,0 +1,51 @@
+[tool.poetry]
+name = "nianetvae"
+version = "1.0.0"
+description = "Nature-Inspired Algorithm-driven Recurrent Autoencoder Architecture search: Empowered by High-Performance Computing (HPC)\""
+authors = ["Sašo Pavlič <saso.pavlic3@gmail.com>"]
+license = "MIT Licence"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.12"
+setuptools = "^67.8.0"
+pyyaml = "^6.0"
+#torch = "^2.0.1"
+#poethepoet = "*"
+torch = "*"
+poethepoet = "*"
+torchvision = "*"
+numpy = "^1.24.3"
+torchmetrics = "^0.11.4"
+tabulate = "^0.9.0"
+pandas = "^2.0.1"
+scipy = "^1.10.1"
+scikit-learn = "^1.2.2"
+matplotlib = "^3.7.1"
+niapy = "^2.0.5"
+lightning = "^2.0.2"
+pillow = "^9.5.0"
+tensorboard = "^2.13.0"
+pytest = "^7.3.1"
+colorama = "^0.4.6"
+deap = "^1.3.3"
+jupyter = "^1.0.0"
+pymannkendall = "^1.4.3"
+mk = "^2.4.1"
+seaborn = "^0.13.0"
+plotly = "^5.18.0"
+animation = "^0.0.7"
+
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+# Manual installation of Torch when using Poetry
+# https://github.com/python-poetry/poetry/issues/4231#issuecomment-1182766775
+# Change "python" call based on your system e.g.(python3, python3.10,...)
+[tool.poe.tasks]
+install-ltt = "python -m pip install light-the-torch"
+run-ltt = "python -m light_the_torch install --upgrade torch torchaudio torchvision"
+autoinstall-torch-cuda = ["install-ltt", "run-ltt"]

@@ -1,22 +1,25 @@
 import argparse
 import math
+import os
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import torch
 import yaml
 from lightning.pytorch import Trainer
+# from lightning.pytorch.plugins import DDPPlugin
+from lightning.pytorch import seed_everything
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
-#from lightning.pytorch.plugins import DDPPlugin
-from lightning.pytorch import seed_everything
+from niapy.algorithms.basic import ParticleSwarmAlgorithm
 from tabulate import tabulate
 
-from dataloaders.time_series import TimeSeriesDataset
-from experiments.rnn_vae_experiment import RNNVAExperiment
-from models import vae_models
-from niapy_extension.wrapper import *
-from storage.database import SQLiteConnector
+from nianetvae.dataloaders import TimeSeriesDataset
+from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
+from nianetvae.models import vae_models
+from nianetvae.niapy_extension import *
+from nianetvae.storage.database import SQLiteConnector
 
 RUN_UUID = uuid.uuid4().hex
 parser = argparse.ArgumentParser(description='Generic runner for LSTM VAE models')

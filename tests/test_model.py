@@ -8,14 +8,13 @@ import torch
 import yaml
 import argparse
 from sklearn.metrics import mean_squared_error
-from models import *
-from experiments.rnn_vae_experiment import RNNVAExperiment
-from pytorch_lightning import Trainer, Callback
+from nianetvae.models import *
+from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
+from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities.seed import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
-from dataloaders.time_series import TimeSeriesDataset
-from pytorch_lightning.plugins import DDPPlugin
+from nianetvae.dataloaders import TimeSeriesDataset
 
 RUN_UUID = uuid.uuid4().hex
 parser = argparse.ArgumentParser(description='Generic runner for LSTM VAE models')

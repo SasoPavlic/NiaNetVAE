@@ -20,16 +20,16 @@ COPY requirements.txt requirements.txt
 RUN pip3 install -r requirements.txt
 
 # The code to run when container is started:
-ADD arff2pandas arff2pandas
+ADD nianetvae/dataloaders/arff2pandas arff2pandas
 ADD configs configs
 ADD data data
-ADD dataloaders dataloaders
-ADD experiments experiments
-ADD models models
-ADD niapy_extension niapy_extension
-ADD storage storage
+ADD nianetvae/dataloaders dataloaders
+ADD nianetvae/experiments experiments
+ADD nianetvae/models models
+ADD nianetvae/niapy_extension niapy_extension
+ADD nianetvae/storage storage
 
-COPY evaluate.py /app
+COPY tests/test_model.py /app
 COPY rnn_vae_run.py /app
 
 RUN python -c "import torch ; print(torch.__version__)" >> torch_version.info

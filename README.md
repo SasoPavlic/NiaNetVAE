@@ -41,27 +41,27 @@ results: [Results](https://docs.google.com/spreadsheets/d/1NWEGdysQ_KpwzoILecbuk
 
 ### Examples
 
-Usage examples can be found in folder [experiments](experiments).
+Usage examples can be found in folder [experiments](nianetvae/experiments).
 
 ### Getting started 🔨
 
 ##### Create your own example:
 
-In [experiments](experiments) folder create the Python file based on the
-existing [rnn_vae_experiment.py](experiments/rnn_vae_experiment.py).
+In [experiments](nianetvae/experiments) folder create the Python file based on the
+existing [rnn_vae_experiment.py](nianetvae/experiments/rnn_vae_experiment.py).
 
 ##### Change dataset:
 
 Change the dataset import function as follows:
 
 * In [data](data) folder import a custom dataset
-* Create a new python file in [dataloaders](dataloaders)
+* Create a new python file in [dataloaders](nianetvae/dataloaders)
 * Define a new child class from Dataset class for data augmentation
 * Define a new child class from LightningDataModule class for data preparation into datalaoders
 
 ##### Specify the search space:
 
-Set the boundaries of your search space as presented in [rnn_vae.py](models/rnn_vae.py).
+Set the boundaries of your search space as presented in [rnn_vae.py](nianetvae/models/rnn_vae.py).
 
 The following dimensions can be modified:
 

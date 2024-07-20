@@ -1,18 +1,10 @@
 import os
-import math
 
-import numpy as np
-import torch
-from matplotlib import pyplot as plt
-from pytorch_lightning.utilities.types import EVAL_DATALOADERS, TRAIN_DATALOADERS
-from torch import optim
-from models.types_ import *
-from models import BaseVAE
 import pytorch_lightning as pl
-from torchvision import transforms
 import torchvision.utils as vutils
-from torchvision.datasets import CelebA
-from torch.utils.data import DataLoader
+from torch import optim, Tensor
+
+from nianetvae.models import BaseVAE
 
 
 class VAEXperiment(pl.LightningModule):
@@ -127,5 +119,3 @@ class VAEXperiment(pl.LightningModule):
                 return optims, scheds
         except:
             return optims
-
-

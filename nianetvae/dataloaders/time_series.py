@@ -1,10 +1,10 @@
 import os
 import torch
-from typing import List, Optional, Sequence, Union, Any, Callable
+from typing import List, Optional, Union
 from lightning.pytorch import LightningDataModule
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
-from arff2pandas import *
+from nianetvae.dataloaders.arff2pandas import *
 
 
 class ECG5000_train(Dataset):

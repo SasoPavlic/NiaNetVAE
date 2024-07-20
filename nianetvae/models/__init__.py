@@ -1,6 +1,6 @@
-from models.base import BaseVAE
-from models.rnn_vae import RNNVAE
-from models.vanilla_vae import VanillaVAE
+from nianetvae.models.base import BaseVAE
+from nianetvae.models.rnn_vae import RNNVAE
+from nianetvae.models.vanilla_vae import VanillaVAE
 
 # Aliases
 VAE = VanillaVAE

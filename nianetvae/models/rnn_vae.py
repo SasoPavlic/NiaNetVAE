@@ -281,6 +281,10 @@ class RNNVAE(BaseVAE, nn.Module):
         return reconstructed
 
     def get_layer_object(self, input_size, hidden_size, num_layers, batch_first):
+
+        # Ensure hidden_size is of type int
+        hidden_size = int(hidden_size) if isinstance(hidden_size, (np.integer, np.int64)) else hidden_size
+
         if self.layer_type == 'LSTM':
             return nn.LSTM(
                 input_size=input_size,

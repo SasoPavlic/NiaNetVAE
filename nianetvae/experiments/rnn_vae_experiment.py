@@ -1,7 +1,7 @@
 import torchmetrics
 from lightning.pytorch import LightningModule
 from torch import optim
-from models import BaseVAE
+from nianetvae.models import BaseVAE
 from typing import Any
 import torch
 from torch import Tensor, tensor
@@ -88,26 +88,24 @@ class RNNVAExperiment(LightningModule):
         except:
             return optims
 
-    def training_step(self, batch, batch_idx, optimizer_idx=0):
+    def training_step(self, batch, batch_idx):
         real_signal, labels = batch
         self.curr_device = real_signal.device
         results = self.forward(real_signal)
         train_loss = self.model.loss_function(*results,
                                               M_N=self.params['kld_weight'],
-                                              optimizer_idx=optimizer_idx,
                                               batch_idx=batch_idx)
 
         self.log_dict({key: val.item() for key, val in train_loss.items()}, sync_dist=True, on_step=False, on_epoch=True)
         return train_loss['loss']
 
-    def validation_step(self, batch, batch_idx, optimizer_idx=0):
+    def validation_step(self, batch, batch_idx):
         real_signal, labels = batch
         self.curr_device = real_signal.device
 
         results = self.forward(real_signal)
         val_loss = self.model.loss_function(*results,
                                             M_N=self.params['kld_weight'],
-                                            optimizer_idx=optimizer_idx,
                                             batch_idx=batch_idx)
 
         self.log_dict({f"val_{key}": val.item() for key, val in val_loss.items()}, sync_dist=True, on_step=False,
