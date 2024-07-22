@@ -4,7 +4,9 @@ from typing import List, Optional, Union
 from lightning.pytorch import LightningDataModule
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
-from nianetvae.dataloaders.arff2pandas import *
+from nianetvae.dataloaders.ecg_transformer import *
+from scipy.io import arff
+import numpy as np
 
 
 class ECG5000_train(Dataset):

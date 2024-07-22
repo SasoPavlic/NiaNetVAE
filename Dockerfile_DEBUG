@@ -1,0 +1,27 @@
+# README
+# This DOCKERFILE serves a tempalte to make virtual enviroment in Docker container for PyCharm debugging purposess.
+# Steps:
+# 1 - Build this dockerfile to make a virtual enviroment for Python Interepreter
+#     "docker build --tag debug_enviroment:venv ."
+# 2 - Add configuration to Pycharm
+#     "--name conv-ae --entrypoint -v project/path/NiaNetCAE:/opt/project --gpus all"
+# 3 - Debug your source code with PyCharm
+
+ARG PYTHON_VERSION=3.10
+ARG PYTORCH_VERSION=2.0
+ARG CUDA_VERSION=11.7.1
+ARG LIGHTNING_VERSION=""
+
+FROM pytorchlightning/pytorch_lightning:base-cuda-py${PYTHON_VERSION}-torch${PYTORCH_VERSION}-cuda${CUDA_VERSION}
+#FROM pytorchlightning/pytorch_lightning:base-cuda-py3.10-torch2.0-cuda11.7.1
+
+LABEL maintainer="Lightning-AI <https://github.com/Lightning-AI>"
+
+WORKDIR /app
+
+COPY requirements.txt requirements.txt
+RUN pip3 install -r requirements.txt
+
+ADD data data
+
+RUN python -c "import torch ; print(torch.__version__)" >> torch_version.info

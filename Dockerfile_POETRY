@@ -15,19 +15,25 @@ LABEL maintainer="Lightning-AI <https://github.com/Lightning-AI>"
 
 WORKDIR /app
 
-# To copy everythin in one layer:
-# Rebuilding docker image will be slower on change, but the image will be smaller
-#COPY nianetcae /app/nianetcae
-#COPY tests /app/tests
+# https://stackoverflow.com/a/54763270/6152465
+ARG YOUR_ENV
 
-# To copy in multiple layers:
-# Rebuilding docker image will be faster on change, but the image will be bigger
-COPY requirements.txt /app/requirements.txt
-RUN pip3 install -r requirements.txt
+ENV YOUR_ENV=${YOUR_ENV} \
+  PYTHONFAULTHANDLER=1 \
+  PYTHONUNBUFFERED=1 \
+  PYTHONHASHSEED=random \
+  PIP_NO_CACHE_DIR=off \
+  PIP_DISABLE_PIP_VERSION_CHECK=on \
+  PIP_DEFAULT_TIMEOUT=100
 
+# Copy the poetry.lock and pyproject.toml files to the working directory
+COPY poetry.lock pyproject.toml /app/
+
+# Install Poetry
+RUN pip install poetry
+
+# Creating folders for a project:
 RUN mkdir data
-RUN mkdir configs
-#COPY configs /app/configs
 
 # The code to run when container is started:
 COPY nianetvae/niapy_extension /app/nianetvae/niapy_extension
@@ -47,6 +53,8 @@ COPY tests/__init__.py /app/tests/__init__.py
 COPY setup.py /app/setup.py
 COPY main.py /app/main.py
 COPY log.py /app/log.py
-RUN pip3 install .
-RUN python -c "import torch ; print(torch.__version__)" >> torch_version.info
-##CMD [ "python" , "main.py"]
+
+# Install project dependencies
+RUN poetry config virtualenvs.create false && \
+    poetry install --no-interaction --no-ansi && \
+    poetry run poe autoinstall-torch-cuda
