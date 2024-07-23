@@ -10,3 +10,8 @@ scikit-learn
 matplotlib
 niapy
 lightning
+setuptools
+Pillow
+pytest
+colorama
+kaleido

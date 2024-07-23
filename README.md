@@ -4,60 +4,54 @@
 ![PyPI - Python Version](https://img.shields.io/badge/python-3.10-blue)
 [![GitHub license](https://img.shields.io/badge/license-MIT-green)](https://github.com/SasoPavlic/NiaNet/blob/main/LICENSE)
 
-[//]: # ([![PyPI Version]&#40;https://img.shields.io/badge/pypi-v1.0.0-blue&#41;]&#40;https://pypi.org/project/nianet/&#41;)
+## NiaNetVAE: Designing and Constructing Variational Recurrent Autoencoders using Nature-Inspired Algorithms
 
-[//]: # ([![Downloads]&#40;https://static.pepy.tech/badge/nianet&#41;]&#40;https://pepy.tech/project/nianet&#41;)
+### Next Generation 🧬
 
-## Designing and constructing variational recurrent autoencoders using nature-inspired algorithms
-
-### Next generation 🧬
-
-This code is based on the original [NiaNet](https://github.com/SasoPavlic/NiaNet) version, which is where it all began.
+This code is based on the original [NiaNet](https://github.com/SasoPavlic/NiaNet) version, which is where it all began. It was then followed by [NiaNetCAE](https://github.com/SasoPavlic/NiaNetCAE) version.
 
 ### Description 📝
 
-The proposed method NiaNet attempts to pick hyperparameters and AE architecture that will result in a successful
-encoding and decoding (minimal difference between input and output). NiaNet uses the collection of algorithms available
-in the library [NiaPy](https://github.com/NiaOrg/NiaPy) to navigate efficiently in waste search-space.
+NiaNetVAE is a sophisticated framework for designing and optimizing variational autoencoders (VAEs) with recurrent neural network (RNN) layers. This includes layers such as GRU (Gated Recurrent Unit) and LSTM (Long Short-Term Memory) using PyTorch. The framework leverages nature-inspired algorithms to efficiently explore the hyperparameter space and VAE architectures to achieve optimal encoding and decoding performance.
 
-### What it can do? 👀
+### What It Can Do? 👀
 
-* **Construct novel RNN-VAR-AE's architecture** using nature-inspired algorithms.
-* It can be utilized for **any kind of time-series dataset**, which has **numerical** values.
+* **Construct Novel RNN-VAR-AE Architectures**: Utilizes nature-inspired algorithms to design recurrent variational autoencoders (RNN-VAR-AEs) with RNN, LSTM, and GRU layers.
+* **Versatile Time-Series Analysis**: Can be applied to any time-series dataset with numerical values to discover efficient encoding and decoding architectures.
 
 ### Installation ✅
 
-Installing NiaNet with pip3:
+To install NiaNetVAE using pip3 (pending publication to PyPi):
 
 ```sh
-pip install -r requirements.txt
+pip3 install nianetvae
 ```
 
 ### Documentation 📘
 
-The paper referring to this source code is currently being published. The link will be posted here once it is available.
-Here are some examples of existing
-results: [Results](https://docs.google.com/spreadsheets/d/1NWEGdysQ_KpwzoILecbukgeBst1qJ9_-h1ArW81Uu98/edit#gid=0)
+The purpose of this paper is to get an understanding of the NiaNetVAE approach.
+
+**TODO - Future Journal:**
+[NiaNetVAE for anomaly detection in time-series]()
 
 ### Examples
 
-Usage examples can be found in folder [experiments](nianetvae/experiments).
+Usage examples can be found [here](nianetcae/experiments). Currently, there is an example for finding the appropriate Recurrent Variational Autoencoder on ECG 500 Dataset.
 
 ### Getting started 🔨
 
 ##### Create your own example:
 
-In [experiments](nianetvae/experiments) folder create the Python file based on the
-existing [rnn_vae_experiment.py](nianetvae/experiments/rnn_vae_experiment.py).
+1. Replace the dataset in [data](data) folder.
+2. Modify the parameters in [main_config.py](configs/main_config.yaml)
+2. Adjust the dataloader logic in [dataloaders](nianetcae/dataloaders) folder.
+3. Specify the search space in [rnn_vae.py](nianetcae/models/conv_ae.py) from your problem domain.
+3. Redesign the fitness function in [rnn_run.py](nianetcae/cae_run.py) based on your optimization.
 
-##### Change dataset:
+##### Changing dataset:
 
-Change the dataset import function as follows:
+Once the dataset is changed, dataloaders needs to be modified to be able for forwarding new shape of data to models.
 
-* In [data](data) folder import a custom dataset
-* Create a new python file in [dataloaders](nianetvae/dataloaders)
-* Define a new child class from Dataset class for data augmentation
-* Define a new child class from LightningDataModule class for data preparation into datalaoders
 
 ##### Specify the search space:
 
@@ -76,22 +70,57 @@ The following dimensions can be modified:
 
 You can run the NiaNet script once your setup is complete.
 
-##### Running NiaNet script:
+##### Running NiaNetVAE script with Docker:
 
-`python rnn_vae_run.py`
-
-### Docker
-
-```docker build --tag spartan300/nianet:latest . ```
+```docker build --tag spartan300/nianet:vae . ```
 
 ```
 docker run \
-  --name=nianet \
+  --name=nianet-vae \
   -it \
-  -v $(pwd):/app/logs \
-  --gpus all spartan300/nianet:latest \
-  python ./rnn_vae_run.py
+  -v $(pwd)/logs:/app/nianetvae/logs \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/configs:/app/configs \
+  -w="/app" \
+  --shm-size 8G \
+  --gpus all spartan300/nianet:vae \
+  python main.py
 ```
+
+##### Running NiaNetVAE script with Poetry [help](https://github.com/python-poetry/poetry/issues/4231#issuecomment-1182766775):
+1. Run the installation via ```poetry install ```
+2. Then run the task with```poetry run poe autoinstall-torch-cuda```
+
+##### Running NiaNetVAE script with HPC SLURM:
+
+1. First build an image with docker (above example)
+2. Docker push to Docker Hub: ```docker push username/nianet:vae```
+3. SSH into a HPC Cluster via your access credentials
+4. Create the following _nianetvae.sh_ script: ```cat > nianetvae.sh```
+```
+#!/bin/bash
+## Running code on SLURM cluster
+##https://pytorch-lightning.readthedocs.io/en/stable/clouds/cluster_advanced.html
+#SBATCH -J nianet-pso
+#SBATCH -o nianet-pso-%j.out
+#SBATCH -e nianet-pso-%j.err
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --partition=gpu
+#SBATCH --mem-per-gpu=8GB  # memory per GPU
+#SBATCH --gres=gpu:1
+#SBATCH --time=72:00:00
+
+singularity exec -e \
+    --pwd /app \
+    -B $(pwd)/logs:/app/logs,$(pwd)/data:/app/data,$(pwd)/configs:/app/configs \
+    --nv docker://spartan300/nianet:vae \
+    python main.py -alg particle_swarm
+```
+1. Make script executable: ```chmod +x nianetvae.sh```
+2. Make sure that you have the following folders in your current directory: logs, data, configs
+3. Set folder permissions to 777: ```chmod -R 777 logs data configs```
+4. Submit your script to a job scheduler: ```SBATCH nianetvae.sh```
 
 ### HELP ⚠️
 
