@@ -1,10 +1,39 @@
 import torchmetrics
 from lightning.pytorch import LightningModule
+from lightning.pytorch.callbacks import LearningRateFinder
 from torch import optim
+
+from log import Log
+from nianetvae.experiments.evaluationmetrics import EvaluationMetrics
 from nianetvae.models import BaseVAE
 from typing import Any
 import torch
 from torch import Tensor, tensor
+
+class FineTuneLearningRateFinder(LearningRateFinder):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs['lr_finder'])
+        self.tune_n_epochs = kwargs['tune_n_epochs']
+        self.previous_loss = float('inf')
+
+    def on_fit_start(self, *args, **kwargs):
+        return
+
+    def on_train_epoch_start(self, trainer, pl_module):
+        if trainer.current_epoch % self.tune_n_epochs == 0 or trainer.current_epoch == 0:
+            if pl_module.train_loss is not None:
+                loss = pl_module.train_loss['loss'].item()
+                if loss < self.previous_loss:
+                    Log.debug(f"\nLoss decreased from {self.previous_loss} to {loss}")
+
+                elif loss > self.previous_loss:
+                    Log.debug(f"\nLoss increased from {self.previous_loss} to {loss}")
+                    self.lr_find(trainer, pl_module)
+
+                self.previous_loss = pl_module.train_loss['loss'].item()
+
+            else:
+                self.lr_find(trainer, pl_module)
 
 
 class RMSE(torchmetrics.Metric):
@@ -33,19 +62,20 @@ class RMSE(torchmetrics.Metric):
 
 class RNNVAExperiment(LightningModule):
     def __init__(self,
-                 lstm_vae_model: BaseVAE,
-                 params: dict,
-                 n_features: int) -> None:
+                 lstm_vae_model: BaseVAE, **kwargs) -> None:
         super(RNNVAExperiment, self).__init__()
 
+        self.results = None
         self.model = lstm_vae_model
-        self.params = params
-        self.n_features = n_features
+        self.model_path = kwargs['logging_params']['model_path']
+        self.learning_rate = 0.0
+        self.params = kwargs['exp_params']
+        self.tensor_dim = kwargs['data_params']['horizontal_dim']
         self.curr_device = None
         self.hold_graph = False
-        # https://torchmetrics.readthedocs.io/en/latest/pages/overview.html#metrics-and-devices
-        self.testing_RMSE_metric = RMSE()
-        self.test_RMSE = None
+        self.train_loss = None
+        self.val_loss = None
+        self.metrics = EvaluationMetrics()
 
         try:
             self.hold_graph = self.params['retain_first_backpass']
@@ -56,37 +86,32 @@ class RNNVAExperiment(LightningModule):
         return self.model(input, **kwargs)
 
     def configure_optimizers(self):
-        optims = []
-        scheds = []
 
-        optimizer = self.model.optimizer
-        optims.append(optimizer)
-        # Check if more than 1 optimizer is required (Used for adversarial training)
-        try:
-            if self.params['LR_2'] is not None:
-                optimizer2 = optim.Adam(getattr(self.model, self.params['submodel']).parameters(),
-                                        lr=self.params['LR_2'])
-                optims.append(optimizer2)
-        except:
-            pass
+        """When AE does not have any layers"""
+        if len(list(self.model.parameters())) == 0:
+            self.model.optimizer_name = "Empty"
+            return None
 
-        try:
-            if self.params['scheduler_gamma'] is not None:
-                scheduler = optim.lr_scheduler.ExponentialLR(optims[0],
-                                                             gamma=self.params['scheduler_gamma'])
-                scheds.append(scheduler)
+        if self.model.optimizer_name == "Adam":
+            return torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
 
-                # Check if another scheduler is required for the second optimizer
-                try:
-                    if self.params['scheduler_gamma_2'] is not None:
-                        scheduler2 = optim.lr_scheduler.ExponentialLR(optims[1],
-                                                                      gamma=self.params['scheduler_gamma_2'])
-                        scheds.append(scheduler2)
-                except:
-                    pass
-                return optims, scheds
-        except:
-            return optims
+        elif self.model.optimizer_name == "Adagrad":
+            return torch.optim.Adagrad(self.model.parameters(), lr=self.learning_rate)
+
+        elif self.model.optimizer_name == "SGD":
+            return torch.optim.SGD(self.model.parameters(), lr=self.learning_rate)
+
+        elif self.model.optimizer_name == "RAdam":
+            return torch.optim.RAdam(self.model.parameters(), lr=self.learning_rate)
+
+        elif self.model.optimizer_name == "ASGD":
+            return torch.optim.ASGD(self.model.parameters(), lr=self.learning_rate)
+
+        elif self.model.optimizer_name == "RPROP":
+            return torch.optim.Rprop(self.model.parameters(), lr=self.learning_rate)
+
+        else:
+            return torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
 
     def training_step(self, batch, batch_idx):
         real_signal, labels = batch

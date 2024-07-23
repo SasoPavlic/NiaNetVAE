@@ -1,0 +1,57 @@
+model_params:
+  name: 'RNNVAE'
+  seq_len: 140
+  n_features: 1 #Multiple features problem https://stackoverflow.com/questions/71565854/lstm-autoencoder-set-up-for-multiple-features-using-pytorch
+
+data_params:
+  data_path: "data/"
+  batch_size: 1
+  train_size: 0.8
+  val_size: 0.1
+  test_size: 0.1
+  num_workers: 0
+  data_percentage: 100
+  channel_dim: 3
+  horizontal_dim: 304
+  vertical_dim: 304
+  pin_memory: True
+
+exp_params:
+  weight_decay: 0.0
+  kld_weight: 0.1
+  manual_seed: 1265
+
+trainer_params:
+  min_epochs: from_solution_array
+  max_epochs: 250
+
+early_stop:
+  monitor: "val_loss"
+  patience: 5
+  min_delta: 0.00
+  mode: "min"
+
+logging_params:
+  name: "RNNVAE"
+  save_dir: "logs/"
+  db_storage: "logs/solution.db"
+  logger_file: "RNNAutoencoder.log"
+
+nia_search:
+  evaluations: 100
+  runs: 1
+  algorithms:
+    - particle_swarm
+    - genetic_algorithm
+    - firefly_algorithm
+    - differential_evolution
+    - self_adaptive_differential_evolution
+
+fine_tune_lr_finder:
+  tune_n_epochs: 5
+  lr_finder:
+    mode: "exponential" #"linear"
+    num_training_steps: 100
+    attr_name: "learning_rate"
+    update_attr: True
+    early_stop_threshold: # None # https://github.com/Lightning-AI/lightning/issues/4846#issuecomment-1014148839

@@ -8,7 +8,6 @@ from niapy import Runner
 from niapy.algorithms import Algorithm
 from niapy.problems import Problem
 from niapy.task import OptimizationType, Task
-from niapy.algorithms.basic import *
 from niapy.util import limit
 from niapy.util.factory import get_algorithm
 
@@ -70,13 +69,14 @@ class ExtendedTask(Task):
 class ExtendedRunner(Runner):
 
     def __init__(self, dir_path, dimension=10, max_evals=1000000, runs=1, algorithms='ArtificialBeeColonyAlgorithm',
-                 problems='Ackley'):
+                 problems='Ackley', optimization_type=OptimizationType.MINIMIZATION):
 
-        self.dir_path = dir_path + "export/"
+        self.optimization_type = optimization_type
+        self.dir_path = dir_path
         super().__init__(dimension, max_evals, runs, algorithms, problems)
 
     def task_factory(self, alg_name, name):
-        return ExtendedTask(alg_name, max_evals=self.max_evals, dimension=self.dimension, problem=name)
+        return ExtendedTask(alg_name, max_evals=self.max_evals, dimension=self.dimension, problem=name, optimization_type=self.optimization_type)
 
     def __create_export_dir(self):
         if not os.path.exists(self.dir_path):

@@ -109,7 +109,7 @@ class RNNVAE(BaseVAE, nn.Module):
         # ))
         # self.decoding_layers.append(nn.Linear(140, self.seq_len))
 
-        self.optimizer = self.map_optimizer(solution[7])
+        self.optimizer_name = self.map_optimizer(solution[7], self)
         self.get_hash()
         outputs = []
 
@@ -631,41 +631,33 @@ class RNNVAE(BaseVAE, nn.Module):
                 self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
                 self.decoding_layers.append(nn.Linear(dataset_shape[1], self.seq_len))
 
-    def map_optimizer(self, gene):
+    def map_optimizer(self, gene, architecture):
         gene = np.array([gene])
         bins = np.array([0.0, 0.167, 0.334, 0.50, 0.667, 0.834, 1.01])
         inds = np.digitize(gene, bins)
 
         """When AE does not have any layers"""
-        if len(list(self.parameters())) == 0:
-            self.optimizer_name = "Empty"
+        if len(list(architecture.parameters())) == 0:
+            architecture.optimizer_name = "Empty"
             return None
 
-        # TODO add weight decay to solution array
-        # https://towardsdatascience.com/l1-and-l2-regularization-methods-ce25e7fc831c
         if inds[0] - 1 == 0:
-            self.optimizer_name = "Adam"
-            return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+            return "Adam"
 
         elif inds[0] - 1 == 1:
-            self.optimizer_name = "Adagrad"
-            return torch.optim.Adagrad(self.parameters(), lr=self.learning_rate)
+            return "Adagrad"
 
         elif inds[0] - 1 == 2:
-            self.optimizer_name = "SGD"
-            return torch.optim.SGD(self.parameters(), lr=self.learning_rate)
+            return "SGD"
 
         elif inds[0] - 1 == 3:
-            self.optimizer_name = "RAdam"
-            return torch.optim.RAdam(self.parameters(), lr=self.learning_rate)
+            return "RAdam"
 
         elif inds[0] - 1 == 4:
-            self.optimizer_name = "ASGD"
-            return torch.optim.ASGD(self.parameters(), lr=self.learning_rate)
+            return "ASGD"
 
         elif inds[0] - 1 == 5:
-            self.optimizer_name = "RPROP"
-            return torch.optim.Rprop(self.parameters(), lr=self.learning_rate)
+            return "RPROP"
 
         else:
             raise ValueError(f"Value not between boundaries 0.0 and 1.0. Value is: {inds[0] - 1}")
