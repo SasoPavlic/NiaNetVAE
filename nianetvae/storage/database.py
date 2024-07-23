@@ -5,6 +5,8 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
+from log import Log
+
 
 class SQLiteConnector():
     def __init__(self, db_file, table_name):
@@ -22,7 +24,7 @@ class SQLiteConnector():
             existing_entry = pd.read_sql(f"select * from {self.table_name} where hash_id='{hash_id}'", self.connection)
             self.connection.close()
         except Exception as e:
-            print(f"Could not get existing entries:\n {e}")
+            Log.error(f"Could not get existing entries:\n {e}")
             existing_entry = pd.DataFrame()
 
         return existing_entry
@@ -34,7 +36,7 @@ class SQLiteConnector():
                                        self.connection)
             self.connection.close()
         except Exception as e:
-            print(e)
+            Log.error(e)
 
         best_solution_json = best_results['solution_array'][0]
         best_solution = np.array(json.loads(best_solution_json))
@@ -69,7 +71,7 @@ class SQLiteConnector():
             df.to_sql(self.table_name, self.connection, if_exists='append', index=False)  # writes to file
             self.connection.close()
         except Exception as e:
-            print(e)
+            Log.error(e)
 
     def create_table(self):
         try:
@@ -98,7 +100,7 @@ class SQLiteConnector():
             # committing our connection
             self.connection.commit()
         except Exception as e:
-            print(e)
+            Log.error(e)
 
     def create_connection(self):
         """ create a database connection to the SQLite database
@@ -114,4 +116,4 @@ class SQLiteConnector():
             # close our connection
 
         except Exception as e:
-            print(e)
+            Log.error(e)

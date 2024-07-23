@@ -52,9 +52,9 @@ class RNNVAEAEArchitecture(ExtendedProblem):
         self.iteration = 0
 
     def _evaluate(self, solution, alg_name):
-        print("=================================================================================================")
-        print(f"ITERATION: {self.iteration}")
-        print(f"SOLUTION : {solution}")
+        Log.debug("=================================================================================================")
+        Log.debug(f"ITERATION: {self.iteration}")
+        Log.debug(f"SOLUTION : {solution}")
         self.iteration += 1
 
         model = RNNVAE(solution, **config)
@@ -161,9 +161,9 @@ def solve_architecture_problem(selected_algorithms):
         ]
     )
 
-    print("=====================================SEARCH STARTED==============================================")
+    Log.info("=====================================SEARCH STARTED==============================================")
     final_solutions = runner.run(export='json', verbose=True)
-    print("=====================================SEARCH COMPLETED============================================")
+    Log.info("=====================================SEARCH COMPLETED============================================")
 
     Log.info(f"Solutions: {final_solutions}")
     best_solution, best_algorithm = conn.best_results()

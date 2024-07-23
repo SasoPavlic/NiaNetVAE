@@ -1,3 +1,4 @@
+import argparse
 import os
 import statistics
 import uuid
@@ -6,15 +7,16 @@ from pathlib import Path
 
 import torch
 import yaml
-import argparse
-from sklearn.metrics import mean_squared_error
-from nianetvae.models import *
-from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
+from lightning import seed_everything
 from pytorch_lightning import Trainer
-from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.utilities.seed import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
+from pytorch_lightning.loggers import TensorBoardLogger
+from sklearn.metrics import mean_squared_error
+
+from log import Log
 from nianetvae.dataloaders import TimeSeriesDataset
+from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
+from nianetvae.models import *
 
 RUN_UUID = uuid.uuid4().hex
 parser = argparse.ArgumentParser(description='Generic runner for LSTM VAE models')
@@ -29,7 +31,7 @@ with open(args.filename, 'r') as file:
     try:
         config = yaml.safe_load(file)
     except yaml.YAMLError as exc:
-        print(exc)
+        Log.error(exc)
 
 config['logging_params']['save_dir'] += RUN_UUID + '/'
 Path(config['logging_params']['save_dir']).mkdir(parents=True, exist_ok=True)
@@ -66,15 +68,15 @@ def fittest_model(existing_model, **kwargs):
                                              save_last=True),
                              early_stop_callback,
                          ],
-                         #strategy=DDPPlugin(find_unused_parameters=False),
+                         # strategy=DDPPlugin(find_unused_parameters=False),
 
                          **config['trainer_params'])
 
-        print(f"======= Training {config['model_params']['name']} =======")
+        Log.debug(f"======= Training {config['model_params']['name']} =======")
 
-        print(f'\nTraining start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
+        Log.debug(f'\nTraining start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
         runner.fit(experiment, datamodule=datamodule)
-        print(f'\nTraining end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
+        Log.debug(f'\nTraining end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
 
     dataloader_iterator = iter(datamodule.test_dataloader())
     list_RMSE = list()
@@ -89,14 +91,14 @@ def fittest_model(existing_model, **kwargs):
             RMSE = mean_squared_error(data, predictions, squared=False)
             list_RMSE.append(RMSE)
 
-    print(f"Mean RMSE score for model: {statistics.mean(list_RMSE)}")
+    Log.info(f"Mean RMSE score for model: {statistics.mean(list_RMSE)}")
 
 
 if __name__ == '__main__':
-    print(f'Program start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
+    Log.info(f'Program start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
     fittest_model(existing_model=True,
                   solution=[0.33453974, 0.42341855, 0.86770103, 0.466438, 0.63439439, 0.03518198, 0.69187014,
                             0.75762833],
                   model_path="FireflyAlgorithm_497dec739e724234ba2b68e2e29e659c4033b73b.pt")
 
-    print(f'\n Program end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
+    Log.info(f'\n Program end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')

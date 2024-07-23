@@ -6,6 +6,7 @@ import torch
 import torchmetrics
 from torch import tensor
 
+from log import Log
 from .base import BaseVAE
 from .types_ import *
 import torch.nn as nn
@@ -126,7 +127,7 @@ class RNNVAE(BaseVAE, nn.Module):
                         self.encoding_layers,
                         self.decoding_layers])
 
-        print(tabulate(outputs, headers=["ID",
+        Log.info(tabulate(outputs, headers=["ID",
                                          "Shape (y1)",
                                          "Layer type (y2)",
                                          "Layer step (y3)",

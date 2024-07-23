@@ -35,8 +35,8 @@ if __name__ == '__main__':
         try:
             config = yaml.load(file, Loader=yaml.Loader)  # yaml.safe_load(file)
         except yaml.YAMLError as exc:
-            print("Error while loading config file")
-            print(exc)
+            Log.error("Error while loading config file")
+            Log.error(exc)
 
     config['logging_params']['save_dir'] += RUN_UUID + '/'
     Path(config['logging_params']['save_dir']).mkdir(parents=True, exist_ok=True)
