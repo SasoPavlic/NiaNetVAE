@@ -1,9 +1,9 @@
 #!/bin/bash
 ## Running code on SLURM cluster
 ##https://pytorch-lightning.readthedocs.io/en/stable/clouds/cluster_advanced.html
-#SBATCH -J nianet-pso
-#SBATCH -o nianet-pso-%j.out
-#SBATCH -e nianet-pso-%j.err
+#SBATCH -J nianet-vae-pso
+#SBATCH -o nianet-vae-pso-%j.out
+#SBATCH -e nianet-vae-pso-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --partition=gpu
