@@ -71,7 +71,9 @@ class RNNVAEAEArchitecture(ExtendedProblem):
         else:
             """Punishing bad decisions"""
             if len(model.encoding_layers) == 0 or len(model.decoding_layers) == 0:
+                fitness = int(9e10)
                 RMSE = int(9e10)
+                conn.post_entries(model, fitness, solution, RMSE, alg_name, self.iteration)
             else:
                 experiment = RNNVAExperiment(model, **config)
                 tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],

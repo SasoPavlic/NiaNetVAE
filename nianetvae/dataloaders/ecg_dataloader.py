@@ -111,10 +111,10 @@ class TimeSeriesDataset(LightningDataModule):
         self.test_size = test_size
 
     def setup(self, stage: Optional[str] = None) -> None:
-        with open(os.path.join(f'{self.data_path}ECG500/ECG5000_TEST.arff')) as f:
+        with open(os.path.join(f'{self.data_path}/ECG5000_TEST.arff')) as f:
             x_train, y_train = arff.loadarff(f)
 
-        with open(os.path.join(f'{self.data_path}ECG500/ECG5000_TRAIN.arff')) as f:
+        with open(os.path.join(f'{self.data_path}/ECG5000_TRAIN.arff')) as f:
             x_test, y_test = arff.loadarff(f)
 
         x_data = np.concatenate((x_train, x_test), axis=0)
