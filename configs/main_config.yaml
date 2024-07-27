@@ -6,9 +6,9 @@ model_params:
 data_params:
   data_path: "data/"
   batch_size: 1
-  train_size: 0.8
-  val_size: 0.1
-  test_size: 0.1
+  train_size: 0.00001
+  val_size: 0.0001
+  test_size: 0.0001
   num_workers: 0
   data_percentage: 100
   channel_dim: 3

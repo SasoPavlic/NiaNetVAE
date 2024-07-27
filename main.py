@@ -9,7 +9,7 @@ from lightning.pytorch.callbacks import EarlyStopping
 
 import nianetvae
 from log import Log
-from nianetvae.dataloaders import TimeSeriesDataset
+from nianetvae.dataloaders.ecg_dataloader import ECG5000DataLoader
 from nianetvae.storage.database import SQLiteConnector
 from nianetvae.vae_run import solve_architecture_problem
 
@@ -50,7 +50,7 @@ if __name__ == '__main__':
     conn = SQLiteConnector(config['logging_params']['db_storage'], f"solutions")  # _{RUN_UUID}")
     seed_everything(config['exp_params']['manual_seed'], True)
 
-    datamodule = TimeSeriesDataset(**config["data_params"])
+    datamodule = ECG5000DataLoader(**config["data_params"])
     datamodule.setup()
 
     nianetvae.vae_run.RUN_UUID = RUN_UUID

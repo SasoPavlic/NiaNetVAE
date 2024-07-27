@@ -19,10 +19,11 @@ from niapy.task import OptimizationType
 from tabulate import tabulate
 
 from log import Log
-from nianetvae.dataloaders import TimeSeriesDataset
+from nianetvae.dataloaders.ecg_dataloader import ECG5000DataLoader
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment, FineTuneLearningRateFinder
-from nianetvae.models import RNNVAE
+from nianetvae.models.rnn_vae import RNNVAE
 from nianetvae.niapy_extension import *
+from nianetvae.niapy_extension.wrapper import ExtendedProblem, ExtendedRunner
 from nianetvae.storage.database import SQLiteConnector
 
 RUN_UUID = None
@@ -76,6 +77,8 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 conn.post_entries(model, fitness, solution, RMSE, alg_name, self.iteration)
             else:
                 experiment = RNNVAExperiment(model, **config)
+                config['trainer_params']['min_epochs'] = model.num_epochs
+                config['trainer_params']['max_epochs'] = 2
                 tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
                                               name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id)
 

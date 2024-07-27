@@ -1,14 +1,15 @@
+from typing import Any
+
+import torch
 import torchmetrics
 from lightning.pytorch import LightningModule
 from lightning.pytorch.callbacks import LearningRateFinder
-from torch import optim
+from torch import Tensor, tensor
 
 from log import Log
 from nianetvae.experiments.evaluationmetrics import EvaluationMetrics
-from nianetvae.models import BaseVAE
-from typing import Any
-import torch
-from torch import Tensor, tensor
+from nianetvae.models.base import BaseVAE
+
 
 class FineTuneLearningRateFinder(LearningRateFinder):
     def __init__(self, *args, **kwargs):
@@ -121,7 +122,8 @@ class RNNVAExperiment(LightningModule):
                                               M_N=self.params['kld_weight'],
                                               batch_idx=batch_idx)
 
-        self.log_dict({key: val.item() for key, val in train_loss.items()}, sync_dist=True, on_step=False, on_epoch=True)
+        self.log_dict({key: val.item() for key, val in train_loss.items()}, sync_dist=True, on_step=False,
+                      on_epoch=True)
         return train_loss['loss']
 
     def validation_step(self, batch, batch_idx):
@@ -140,6 +142,7 @@ class RNNVAExperiment(LightningModule):
         return val_loss['loss']
 
     def on_fit_end(self) -> None:
+        # TODO rewrite from CAE
         self.test_model()
         self.test_RMSE = self.testing_RMSE_metric.compute()
 
