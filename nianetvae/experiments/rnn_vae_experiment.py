@@ -115,56 +115,54 @@ class RNNVAExperiment(LightningModule):
             return torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
 
     def training_step(self, batch, batch_idx):
-        real_signal, labels = batch
-        self.curr_device = real_signal.device
-        results = self.forward(real_signal)
-        train_loss = self.model.loss_function(*results,
-                                              M_N=self.params['kld_weight'],
-                                              batch_idx=batch_idx)
+        torch.cuda.empty_cache()
+        results = self.forward(batch)
+        self.curr_device = batch['signal'].device
+        self.train_loss = self.model.loss_function(self.curr_device,
+                                                 **results,
+                                                 M_N=self.params['kld_weight'],
+                                                 batch_idx=batch_idx)
 
-        self.log_dict({key: val.item() for key, val in train_loss.items()}, sync_dist=True, on_step=False,
+        self.log_dict({key: val.item() for key, val in self.train_loss.items()}, sync_dist=True, on_step=False,
                       on_epoch=True)
-        return train_loss['loss']
+        torch.cuda.empty_cache()
+        return self.train_loss['loss']
 
     def validation_step(self, batch, batch_idx):
-        real_signal, labels = batch
-        self.curr_device = real_signal.device
+        torch.cuda.empty_cache()
+        results = self.forward(batch)
+        self.curr_device = batch['signal'].device
+        self.val_loss = self.model.loss_function(self.curr_device,
+                                                 **results,
+                                                 M_N=self.params['kld_weight'],
+                                                 batch_idx=batch_idx)
 
-        results = self.forward(real_signal)
-        val_loss = self.model.loss_function(*results,
-                                            M_N=self.params['kld_weight'],
-                                            batch_idx=batch_idx)
-
-        self.log_dict({f"val_{key}": val.item() for key, val in val_loss.items()}, sync_dist=True, on_step=False,
+        self.log_dict({f"val_{key}": val.item() for key, val in self.val_loss.items()}, sync_dist=True, on_step=False,
                       on_epoch=True)
         # TODO add more metrics
         # https://github.com/Lightning-AI/metrics/issues/340#issuecomment-872073730
-        return val_loss['loss']
+        torch.cuda.empty_cache()
+        return self.val_loss['loss']
 
-    def on_fit_end(self) -> None:
-        # TODO rewrite from CAE
-        self.test_model()
-        self.test_RMSE = self.testing_RMSE_metric.compute()
+    def test_step(self, batch, batch_idx, optimizer_idx=0):
+        torch.cuda.empty_cache()
+        results = self.forward(batch)
 
-    def test_model(self):
+        self.metrics.to(self.curr_device)
 
-        dataloader_iterator = iter(self.trainer.datamodule.test_dataloader())
+        test_loss = self.model.loss_function(self.curr_device,
+                                                 **results,
+                                                 M_N=self.params['kld_weight'],
+                                                 batch_idx=batch_idx)
 
-        while True:
-            try:
-                data, target = next(dataloader_iterator)
-            except StopIteration:
-                break
-            finally:
-                self.testing_RMSE_metric.to('cuda')
-                recons = self.model.generate(data, labels=target)
-                self.testing_RMSE_metric.update(recons, data)
+        # TODO Remove CONV metrics
+        self.metrics.update(results['signal'], results['reconstructed'])
+        self.metrics.update_CADL(test_loss['loss'])
 
-    def sample_signals(self):
-        try:
-            samples = self.model.sample(self.n_features,
-                                        self.curr_device)
-            pass
+        self.results = self.metrics.compute()
 
-        except Warning:
-            pass
+        self.log_dict(self.results,
+                      prog_bar=True, sync_dist=True, on_step=False,
+                      on_epoch=True, batch_size=batch['signal'].shape[0])
+
+        torch.cuda.empty_cache()

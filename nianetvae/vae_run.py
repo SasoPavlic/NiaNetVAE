@@ -32,6 +32,31 @@ conn = None
 datamodule = None
 
 
+def calculate_fitness(model, experiment):
+    if experiment.metrics.are_metrics_complete():
+
+        error_x = experiment.metrics.MSE + experiment.metrics.RMSE + experiment.metrics.MAE + experiment.metrics.ABS_REL + experiment.metrics.LOG10
+        error_y = experiment.metrics.DELTA1 + experiment.metrics.DELTA2 + experiment.metrics.DELTA3
+
+        C_LAYERS = 10000
+        C_BOTTLENECK = 1000
+
+        max_layers, min_layers = config['data_params']['horizontal_dim'], 0
+        max_bottleneck, min_bottleneck = config['data_params']['horizontal_dim'], 0
+
+        normalized_num_layers = experiment.metrics.normalize(len(model.encoding_layers), min_layers, max_layers)
+        normalized_bottleneck = experiment.metrics.normalize(model.bottleneck_size, min_bottleneck, max_bottleneck)
+
+        complexity = (normalized_num_layers * C_LAYERS) + (normalized_bottleneck * C_BOTTLENECK)
+        error = error_x - error_y
+
+        fitness = error + complexity
+        return fitness, error, complexity
+    else:
+        Log.error("Some metric values are still None.")
+        return int(9e10), int(9e10), int(9e10)
+
+
 def upload_save_model(alg_name, iteration, solution, error, model, experiment, fitness, complexity, path):
     conn.post_entries(model, fitness, solution, error, complexity, alg_name, iteration,
                       experiment.metrics.MSE,
@@ -74,6 +99,8 @@ class RNNVAEAEArchitecture(ExtendedProblem):
             if len(model.encoding_layers) == 0 or len(model.decoding_layers) == 0:
                 fitness = int(9e10)
                 RMSE = int(9e10)
+                print(
+                    f"Fitness: {fitness}, RMSE: {RMSE}, Solution: {solution}, Algorithm: {alg_name}, Iteration: {self.iteration}")
                 conn.post_entries(model, fitness, solution, RMSE, alg_name, self.iteration)
             else:
                 experiment = RNNVAExperiment(model, **config)
@@ -112,16 +139,19 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 trainer.test(experiment, datamodule=datamodule)
 
                 # Known problem: https://discuss.pytorch.org/t/why-my-model-returns-nan/24329/5
-                if math.isnan(experiment.test_RMSE.item()):
-                    RMSE = int(9e10)
-                else:
-                    RMSE = experiment.test_RMSE.item()
+                # if math.isnan(experiment.test_RMSE.item()):
+                #     RMSE = int(9e10)
+                # else:
+                #     RMSE = experiment.test_RMSE.item()
+                #
+                # complexity = (model.num_epochs ** 2) + (model.num_layers * 100) + (model.bottleneck_size * 10)
+                # fitness = (RMSE * 1000) + (complexity / 100)
 
-                complexity = (model.num_epochs ** 2) + (model.num_layers * 100) + (model.bottleneck_size * 10)
-                fitness = (RMSE * 1000) + (complexity / 100)
+                fitness, error, complexity = calculate_fitness(model, experiment)
 
-                Log.debug(tabulate([[complexity, fitness]], headers=["RMSE", "Complexity", "Fitness"], tablefmt="pretty"))
-                upload_save_model(alg_name, self.iteration, solution, model, experiment, fitness, complexity,
+                Log.debug(tabulate([[complexity, fitness]], headers=["Complexity", "Fitness"],
+                                   tablefmt="pretty"))
+                upload_save_model(alg_name, self.iteration, solution, error, model, experiment, fitness, complexity,
                                   path)
 
             if np.isnan(fitness):

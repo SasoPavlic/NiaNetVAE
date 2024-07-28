@@ -221,7 +221,10 @@ class RNNVAE(BaseVAE, nn.Module):
         # TODO Try not to use tensor.reshape
         # https://discuss.pytorch.org/t/for-beginners-do-not-use-view-or-reshape-to-swap-dimensions-of-tensors/75524
 
-        input = input.reshape(input.shape[1], input.shape[0])
+        signal = input['signal']
+        target = input['target']
+
+        input = input['signal'].reshape(input['signal'].shape[1], input['signal'].shape[0])
         mu, log_var = self.encode(input)
 
         z = self.reparameterize(mu, log_var)
@@ -229,11 +232,11 @@ class RNNVAE(BaseVAE, nn.Module):
         input = input.reshape(input.shape[1], input.shape[0])
         reconstructed = self.decode(z)
 
-        return [reconstructed, input, mu, log_var]
+        response = dict({'signal': input, 'reconstructed': reconstructed, 'mu': mu, 'log_var': log_var})
 
-    def loss_function(self,
-                      *args,
-                      **kwargs) -> dict:
+        return response
+
+    def loss_function(self, curr_device: str = 'cuda', **kwargs) -> dict:
         """
         Computes the VAE loss function.
         KL(N(\mu, \sigma), N(0, 1)) = \log \frac{1}{\sigma} + \frac{\sigma^2 + \mu^2}{2} - \frac{1}{2}
@@ -241,10 +244,10 @@ class RNNVAE(BaseVAE, nn.Module):
         :param kwargs:
         :return:
         """
-        recons = args[0]
-        input = args[1]
-        mu = args[2]
-        log_var = args[3]
+        input = kwargs['signal']
+        recons = kwargs['reconstructed']
+        mu = kwargs['mu']
+        log_var = kwargs['log_var']
 
         kld_weight = kwargs['M_N']  # Account for the minibatch samples from the dataset
         recons_loss = F.mse_loss(recons, input)

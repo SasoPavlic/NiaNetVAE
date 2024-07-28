@@ -7,6 +7,8 @@ import pandas as pd
 
 from log import Log
 
+infinity = float(99999999999)
+
 
 class SQLiteConnector():
     def __init__(self, db_file, table_name):
@@ -29,6 +31,17 @@ class SQLiteConnector():
 
         return existing_entry
 
+    def get_maximum_fitness(self):
+        try:
+            self.create_connection()
+            maximum_results = pd.read_sql(f"select max(fitness) from {self.table_name}", self.connection)
+            self.connection.close()
+        except Exception as e:
+            Log.error(e)
+
+        max_fitness = maximum_results['fitness'][0]
+        return max_fitness
+
     def best_results(self):
         try:
             self.create_connection()
@@ -44,7 +57,16 @@ class SQLiteConnector():
 
         return best_solution, best_algorithm
 
-    def post_entries(self, model, fitness, solution, RMSE, complexity, alg_name, iteration):
+    def post_entries(self, model, fitness, solution, error, complexity, alg_name, iteration,
+                     MSE=infinity,
+                     RMSE=infinity,
+                     MAE=infinity,
+                     ABS_REL=infinity,
+                     LOG10=infinity,
+                     DELTA1=infinity,
+                     DELTA2=infinity,
+                     DELTA3=infinity,
+                     CADL=infinity):
         try:
             self.create_connection()
             json_solution = json.dumps(solution.tolist())
@@ -55,16 +77,21 @@ class SQLiteConnector():
                                'iteration': int(iteration),
                                'encoding_layers': str(model.encoding_layers),
                                'decoding_layers': str(model.decoding_layers),
-                               'topology_shape': str(model.topology_shape),
-                               'layer_type': str(model.layer_type),
                                'num_layers': int(model.num_layers),
                                'activation': str(model.activation_name),
-                               'num_epochs': int(model.num_epochs),
-                               'learning_rate': float(model.learning_rate),
                                'optimizer': str(model.optimizer_name),
                                'bottleneck_size': int(model.bottleneck_size),
-                               'RMSE': float(RMSE),
                                'complexity': int(complexity),
+                               'error': float(error),
+                               'MSE': float(MSE),
+                               'RMSE': float(RMSE),
+                               'MAE': float(MAE),
+                               'ABS_REL': float(ABS_REL),
+                               'LOG10': float(LOG10),
+                               'DELTA1': float(DELTA1),
+                               'DELTA2': float(DELTA2),
+                               'DELTA3': float(DELTA3),
+                               'CADL': float(CADL),
                                'fitness': int(fitness),
                                'solution_array': str(json_solution).strip()
                                }, index=[0])
@@ -82,19 +109,24 @@ class SQLiteConnector():
                             timestamp       TEXT,
                             algorithm_name  TEXT,
                             iteration       INTEGER,
+                            activation      TEXT,
+                            optimizer       TEXT,
                             encoding_layers TEXT,
                             decoding_layers TEXT,
-                            topology_shape  TEXT,
-                            layer_type      TEXT,
                             num_layers      INTEGER,
-                            activation      TEXT,
-                            num_epochs      INTEGER,
-                            learning_rate   REAL,
-                            optimizer       TEXT,
-                            bottleneck_size INTEGER,
-                            RMSE            REAL,
-                            complexity      INTEGER,
+                            bottleneck_size INTEGER,                                                      
                             fitness         INTEGER,
+                            complexity      INTEGER,
+                            error           REAL,
+                            MSE            REAL,
+                            RMSE            REAL,
+                            MAE            REAL,
+                            ABS_REL            REAL,
+                            LOG10            REAL,
+                            DELTA1            REAL,
+                            DELTA2            REAL,
+                            DELTA3            REAL,
+                            CADL            REAL,
                             solution_array  TEXT
                         );''')
             # committing our connection

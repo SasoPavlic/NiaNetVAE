@@ -5,12 +5,12 @@ model_params:
 
 data_params:
   data_path: "data/"
+  data_percentage: 10
   batch_size: 1
-  train_size: 0.00001
-  val_size: 0.0001
-  test_size: 0.0001
+  train_size: 0.0001
+  val_size: 0.001
+  test_size: 0.001
   num_workers: 0
-  data_percentage: 100
   channel_dim: 3
   horizontal_dim: 304
   vertical_dim: 304

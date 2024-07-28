@@ -18,7 +18,11 @@ class BaseDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, index):
-        return self.data[index], self.targets[index]
+        sample = {
+            'signal': self.data[index],
+            'target': self.targets[index]
+        }
+        return sample
 
 
 class BaseDataLoader(LightningDataModule):
@@ -31,6 +35,7 @@ class BaseDataLoader(LightningDataModule):
             train_size: float,
             val_size: float,
             test_size: float,
+            data_percentage: float,
             **kwargs,
     ):
         super().__init__()
@@ -41,6 +46,7 @@ class BaseDataLoader(LightningDataModule):
         self.train_size = train_size
         self.val_size = val_size
         self.test_size = test_size
+        self.data_percentage = data_percentage
 
     def setup(self, stage: Optional[str] = None) -> None:
         raise NotImplementedError("This method should be overridden by subclasses")
@@ -70,6 +76,10 @@ class ECG5000DataLoader(BaseDataLoader):
 
         # Combine the train and test datasets
         combined_df = pd.concat([train_df, test_df])
+
+        # Apply data percentage filter
+        combined_df = combined_df.sample(frac=self.data_percentage / 100.0, random_state=42)
+
         combined_data = combined_df.drop(columns=['target']).values
         combined_target = pd.to_numeric(combined_df['target']).values
 
