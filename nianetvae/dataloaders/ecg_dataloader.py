@@ -8,8 +8,10 @@ from scipy.io import arff
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
 
+from log import Log
 
-class BaseDataset(Dataset):
+
+class ECG5000Dataset(Dataset):
     def __init__(self, data, targets):
         self.data = torch.tensor(data).float()
         self.targets = torch.tensor(targets).float()
@@ -83,10 +85,21 @@ class ECG5000DataLoader(BaseDataLoader):
         combined_data = combined_df.drop(columns=['target']).values
         combined_target = pd.to_numeric(combined_df['target']).values
 
-        # Split the combined data into train, validation, and test sets
-        x_train, x_test, y_train, y_test = train_test_split(combined_data, combined_target, test_size=self.test_size)
-        x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=self.val_size)
+        # Calculate sizes for train, validation, and test sets
+        total_size = len(combined_data)
+        test_size = int(total_size * self.test_size / 100)
+        val_size = int(total_size * self.val_size / 100)
+        train_size = total_size - test_size - val_size
 
-        self.train_dataset = BaseDataset(x_train, y_train)
-        self.val_dataset = BaseDataset(x_val, y_val)
-        self.test_dataset = BaseDataset(x_test, y_test)
+        # Split the combined data into train, validation, and test sets
+        x_train_val, x_test, y_train_val, y_test = train_test_split(combined_data, combined_target, test_size=test_size,
+                                                                    random_state=42)
+        x_train, x_val, y_train, y_val = train_test_split(x_train_val, y_train_val, test_size=val_size, random_state=42)
+
+        self.train_dataset = ECG5000Dataset(x_train, y_train)
+        self.val_dataset = ECG5000Dataset(x_val, y_val)
+        self.test_dataset = ECG5000Dataset(x_test, y_test)
+
+        Log.info(f"Train size: {len(self.train_dataset)}")
+        Log.info(f"Validation size: {len(self.val_dataset)}")
+        Log.info(f"Test size: {len(self.test_dataset)}")

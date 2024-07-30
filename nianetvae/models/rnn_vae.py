@@ -45,9 +45,8 @@ class RNNVAE(BaseVAE, nn.Module):
         self.topology_shape = self.map_shape(solution[0])
         self.layer_type = self.map_layer_type(solution[1])
         self.layer_step = self.map_layer_step(solution[2], self.dataset_shape)
-        self.num_layers = self.map_num_layers(solution[3], self.layer_step, self.dataset_shape)
         # https://ai.stackexchange.com/questions/3156/how-to-select-number-of-hidden-layers-and-number-of-memory-cells-in-an-lstm
-        # TODO ADD activation function call after each layer
+        self.num_layers = self.map_num_layers(solution[3], self.layer_step, self.dataset_shape)
         self.activation = self.map_activation(solution[4])
         self.num_epochs = self.map_num_epochs(solution[5])
         self.learning_rate = self.map_learning_rate(solution[6])
@@ -173,10 +172,8 @@ class RNNVAE(BaseVAE, nn.Module):
                 x, hidden_n = layer(x)
             elif layer.mode == 'RNN_TANH':
                 x, hidden_n = layer(x)
+            x = self.activation(x)
 
-        # # TODO Why hidden state needs to be passed
-        # # https://github.com/chrisvdweth/ml-toolkit\
-        # # https://discuss.pytorch.org/t/lstm-autoencoders-in-pytorch/139727
         hidden_n = hidden_n.reshape((self.batch_size, self.bottleneck_size))
         mu = self.encoding_layers[-2](hidden_n)
         log_var = self.encoding_layers[-1](hidden_n)
@@ -200,6 +197,7 @@ class RNNVAE(BaseVAE, nn.Module):
                 x, hidden_n = layer(x)
             elif layer.mode == 'RNN_TANH':
                 x, hidden_n = layer(x)
+            x = self.activation(x)
 
         reconstructed = self.decoding_layers[-1](x)
 
@@ -218,21 +216,26 @@ class RNNVAE(BaseVAE, nn.Module):
         return (eps * std) + mu
 
     def forward(self, input: Tensor, **kwargs) -> List[Tensor]:
-        # TODO Try not to use tensor.reshape
-        # https://discuss.pytorch.org/t/for-beginners-do-not-use-view-or-reshape-to-swap-dimensions-of-tensors/75524
 
         signal = input['signal']
         target = input['target']
 
-        input = input['signal'].reshape(input['signal'].shape[1], input['signal'].shape[0])
+        # Use transpose to swap dimensions for encoding
+        input = signal.transpose(0, 1)
         mu, log_var = self.encode(input)
 
         z = self.reparameterize(mu, log_var)
 
-        input = input.reshape(input.shape[1], input.shape[0])
+        # Swap dimensions back to the original shape
+        input = input.transpose(0, 1)
         reconstructed = self.decode(z)
 
-        response = dict({'signal': input, 'reconstructed': reconstructed, 'mu': mu, 'log_var': log_var})
+        response = {
+            'signal': input,
+            'reconstructed': reconstructed,
+            'mu': mu,
+            'log_var': log_var
+        }
 
         return response
 

@@ -98,13 +98,13 @@ class RNNVAEAEArchitecture(ExtendedProblem):
             """Punishing bad decisions"""
             if len(model.encoding_layers) == 0 or len(model.decoding_layers) == 0:
                 fitness = int(9e10)
-                RMSE = int(9e10)
-                print(
-                    f"Fitness: {fitness}, RMSE: {RMSE}, Solution: {solution}, Algorithm: {alg_name}, Iteration: {self.iteration}")
-                conn.post_entries(model, fitness, solution, RMSE, alg_name, self.iteration)
+                complexity = int(9e10)
+                error = int(9e10)
+                conn.post_entries(model, fitness, solution, error, complexity, alg_name, self.iteration)
             else:
                 experiment = RNNVAExperiment(model, **config)
                 config['trainer_params']['min_epochs'] = model.num_epochs
+                # TODO Remove in production
                 config['trainer_params']['max_epochs'] = 2
                 tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
                                               name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id)
