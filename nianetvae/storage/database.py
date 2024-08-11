@@ -58,15 +58,11 @@ class SQLiteConnector():
         return best_solution, best_algorithm
 
     def post_entries(self, model, fitness, solution, error, complexity, alg_name, iteration,
+                     MAE=infinity,
                      MSE=infinity,
                      RMSE=infinity,
-                     MAE=infinity,
-                     ABS_REL=infinity,
-                     LOG10=infinity,
-                     DELTA1=infinity,
-                     DELTA2=infinity,
-                     DELTA3=infinity,
-                     CADL=infinity):
+                     DTW=infinity,
+                     R2=infinity,):
         try:
             self.create_connection()
             json_solution = json.dumps(solution.tolist())
@@ -83,15 +79,11 @@ class SQLiteConnector():
                                'bottleneck_size': int(model.bottleneck_size),
                                'complexity': int(complexity),
                                'error': float(error),
+                               'MAE': float(MAE),
                                'MSE': float(MSE),
                                'RMSE': float(RMSE),
-                               'MAE': float(MAE),
-                               'ABS_REL': float(ABS_REL),
-                               'LOG10': float(LOG10),
-                               'DELTA1': float(DELTA1),
-                               'DELTA2': float(DELTA2),
-                               'DELTA3': float(DELTA3),
-                               'CADL': float(CADL),
+                               'DTW': float(DTW),
+                               'R2': float(R2),
                                'fitness': int(fitness),
                                'solution_array': str(json_solution).strip()
                                }, index=[0])
@@ -118,15 +110,11 @@ class SQLiteConnector():
                             fitness         INTEGER,
                             complexity      INTEGER,
                             error           REAL,
-                            MSE            REAL,
+                            MAE             REAL,
+                            MSE             REAL,
                             RMSE            REAL,
-                            MAE            REAL,
-                            ABS_REL            REAL,
-                            LOG10            REAL,
-                            DELTA1            REAL,
-                            DELTA2            REAL,
-                            DELTA3            REAL,
-                            CADL            REAL,
+                            DTW             REAL,
+                            R2              REAL,
                             solution_array  TEXT
                         );''')
             # committing our connection

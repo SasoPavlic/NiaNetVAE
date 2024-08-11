@@ -150,14 +150,12 @@ class RNNVAExperiment(LightningModule):
 
         self.metrics.to(self.curr_device)
 
-        test_loss = self.model.loss_function(self.curr_device,
+        batch_loss = self.model.loss_function(self.curr_device,
                                                  **results,
                                                  M_N=self.params['kld_weight'],
                                                  batch_idx=batch_idx)
 
-        # TODO Remove CONV metrics
         self.metrics.update(results['signal'], results['reconstructed'])
-        self.metrics.update_CADL(test_loss['loss'])
 
         self.results = self.metrics.compute()
 

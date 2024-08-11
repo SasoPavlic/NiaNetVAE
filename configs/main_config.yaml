@@ -6,7 +6,7 @@ model_params:
 data_params:
   data_path: "data/"
   data_percentage: 10
-  batch_size: 1
+  batch_size: 10
   train_size: 70
   val_size: 10
   test_size: 20

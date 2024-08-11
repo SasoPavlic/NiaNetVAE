@@ -1,17 +1,11 @@
-import argparse
-import math
-import os
-import uuid
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import torch
-import yaml
 from lightning.pytorch import Trainer
 # from lightning.pytorch.plugins import DDPPlugin
-from lightning.pytorch import seed_everything
-from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
+from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
 from niapy.algorithms.basic import ParticleSwarmAlgorithm, DifferentialEvolution, FireflyAlgorithm, GeneticAlgorithm
 from niapy.algorithms.modified import SelfAdaptiveDifferentialEvolution
@@ -19,12 +13,9 @@ from niapy.task import OptimizationType
 from tabulate import tabulate
 
 from log import Log
-from nianetvae.dataloaders.ecg_dataloader import ECG5000DataLoader
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment, FineTuneLearningRateFinder
 from nianetvae.models.rnn_vae import RNNVAE
-from nianetvae.niapy_extension import *
 from nianetvae.niapy_extension.wrapper import ExtendedProblem, ExtendedRunner
-from nianetvae.storage.database import SQLiteConnector
 
 RUN_UUID = None
 config = None
@@ -35,8 +26,13 @@ datamodule = None
 def calculate_fitness(model, experiment):
     if experiment.metrics.are_metrics_complete():
 
-        error_x = experiment.metrics.MSE + experiment.metrics.RMSE + experiment.metrics.MAE + experiment.metrics.ABS_REL + experiment.metrics.LOG10
-        error_y = experiment.metrics.DELTA1 + experiment.metrics.DELTA2 + experiment.metrics.DELTA3
+        error_x = (
+                experiment.metrics.MSE +
+                experiment.metrics.RMSE +
+                experiment.metrics.MAE +
+                experiment.metrics.DTW
+        )
+        error_y = experiment.metrics.R2
 
         C_LAYERS = 10000
         C_BOTTLENECK = 1000
@@ -59,15 +55,11 @@ def calculate_fitness(model, experiment):
 
 def upload_save_model(alg_name, iteration, solution, error, model, experiment, fitness, complexity, path):
     conn.post_entries(model, fitness, solution, error, complexity, alg_name, iteration,
-                      experiment.metrics.MSE,
-                      experiment.metrics.RMSE,
-                      experiment.metrics.MAE,
-                      experiment.metrics.ABS_REL,
-                      experiment.metrics.LOG10,
-                      experiment.metrics.DELTA1,
-                      experiment.metrics.DELTA2,
-                      experiment.metrics.DELTA3,
-                      experiment.metrics.CADL)
+                      experiment.metrics.MSE_metric,
+                      experiment.metrics.RMSE_metric,
+                      experiment.metrics.MAE_metric,
+                      experiment.metrics.DTW_metric,
+                      experiment.metrics.R2_metric)
     torch.save(model.state_dict(), path + f"/model.pt")
 
 
@@ -137,15 +129,6 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 trainer.fit(experiment, datamodule=datamodule)
                 Log.info(f'\nTraining end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
                 trainer.test(experiment, datamodule=datamodule)
-
-                # Known problem: https://discuss.pytorch.org/t/why-my-model-returns-nan/24329/5
-                # if math.isnan(experiment.test_RMSE.item()):
-                #     RMSE = int(9e10)
-                # else:
-                #     RMSE = experiment.test_RMSE.item()
-                #
-                # complexity = (model.num_epochs ** 2) + (model.num_layers * 100) + (model.bottleneck_size * 10)
-                # fitness = (RMSE * 1000) + (complexity / 100)
 
                 fitness, error, complexity = calculate_fitness(model, experiment)
 
