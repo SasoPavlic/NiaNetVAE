@@ -71,12 +71,12 @@ class RNNVAExperiment(LightningModule):
         self.model_path = kwargs['logging_params']['model_path']
         self.learning_rate = 0.0
         self.params = kwargs['exp_params']
-        self.tensor_dim = kwargs['data_params']['horizontal_dim']
+        self.seq_len = kwargs['model_params']['seq_len']
         self.curr_device = None
         self.hold_graph = False
         self.train_loss = None
         self.val_loss = None
-        self.metrics = EvaluationMetrics()
+        self.metrics = EvaluationMetrics(num_outputs=self.seq_len)
 
         try:
             self.hold_graph = self.params['retain_first_backpass']

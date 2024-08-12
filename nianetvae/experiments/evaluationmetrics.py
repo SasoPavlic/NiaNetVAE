@@ -5,12 +5,12 @@ from torchmetrics import R2Score, MeanAbsoluteError, MeanSquaredError
 
 
 class EvaluationMetrics:
-    def __init__(self):
-        self.MAE_metric = MeanAbsoluteError()  # Low is better
-        self.MSE_metric = MeanSquaredError()  # Low is better
-        self.RMSE_metric = MeanSquaredError(squared=False)  # Low is better
+    def __init__(self, num_outputs):
+        self.MAE_metric = torchmetrics.MeanAbsoluteError()  # Low is better
+        self.MSE_metric = torchmetrics.MeanSquaredError()  # Low is better
+        self.RMSE_metric = torchmetrics.MeanSquaredError(squared=False)  # Low is better
         self.DTW_metric = DynamicTimeWarping()  # Low is better
-        self.R2_metric = R2Score(num_outputs=140, multioutput='uniform_average')  # High is better
+        self.R2_metric = torchmetrics.R2Score(num_outputs=num_outputs, multioutput='uniform_average')  # High is better
 
         self.MAE = None
         self.MSE = None
