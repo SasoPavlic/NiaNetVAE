@@ -58,18 +58,22 @@ class SQLiteConnector():
         return best_solution, best_algorithm
 
     def post_entries(self, model, fitness, solution, error, complexity, alg_name, iteration,
-                     MAE=infinity,
-                     MSE=infinity,
-                     RMSE=infinity,
-                     DTW=infinity,
-                     R2=infinity,):
+                     MAE=infinity, MSE=infinity, RMSE=infinity, DTW=infinity, R2=infinity,
+                     start_time=None, end_time=None, duration=None):
         try:
             self.create_connection()
             json_solution = json.dumps(solution.tolist())
 
+            # Convert start_time and end_time to strings when storing in the database
+            start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S") if start_time else None
+            end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S") if end_time else None
+
             df = pd.DataFrame({'hash_id': str(model.hash_id),
-                               'timestamp': str(datetime.now().strftime("%H:%M %d-%m-%Y")),
                                'algorithm_name': str(alg_name),
+                               'timestamp': str(datetime.now().strftime("%H:%M %d-%m-%Y")),
+                               'start_time': start_time_str,  # Store the start time as a string
+                               'end_time': end_time_str,  # Store the end time as a string
+                               'duration': duration,  # Store the duration
                                'iteration': int(iteration),
                                'encoding_layers': str(model.encoding_layers),
                                'decoding_layers': str(model.decoding_layers),
@@ -98,15 +102,18 @@ class SQLiteConnector():
                        create table IF NOT EXISTS {self.table_name}
                         (
                             hash_id         TEXT,
-                            timestamp       TEXT,
                             algorithm_name  TEXT,
+                            timestamp       TEXT,
+                            start_time      TEXT,  # Add a start time column
+                            end_time        TEXT,  # Add an end time column
+                            duration        REAL,  # Add a duration column
                             iteration       INTEGER,
                             activation      TEXT,
                             optimizer       TEXT,
                             encoding_layers TEXT,
                             decoding_layers TEXT,
                             num_layers      INTEGER,
-                            bottleneck_size INTEGER,                                                      
+                            bottleneck_size INTEGER,
                             fitness         INTEGER,
                             complexity      INTEGER,
                             error           REAL,
