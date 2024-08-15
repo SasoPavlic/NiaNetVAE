@@ -30,11 +30,13 @@ class FineTuneLearningRateFinder(LearningRateFinder):
                 elif loss > self.previous_loss:
                     Log.debug(f"\nLoss increased from {self.previous_loss} to {loss}")
                     self.lr_find(trainer, pl_module)
+                    print(f"Learning rate: {pl_module.learning_rate}")
 
                 self.previous_loss = pl_module.train_loss['loss'].item()
 
             else:
                 self.lr_find(trainer, pl_module)
+                print(f"Learning rate: {pl_module.learning_rate}")
 
 
 class RMSE(torchmetrics.Metric):
@@ -69,7 +71,7 @@ class RNNVAExperiment(LightningModule):
         self.results = None
         self.model = lstm_vae_model
         self.model_path = kwargs['logging_params']['model_path']
-        self.learning_rate = 0.0
+        self.learning_rate = 0.01
         self.params = kwargs['exp_params']
         self.seq_len = kwargs['model_params']['seq_len']
         self.curr_device = None

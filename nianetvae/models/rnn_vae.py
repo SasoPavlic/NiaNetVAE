@@ -29,8 +29,6 @@ class RNNVAE(BaseVAE, nn.Module):
         y3: number of neurons per layer,
         y4: number of layers,
         y5: activation function
-        y6: number of epochs,
-        y7: learning rate
         y8: optimizer algorithm.
         """
         n_features = kwargs['model_params']['n_features']
@@ -42,22 +40,20 @@ class RNNVAE(BaseVAE, nn.Module):
         self.encoding_layers = nn.ModuleList()
         self.decoding_layers = nn.ModuleList()
 
-        self.topology_shape = self.map_shape(solution[0])
-        self.layer_type = self.map_layer_type(solution[1])
-        self.layer_step = self.map_layer_step(solution[2], self.dataset_shape)
+        """ Topology shape is set to symmetrical in our experiment."""
+        # self.topology_shape = self.map_shape(solution[0])
+        self.layer_type = self.map_layer_type(solution[0])
+        self.layer_step = self.map_layer_step(solution[1], self.dataset_shape)
         # https://ai.stackexchange.com/questions/3156/how-to-select-number-of-hidden-layers-and-number-of-memory-cells-in-an-lstm
-        self.num_layers = self.map_num_layers(solution[3], self.layer_step, self.dataset_shape)
-        self.activation = self.map_activation(solution[4])
-        self.num_epochs = self.map_num_epochs(solution[5])
-        self.learning_rate = self.map_learning_rate(solution[6])
+        self.num_layers = self.map_num_layers(solution[2], self.layer_step, self.dataset_shape)
+        self.activation = self.map_activation(solution[3])
 
         self.bottleneck_size = 0
         self.seq_len = seq_len
         self.n_features = n_features
         self.batch_size = batch_size
 
-        self.generate_autoencoder(self.topology_shape,
-                                  self.layer_type,
+        self.generate_autoencoder(self.layer_type,
                                   self.num_layers,
                                   self.dataset_shape,
                                   self.layer_step)
@@ -109,18 +105,15 @@ class RNNVAE(BaseVAE, nn.Module):
         # ))
         # self.decoding_layers.append(nn.Linear(140, self.seq_len))
 
-        self.optimizer_name = self.map_optimizer(solution[7], self)
+        self.optimizer_name = self.map_optimizer(solution[4], self)
         self.get_hash()
         outputs = []
 
         outputs.append([self.hash_id,
-                        self.topology_shape,
                         self.layer_type,
                         self.layer_step,
                         self.num_layers,
                         self.activation_name,
-                        self.num_epochs,
-                        self.learning_rate,
                         self.optimizer_name,
                         self.bottleneck_size,
                         self.encoding_layers,
@@ -128,26 +121,21 @@ class RNNVAE(BaseVAE, nn.Module):
 
         Log.info(tabulate(outputs, headers=["ID",
                                          "Shape (y1)",
-                                         "Layer type (y2)",
-                                         "Layer step (y3)",
-                                         "Layers (y4)",
-                                         "Activation func. (y5)",
-                                         "Epochs (y6)",
-                                         "Learning rate (y7)",
-                                         "Optimizer (y8)",
+                                         "Layer type (y1)",
+                                         "Layer step (y2)",
+                                         "Layers (y3)",
+                                         "Activation func. (y4)",
+                                         "Optimizer (y5)",
                                          "Bottleneck size",
                                          "Encoder",
                                          "Decoder", ], tablefmt="pretty"))
 
     def get_hash(self):
 
-        self.hash_id = hashlib.sha1(str(str(self.topology_shape) +
-                                        str(self.layer_type) +
+        self.hash_id = hashlib.sha1(str(str(self.layer_type) +
                                         str(self.layer_step) +
                                         str(self.num_layers) +
                                         str(self.activation_name) +
-                                        str(self.num_epochs) +
-                                        str(self.learning_rate) +
                                         str(self.optimizer_name) +
                                         str(self.bottleneck_size) +
                                         str(self.encoding_layers) +
@@ -161,7 +149,7 @@ class RNNVAE(BaseVAE, nn.Module):
         :param input: (Tensor) Input tensor to encoder [N x C x H x W]
         :return: (Tensor) List of latent codes
         """
-
+        # TODO check if bellow line is necessary
         x = x.reshape((self.batch_size, self.seq_len, self.n_features))
         x, (hidden_n, cell_n) = x, (None, None)
 
@@ -426,29 +414,7 @@ class RNNVAE(BaseVAE, nn.Module):
 
             raise ValueError(f"Value not between boundaries 0.0 and 1.0. Value is: {inds[0] - 1}")
 
-    def map_num_epochs(self, gene):
-        gene = np.array([gene])
-        bins = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.60, 0.7, 0.8, 0.9, 1.01])
-        inds = np.digitize(gene, bins)
-
-        return int(inds[0]) * 10 + 100
-
-    def map_learning_rate(self, gene):
-        # https://www.jeremyjordan.me/nn-learning-rate/
-        gene = np.array([gene])
-        bins = []
-        value = 1 / 100
-        step = value
-        for col in range(0, 100):
-            bins.append(step)
-            step += value
-        bins[-1] = 1.01
-        inds = np.digitize(gene, bins)
-        lr = np.array(bins)[inds[0]]
-
-        return round(lr, 2)
-
-    def generate_autoencoder(self, shape, layer_type, layers, dataset_shape, layer_step):
+    def generate_autoencoder(self, layer_type, layers, dataset_shape, layer_step, shape="SYMMETRICAL"):
 
         if shape == "SYMMETRICAL":
 

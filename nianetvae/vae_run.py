@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from lightning.pytorch import Trainer
 # from lightning.pytorch.plugins import DDPPlugin
-from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
+from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping, BatchSizeFinder
 from lightning.pytorch.loggers import TensorBoardLogger
 from niapy.algorithms.basic import ParticleSwarmAlgorithm, DifferentialEvolution, FireflyAlgorithm, GeneticAlgorithm
 from niapy.algorithms.modified import SelfAdaptiveDifferentialEvolution
@@ -98,9 +98,6 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 conn.post_entries(model, fitness, solution, error, complexity, alg_name, self.iteration)
             else:
                 experiment = RNNVAExperiment(model, **config)
-                config['trainer_params']['min_epochs'] = model.num_epochs
-                # TODO Remove in production
-                config['trainer_params']['max_epochs'] = 2
                 tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
                                               name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id)
 
@@ -114,7 +111,12 @@ class RNNVAEAEArchitecture(ExtendedProblem):
 
                                   callbacks=[
                                       LearningRateMonitor(),
-                                      # BatchSizeFinder(mode="power", steps_per_trial=3),
+                                      # BatchSizeFinder(
+                                      #     mode="power",  # "power" or "binsearch" modes
+                                      #     steps_per_trial=3,  # Number of steps to run with each batch size
+                                      #     init_val=2,  # Initial batch size to start search with
+                                      #     max_trials=25,  # Max number of trials (batch size increases) to try
+                                      # ),
                                       FineTuneLearningRateFinder(**config['fine_tune_lr_finder']),
                                       EarlyStopping(**config['early_stop'],
                                                     verbose=False,
@@ -151,16 +153,13 @@ class RNNVAEAEArchitecture(ExtendedProblem):
 def solve_architecture_problem(selected_algorithms):
     """
     Dimensionality:
-    y1: topology shape,
-    y2: layer type
-    y3: number of neurons per layer,
-    y4: number of layers,
-    y5: activation function
-    y6: number of epochs,
-    y7: learning rate
-    y8: optimizer algorithm.
+    y1: layer type
+    y2: number of neurons per layer,
+    y3: number of layers,
+    y4: activation function
+    y5: optimizer algorithm.
     """
-    DIMENSIONALITY = 8
+    DIMENSIONALITY = 5
 
     algorithms = {
         "particle_swarm": ParticleSwarmAlgorithm(),

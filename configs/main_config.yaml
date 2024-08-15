@@ -5,8 +5,8 @@ model_params:
 
 data_params:
   data_path: "data/"
-  data_percentage: 10
-  batch_size: 10
+  data_percentage: 100
+  batch_size: 20
   train_size: 70
   val_size: 10
   test_size: 20
@@ -22,8 +22,8 @@ exp_params:
   manual_seed: 1265
 
 trainer_params:
-  min_epochs: from_solution_array
-  max_epochs: 250
+  min_epochs: 5
+  max_epochs: 20
 
 early_stop:
   monitor: "val_loss"
