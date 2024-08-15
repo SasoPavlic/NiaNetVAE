@@ -142,53 +142,71 @@ class RNNVAE(BaseVAE, nn.Module):
                                         str(self.decoding_layers)).encode('utf-8')).hexdigest()
         return self.hash_id
 
-    def encode(self, x: Tensor) -> List[Tensor]:
+    def encode(self, input: Tensor) -> List[Tensor]:
         """
         Encodes the input by passing through the encoder network
         and returns the latent codes.
-        :param input: (Tensor) Input tensor to encoder [N x C x H x W]
-        :return: (Tensor) List of latent codes
+        :param input: (Tensor) Input tensor to encoder [N x seq_len x n_features]
+        :return: (Tensor) List of latent codes [mu, log_var]
         """
-        # TODO check if bellow line is necessary
-        x = x.reshape((self.batch_size, self.seq_len, self.n_features))
-        x, (hidden_n, cell_n) = x, (None, None)
 
+        # Reshape the input tensor to match the expected dimensions for the encoder.
+        x = input.reshape((self.batch_size, self.seq_len, self.n_features))
+
+        # Initialize hidden and cell states to None for the first iteration.
+        hidden_n, cell_n = None, None
+
+        # Iterate through the encoding layers, excluding the last two (which are fully connected layers).
         for layer in self.encoding_layers[:-2]:
             if layer.mode == 'LSTM':
+                # Apply LSTM layer to the input tensor and update hidden and cell states.
                 x, (hidden_n, cell_n) = layer(x)
-            elif layer.mode == 'GRU':
+            elif layer.mode == 'GRU' or layer.mode == 'RNN_TANH':
+                # Apply GRU or RNN_TANH layer to the input tensor and update hidden state.
                 x, hidden_n = layer(x)
-            elif layer.mode == 'RNN_TANH':
-                x, hidden_n = layer(x)
+            # Apply the activation function to the output of the layer.
             x = self.activation(x)
 
+        # Reshape the hidden state to match the dimensions expected by the fully connected layers.
         hidden_n = hidden_n.reshape((self.batch_size, self.bottleneck_size))
+
+        # Apply the second-to-last encoding layer to the hidden state to obtain the mean (mu) of the latent distribution.
         mu = self.encoding_layers[-2](hidden_n)
+
+        # Apply the last encoding layer to the hidden state to obtain the log variance (log_var) of the latent distribution.
         log_var = self.encoding_layers[-1](hidden_n)
 
+        # Return the latent codes (mu and log_var).
         return [mu, log_var]
 
     def decode(self, z: Tensor) -> Tensor:
         """
-        Maps the given latent codes
-        onto the image space.
-        :param z: (Tensor) [B x D]
-        :return: (Tensor) [B x C x H x W]
+        Maps the given latent codes onto the input space (e.g., time series or image).
+        :param z: (Tensor) [B x D] Latent tensor
+        :return: (Tensor) [B x seq_len x n_features] Reconstructed output
         """
 
+        # Reshape the latent code tensor z to match the input dimensions for the decoding layers.
         x = z.reshape((self.batch_size, self.bottleneck_size))
 
+        # Initialize hidden and cell states (if applicable).
+        hidden_n, cell_n = None, None
+
+        # Iterate through the decoding layers, excluding the last one (which outputs the reconstructed tensor).
         for layer in self.decoding_layers[:-1]:
             if layer.mode == 'LSTM':
+                # Apply LSTM layer to the input tensor and update hidden and cell states.
                 x, (hidden_n, cell_n) = layer(x)
-            elif layer.mode == 'GRU':
+            elif layer.mode == 'GRU' or layer.mode == 'RNN_TANH':
+                # Apply GRU or RNN_TANH layer to the input tensor and update hidden state.
                 x, hidden_n = layer(x)
-            elif layer.mode == 'RNN_TANH':
-                x, hidden_n = layer(x)
+            # Apply the activation function to the output of the layer.
             x = self.activation(x)
 
+        # Apply the final decoding layer to the tensor to obtain the reconstructed output.
         reconstructed = self.decoding_layers[-1](x)
 
+        # Return the reconstructed tensor.
         return reconstructed
 
     def reparameterize(self, mu: Tensor, logvar: Tensor) -> Tensor:
@@ -199,25 +217,37 @@ class RNNVAE(BaseVAE, nn.Module):
         :param logvar: (Tensor) Standard deviation of the latent Gaussian [B x D]
         :return: (Tensor) [B x D]
         """
+        # Calculate the standard deviation from the log variance.
         std = torch.exp(0.5 * logvar)
+
+        # Generate random noise tensor eps with the same shape as the standard deviation tensor.
         eps = torch.randn_like(std)
+
+        # Compute the latent variable z using the reparameterization trick.
         return (eps * std) + mu
 
     def forward(self, input: Tensor, **kwargs) -> List[Tensor]:
 
+        # Extract signal and target from the input dictionary.
         signal = input['signal']
         target = input['target']
 
-        # Use transpose to swap dimensions for encoding
+        # Transpose the input tensor to swap dimensions for compatibility with the encoder.
         input = signal.transpose(0, 1)
+
+        # Encode the input signal to obtain the latent distribution parameters (mu and log_var).
         mu, log_var = self.encode(input)
 
+        # Sample the latent variable z from the latent distribution using the reparameterization trick.
         z = self.reparameterize(mu, log_var)
 
-        # Swap dimensions back to the original shape
+        # Swap dimensions back to the original shape (not needed if not transposed earlier).
         input = input.transpose(0, 1)
+
+        # Decode the latent variable z to reconstruct the original input.
         reconstructed = self.decode(z)
 
+        # Create a dictionary containing the original signal, reconstructed signal, and latent distribution parameters.
         response = {
             'signal': input,
             'reconstructed': reconstructed,
@@ -225,6 +255,7 @@ class RNNVAE(BaseVAE, nn.Module):
             'log_var': log_var
         }
 
+        # Return the response dictionary.
         return response
 
     def loss_function(self, curr_device: str = 'cuda', **kwargs) -> dict:
