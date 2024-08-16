@@ -78,6 +78,7 @@ class RNNVAExperiment(LightningModule):
         self.hold_graph = False
         self.train_loss = None
         self.val_loss = None
+        self.test_loss = None
         self.metrics = EvaluationMetrics(num_outputs=self.seq_len)
 
         try:
@@ -152,7 +153,7 @@ class RNNVAExperiment(LightningModule):
 
         self.metrics.to(self.curr_device)
 
-        batch_loss = self.model.loss_function(self.curr_device,
+        self.test_loss = self.model.loss_function(self.curr_device,
                                                  **results,
                                                  M_N=self.params['kld_weight'],
                                                  batch_idx=batch_idx)
