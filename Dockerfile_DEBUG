@@ -9,18 +9,19 @@
 
 ARG PYTHON_VERSION=3.10
 ARG PYTORCH_VERSION=2.0
-ARG CUDA_VERSION=11.7.1
-ARG LIGHTNING_VERSION=""
+ARG CUDA_VERSION=11.8.0
 
-FROM pytorchlightning/pytorch_lightning:base-cuda-py${PYTHON_VERSION}-torch${PYTORCH_VERSION}-cuda${CUDA_VERSION}
-#FROM pytorchlightning/pytorch_lightning:base-cuda-py3.10-torch2.0-cuda11.7.1
+# Base cuda image
+#FROM pytorchlightning/pytorch_lightning:base-cuda-py${PYTHON_VERSION}-torch${PYTORCH_VERSION}-cuda${CUDA_VERSION}
+# Latest image
+FROM pytorchlightning/pytorch_lightning:latest-py${PYTHON_VERSION}-torch${PYTORCH_VERSION}-cuda${CUDA_VERSION}
 
 LABEL maintainer="Lightning-AI <https://github.com/Lightning-AI>"
 
 WORKDIR /app
 
 COPY requirements.txt requirements.txt
-RUN pip3 install -r requirements.txt
+RUN pip3 install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu118
 
 ADD data data
 

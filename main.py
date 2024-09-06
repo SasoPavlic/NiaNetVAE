@@ -44,7 +44,12 @@ if __name__ == '__main__':
     Log.enable(config['logging_params'])
     Log.info(f'Program start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
     Log.info(f"RUN UUID: {RUN_UUID}")
-    Log.header("NiaNetCAE settings")
+    Log.info(f"PyTorch was compiled with CUDA version: {torch.version.cuda}")
+    cuda_available = torch.cuda.is_available()
+    Log.info(f"Is CUDA available on this system? {'Yes' if cuda_available else 'No'}")
+    Log.info(f"PyTorch version: {torch.__version__}")
+
+    Log.header("NiaNetVAE settings")
     Log.info(config)
 
     conn = SQLiteConnector(config['logging_params']['db_storage'], f"solutions")  # _{RUN_UUID}")

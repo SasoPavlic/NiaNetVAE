@@ -6,10 +6,12 @@
 
 ARG PYTHON_VERSION=3.10
 ARG PYTORCH_VERSION=2.0
-ARG CUDA_VERSION=11.7.1
+ARG CUDA_VERSION=11.8.0
 
+# Base cuda image
 #FROM pytorchlightning/pytorch_lightning:base-cuda-py${PYTHON_VERSION}-torch${PYTORCH_VERSION}-cuda${CUDA_VERSION}
-FROM pytorchlightning/pytorch_lightning:base-cuda-py3.10-torch2.2-cuda12.1.0
+# Latest image
+FROM pytorchlightning/pytorch_lightning:latest-py${PYTHON_VERSION}-torch${PYTORCH_VERSION}-cuda${CUDA_VERSION}
 
 LABEL maintainer="Lightning-AI <https://github.com/Lightning-AI>"
 
@@ -32,13 +34,16 @@ COPY poetry.lock pyproject.toml /app/
 # Install Poetry
 RUN pip install poetry
 
+RUN poetry config virtualenvs.create false
+RUN poetry install --no-interaction --no-ansi
+RUN pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 -f https://download.pytorch.org/whl/torch_stable.html
+
 # Creating folders for a project:
 RUN mkdir data
 
 # The code to run when container is started:
 COPY nianetvae/niapy_extension /app/nianetvae/niapy_extension
 COPY nianetvae/storage /app/nianetvae/storage
-#COPY nianetvae/visualize /app/nianetvae/visualize
 COPY nianetvae/dataloaders /app/nianetvae/dataloaders
 COPY nianetvae/experiments /app/nianetvae/experiments
 COPY nianetvae/models /app/nianetvae/models
@@ -52,8 +57,3 @@ COPY tests/__init__.py /app/tests/__init__.py
 COPY setup.py /app/setup.py
 COPY main.py /app/main.py
 COPY log.py /app/log.py
-
-# Install project dependencies
-RUN poetry config virtualenvs.create false && \
-    poetry install --no-interaction --no-ansi && \
-    poetry run poe autoinstall-torch-cuda

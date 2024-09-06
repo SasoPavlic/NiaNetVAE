@@ -184,6 +184,9 @@ def solve_architecture_problem(selected_algorithms):
         ]
     )
 
+    """Issue when using multiple GPUs
+        https://github.com/Lightning-AI/pytorch-lightning/issues/2807
+    """
     Log.info("=====================================SEARCH STARTED==============================================")
     final_solutions = runner.run(export='json', verbose=True)
     Log.info("=====================================SEARCH COMPLETED============================================")
