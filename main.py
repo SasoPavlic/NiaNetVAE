@@ -13,7 +13,7 @@ from nianetvae.dataloaders.ecg_dataloader import ECG5000DataLoader
 from nianetvae.dataloaders.kpi_dataloader import KPIDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.storage.database import SQLiteConnector
-from nianetvae.vae_run import solve_architecture_problem
+from nianetvae.rnn_vae_architecture_search import solve_architecture_problem
 
 def select_dataloader(config):
     dataset_type = config["data_params"].get("dataset_type", "")
@@ -79,10 +79,10 @@ if __name__ == '__main__':
     datamodule = select_dataloader(config)
     datamodule.setup()
 
-    nianetvae.vae_run.RUN_UUID = RUN_UUID
-    nianetvae.vae_run.config = config
-    nianetvae.vae_run.conn = conn
-    nianetvae.vae_run.datamodule = datamodule
+    nianetvae.rnn_vae_architecture_search.RUN_UUID = RUN_UUID
+    nianetvae.rnn_vae_architecture_search.config = config
+    nianetvae.rnn_vae_architecture_search.conn = conn
+    nianetvae.rnn_vae_architecture_search.datamodule = datamodule
 
     algorithms = []
     if args.algorithms is not None:

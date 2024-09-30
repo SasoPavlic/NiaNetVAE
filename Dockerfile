@@ -41,7 +41,7 @@ COPY nianetvae/experiments /app/nianetvae/experiments
 COPY nianetvae/models /app/nianetvae/models
 
 COPY nianetvae/__init__.py /app/nianetvae/__init__.py
-COPY nianetvae/vae_run.py /app/nianetvae/vae_run.py
+COPY nianetvae/rnn_vae_architecture_search.py /app/nianetvae/rnn_vae_architecture_search.py
 
 COPY tests/test_model.py /app/tests/test_model.py
 COPY tests/__init__.py /app/tests/__init__.py
