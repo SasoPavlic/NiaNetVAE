@@ -10,6 +10,7 @@ from lightning.pytorch.callbacks import EarlyStopping
 import nianetvae
 from log import Log
 from nianetvae.dataloaders.ecg_dataloader import ECG5000DataLoader
+from nianetvae.dataloaders.kpi_dataloader import KPIDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.storage.database import SQLiteConnector
 from nianetvae.vae_run import solve_architecture_problem
@@ -21,6 +22,7 @@ def select_dataloader(config):
     dataloader_switch = {
         "YahooA1": YahooA1DataLoader,
         "ECG5000": ECG5000DataLoader,
+        "KPI": KPIDataLoader,
     }
 
     # Get the appropriate DataLoader class based on the dataset_type
