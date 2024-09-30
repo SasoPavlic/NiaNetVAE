@@ -40,6 +40,9 @@ RUN pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 -f https://download
 
 # Creating folders for a project:
 RUN mkdir data
+RUN mkdir configs
+COPY configs /app/configs
+COPY data /app/data
 
 # The code to run when container is started:
 COPY nianetvae/niapy_extension /app/nianetvae/niapy_extension

@@ -31,8 +31,8 @@ class RNNVAE(BaseVAE, nn.Module):
         y5: activation function
         y8: optimizer algorithm.
         """
-        n_features = kwargs['model_params']['n_features']
-        seq_len = kwargs['model_params']['seq_len']
+        n_features = kwargs['data_params']['n_features']
+        seq_len = kwargs['data_params']['seq_len']
         batch_size = kwargs['data_params']['batch_size']
 
         self.id = str(int(time.time())).strip()

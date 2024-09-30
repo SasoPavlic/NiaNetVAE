@@ -10,8 +10,27 @@ from lightning.pytorch.callbacks import EarlyStopping
 import nianetvae
 from log import Log
 from nianetvae.dataloaders.ecg_dataloader import ECG5000DataLoader
+from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.storage.database import SQLiteConnector
 from nianetvae.vae_run import solve_architecture_problem
+
+def select_dataloader(config):
+    dataset_type = config["data_params"].get("dataset_type", "")
+
+    # Define a mapping of dataset types to DataLoader classes
+    dataloader_switch = {
+        "YahooA1": YahooA1DataLoader,
+        "ECG5000": ECG5000DataLoader,
+    }
+
+    # Get the appropriate DataLoader class based on the dataset_type
+    DataLoaderClass = dataloader_switch.get(dataset_type)
+
+    if DataLoaderClass is None:
+        raise ValueError(f"Unsupported dataset type: {dataset_type}")
+
+    # Initialize the DataLoader with the corresponding parameters
+    return DataLoaderClass(**config["data_params"])
 
 if __name__ == '__main__':
 
@@ -55,7 +74,7 @@ if __name__ == '__main__':
     conn = SQLiteConnector(config['logging_params']['db_storage'], f"solutions")  # _{RUN_UUID}")
     seed_everything(config['exp_params']['manual_seed'], True)
 
-    datamodule = ECG5000DataLoader(**config["data_params"])
+    datamodule = select_dataloader(config)
     datamodule.setup()
 
     nianetvae.vae_run.RUN_UUID = RUN_UUID

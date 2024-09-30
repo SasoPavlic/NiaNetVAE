@@ -30,7 +30,8 @@ RUN pip3 install -r requirements.txt --extra-index-url https://download.pytorch.
 
 RUN mkdir data
 RUN mkdir configs
-#COPY configs /app/configs
+COPY configs /app/configs
+COPY data /app/data
 
 # The code to run when container is started:
 COPY nianetvae/niapy_extension /app/nianetvae/niapy_extension

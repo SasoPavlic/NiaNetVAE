@@ -1,25 +1,25 @@
-model_params:
-  name: 'RNNVAE'
-  seq_len: 140
-  n_features: 1 #Multiple features problem https://stackoverflow.com/questions/71565854/lstm-autoencoder-set-up-for-multiple-features-using-pytorch
+nia_search:
+  evaluations: 100
+  runs: 1
+  algorithms:
+    - particle_swarm
+    - genetic_algorithm
+    - firefly_algorithm
+    - differential_evolution
+    - self_adaptive_differential_evolution
 
 data_params:
-  data_path: "data/"
+  dataset_type: "ECG5000"  # Can be "YahooA1" or "ECG5000"
+  data_path: "data/ecg5000_dataset/"
+  seq_len: 140 # 140, 250
+  n_features: 1 #Multiple features problem https://stackoverflow.com/questions/71565854/lstm-autoencoder-set-up-for-multiple-features-using-pytorch
   data_percentage: 100
-  batch_size: 20
+  batch_size: 10
   train_size: 70
   val_size: 10
   test_size: 20
   num_workers: 0
-  channel_dim: 3
-  horizontal_dim: 304
-  vertical_dim: 304
   pin_memory: True
-
-exp_params:
-  weight_decay: 0.0
-  kld_weight: 0.1
-  manual_seed: 1265
 
 trainer_params:
   min_epochs: 5
@@ -31,22 +31,6 @@ early_stop:
   min_delta: 0.00
   mode: "min"
 
-logging_params:
-  name: "RNNVAE"
-  save_dir: "logs/"
-  db_storage: "logs/solution.db"
-  logger_file: "RNNAutoencoder.log"
-
-nia_search:
-  evaluations: 100
-  runs: 1
-  algorithms:
-    - particle_swarm
-    - genetic_algorithm
-    - firefly_algorithm
-    - differential_evolution
-    - self_adaptive_differential_evolution
-
 fine_tune_lr_finder:
   tune_n_epochs: 5
   lr_finder:
@@ -55,3 +39,17 @@ fine_tune_lr_finder:
     attr_name: "learning_rate"
     update_attr: True
     early_stop_threshold: # None # https://github.com/Lightning-AI/lightning/issues/4846#issuecomment-1014148839
+
+model_params:
+  name: 'RecurrentVariationalAutoencoder'
+
+exp_params:
+  weight_decay: 0.001
+  kld_weight: 0.1
+  manual_seed: 1265
+
+logging_params:
+  name: "RNNVAE"
+  logger_file: "RNNAutoencoder.log"
+  save_dir: "logs/"
+  db_storage: "logs/solution.db"

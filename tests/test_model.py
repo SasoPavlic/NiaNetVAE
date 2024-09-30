@@ -53,8 +53,8 @@ def fittest_model(existing_model, **kwargs):
     if existing_model:
         model = torch.load(kwargs["model_path"])
     else:
-        model = vae_models[config['model_params']['name']](kwargs["solution"], **config)
-        experiment = RNNVAExperiment(model, config['exp_params'], config['model_params']['n_features'])
+        model = vae_models[config['data_params']['name']](kwargs["solution"], **config)
+        experiment = RNNVAExperiment(model, config['exp_params'], config['data_params']['n_features'])
         config['trainer_params']['max_epochs'] = model.num_epochs
         tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'] + 'all_models/',
                                       name=str("Manual" + "_" + model.hash_id))

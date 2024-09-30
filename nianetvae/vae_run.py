@@ -37,8 +37,8 @@ def calculate_fitness(model, experiment):
         C_LAYERS = 10000
         C_BOTTLENECK = 1000
 
-        max_layers, min_layers = config['model_params']['seq_len'], 0
-        max_bottleneck, min_bottleneck = config['model_params']['seq_len'], 0
+        max_layers, min_layers = config['data_params']['seq_len'], 0
+        max_bottleneck, min_bottleneck = config['data_params']['seq_len'], 0
 
         normalized_num_layers = experiment.metrics.normalize(len(model.encoding_layers), min_layers, max_layers)
         normalized_bottleneck = experiment.metrics.normalize(model.bottleneck_size, min_bottleneck, max_bottleneck)
@@ -129,7 +129,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                   # strategy=DDPPlugin(find_unused_parameters=False),
                                   **config['trainer_params'])
 
-                Log.info(f"======= Training {config['model_params']['name']} =======")
+                Log.info(f"======= Training {config['logging_params']['name']} =======")
                 start_time = datetime.now()
                 Log.info(f'\nTraining start: {start_time.strftime("%Y-%m-%d %H:%M:%S")}')
                 trainer.fit(experiment, datamodule=datamodule)

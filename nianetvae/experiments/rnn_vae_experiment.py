@@ -73,7 +73,7 @@ class RNNVAExperiment(LightningModule):
         self.model_path = kwargs['logging_params']['model_path']
         self.learning_rate = 0.01
         self.params = kwargs['exp_params']
-        self.seq_len = kwargs['model_params']['seq_len']
+        self.seq_len = kwargs['data_params']['seq_len']
         self.curr_device = None
         self.hold_graph = False
         self.train_loss = None
