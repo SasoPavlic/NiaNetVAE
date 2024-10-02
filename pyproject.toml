@@ -34,7 +34,9 @@ pymannkendall = "^1.4.3"
 mk = "^2.4.1"
 seaborn = "^0.13.0"
 plotly = "^5.18.0"
-
+termcolor = "^2.4.0"
+statsmodels = "^0.14.3"
+# termcolor and statsmodels can be deleted after CARLA repository is not tested with same poetry enviroment.
 
 
 [build-system]

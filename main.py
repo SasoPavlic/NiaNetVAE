@@ -11,6 +11,7 @@ import nianetvae
 from log import Log
 from nianetvae.dataloaders.ecg_dataloader import ECG5000DataLoader
 from nianetvae.dataloaders.kpi_dataloader import KPIDataLoader
+from nianetvae.dataloaders.msl_dataloader import MSLDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.storage.database import SQLiteConnector
 from nianetvae.rnn_vae_architecture_search import solve_architecture_problem
@@ -23,6 +24,7 @@ def select_dataloader(config):
         "YahooA1": YahooA1DataLoader,
         "ECG5000": ECG5000DataLoader,
         "KPI": KPIDataLoader,
+        "MSL": MSLDataLoader,
     }
 
     # Get the appropriate DataLoader class based on the dataset_type

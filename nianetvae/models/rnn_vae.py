@@ -204,7 +204,10 @@ class RNNVAE(BaseVAE, nn.Module):
             x = self.activation(x)
 
         # Apply the final decoding layer to the tensor to obtain the reconstructed output.
+        print(f"X shape: {x.shape}")
+        print(f"Last layer in decoder: {self.decoding_layers[-1]}")
         reconstructed = self.decoding_layers[-1](x)
+        print(f"Reconstructed shape: {reconstructed.shape}")
 
         # Return the reconstructed tensor.
         return reconstructed
@@ -272,6 +275,8 @@ class RNNVAE(BaseVAE, nn.Module):
         log_var = kwargs['log_var']
 
         kld_weight = kwargs['M_N']  # Account for the minibatch samples from the dataset
+        print(f"Input shape: {input.shape}")
+        print(f"Recons shape: {recons.shape}")
         recons_loss = F.mse_loss(recons, input)
 
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0)
