@@ -154,7 +154,7 @@ def solve_architecture_problem(selected_algorithms):
     """
     Dimensionality:
     y1: layer type
-    y2: number of neurons per layer,
+    y2: layer step,
     y3: number of layers,
     y4: activation function
     y5: optimizer algorithm.

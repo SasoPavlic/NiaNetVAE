@@ -11,7 +11,7 @@ from nianetvae.dataloaders import BaseDataLoader
 #TODO https://chatgpt.com/share/66e5e480-273c-8002-9bf5-8028e4ccc8a8
 # Custom dataset class for Yahoo A1Benchmark
 class YahooA1Dataset(Dataset):
-    def __init__(self, data, targets, window_size=250, stride=1):
+    def __init__(self, data, targets, window_size=200, stride=1):
         self.data = torch.tensor(data).float()
         self.targets = torch.tensor(targets).float()
         self.window_size = window_size
