@@ -22,8 +22,8 @@ data_params:
   pin_memory: True
 
 trainer_params:
-  min_epochs: 5
-  max_epochs: 20
+  min_epochs: 2
+  max_epochs: 2
 
 early_stop:
   monitor: "val_loss"

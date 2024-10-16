@@ -3,113 +3,156 @@ import time
 from datetime import datetime
 import numpy as np
 import torch
-import torchmetrics
-from torch import tensor
+from torch import Tensor
+import torch.nn as nn
+import torch.nn.functional as F
+import random
+import hashlib
+from tabulate import tabulate
 
 from log import Log
 from .base import BaseVAE
 from .types_ import *
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.utils
-import torch.distributions
-import random
-import hashlib
-from tabulate import tabulate
 
 
 class RNNVAE(BaseVAE, nn.Module):
     def __init__(self, solution, **kwargs) -> None:
         super(RNNVAE, self).__init__()
-
         """
         Dimensionality:
         y1: topology shape,
-        y2: layer type
-        y3: number of neurons per layer,
+        y2: layer type,
+        y3: layer step,
         y4: number of layers,
         y5: activation function
-        y8: optimizer algorithm.
+        y6: optimizer algorithm.
         """
+        # Initialize validity flag
+        self.is_valid = True
+
+        # Extract data parameters
         n_features = kwargs['data_params']['n_features']
         seq_len = kwargs['data_params']['seq_len']
         batch_size = kwargs['data_params']['batch_size']
+        data_shape = kwargs['data_params'].get('data_shape', None)
+
+        # Determine if the data is univariate or multivariate
+        if data_shape is not None:
+            if len(data_shape) == 3:
+                # Multivariate data
+                n_features = data_shape[2]
+                seq_len = data_shape[1]
+                is_univariate = False
+            elif len(data_shape) == 2:
+                # Univariate data
+                n_features = 1
+                seq_len = data_shape[1]
+                is_univariate = True
+            else:
+                raise ValueError(f"Unsupported data shape: {data_shape}")
+        else:
+            # Assume multivariate if data_shape is not provided
+            is_univariate = n_features == 1
+
+        self.is_univariate = is_univariate  # Store for use in other methods
 
         self.id = str(int(time.time())).strip()
         self.dataset_shape = [n_features, seq_len]
         self.encoding_layers = nn.ModuleList()
         self.decoding_layers = nn.ModuleList()
 
-        """ Topology shape is set to symmetrical in our experiment."""
-        # self.topology_shape = self.map_shape(solution[0])
-        self.layer_type = self.map_layer_type(solution[0])
-        self.layer_step = self.map_layer_step(solution[1], self.dataset_shape)
-        # https://ai.stackexchange.com/questions/3156/how-to-select-number-of-hidden-layers-and-number-of-memory-cells-in-an-lstm
-        self.num_layers = self.map_num_layers(solution[2], self.layer_step, self.dataset_shape)
-        self.activation = self.map_activation(solution[3])
-
-        self.bottleneck_size = 0
-        self.seq_len = seq_len
         self.n_features = n_features
+        self.seq_len = seq_len
         self.batch_size = batch_size
 
-        self.generate_autoencoder(self.layer_type,
-                                  self.num_layers,
-                                  self.dataset_shape,
-                                  self.layer_step)
+        # Corrected indices for solution
+        y1 = solution[0]  # topology shape
+        y2 = solution[1]  # layer type
+        y3 = solution[2]  # layer step
+        y4 = solution[3]  # number of layers
+        y5 = solution[4]  # activation function
+        y6 = solution[5]  # optimizer algorithm
 
-        """For testing:"""
-        # self.encoding_layers.append(self.get_layer_object(
-        #     input_size=1,
-        #     hidden_size=140,
-        #     num_layers=1,
-        #     batch_first=True
-        # ))
-        #
-        # self.encoding_layers.append(self.get_layer_object(
-        #     input_size=140,
-        #     hidden_size=70,
-        #     num_layers=1,
-        #     batch_first=True
-        # ))
-        #
-        # self.encoding_layers.append(self.get_layer_object(
-        #     input_size=70,
-        #     hidden_size=35,
-        #     num_layers=1,
-        #     batch_first=True
-        # ))
-        # self.bottleneck_size = 35
-        # self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
-        # self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
-        #
-        # self.decoding_layers.append(self.get_layer_object(
-        #     input_size=35,
-        #     hidden_size=70,
-        #     num_layers=1,
-        #     batch_first=True
-        # ))
-        #
-        # self.decoding_layers.append(self.get_layer_object(
-        #     input_size=70,
-        #     hidden_size=140,
-        #     num_layers=1,
-        #     batch_first=True
-        # ))
-        #
-        # self.decoding_layers.append(self.get_layer_object(
-        #     input_size=140,
-        #     hidden_size=140,
-        #     num_layers=1,
-        #     batch_first=True
-        # ))
-        # self.decoding_layers.append(nn.Linear(140, self.seq_len))
+        self.shape = self.map_shape(y1)
+        self.layer_type = self.map_layer_type(y2)
+        self.activation = self.map_activation(y5)
+        self.symmetrical = self.shape == "SYMMETRICAL"
 
-        self.optimizer_name = self.map_optimizer(solution[4], self)
+        # Map optimizer regardless of validity
+        self.optimizer_name = self.map_optimizer(y6, self)
+
+        # Adjust calculations based on univariate or multivariate data
+        if self.is_univariate:
+            # For univariate data, set an initial hidden dimension
+            # Compute layer_step
+            self.layer_step = self.map_layer_step_univariate(y3, seq_len)
+            print(f"layer_step: {self.layer_step}")
+            # Compute num_layers
+            self.num_layers = self.map_num_layers_univariate(y4, seq_len)
+            print(f"num_layers: {self.num_layers}")
+            # Calculate encoder hidden dimensions
+            encoder_hidden_dims = self.calculate_univariate_hidden_dims(seq_len, self.layer_step, self.num_layers)
+            if encoder_hidden_dims is None:
+                self.is_valid = False
+                print("Invalid model configuration detected during encoder hidden dimensions calculation.")
+                # Set default values for attributes
+                self.bottleneck_size = 0
+                self.hidden_dims = []
+                self.encoding_layers = nn.ModuleList()
+                self.decoding_layers = nn.ModuleList()
+                self.get_hash()
+                return
+            print(f"encoder_hidden_dims: {encoder_hidden_dims}")
+            self.hidden_dims = encoder_hidden_dims
+            print(f"hidden_dims: {self.hidden_dims}")
+            self.bottleneck_size = encoder_hidden_dims[-1]
+            print(f"bottleneck_size: {self.bottleneck_size}")
+        else:
+            # For multivariate data, compute hidden_dim, layer_step, num_layers
+            self.layer_step = self.map_layer_step(y3, self.n_features)
+            print(f"layer_step: {self.layer_step}")
+            self.num_layers = self.map_num_layers(y4, self.n_features)
+            print(f"num_layers: {self.num_layers}")
+            # Calculate encoder hidden dimensions
+            encoder_hidden_dims = self.calculate_hidden_dims(self.n_features, self.layer_step, self.num_layers)
+            if encoder_hidden_dims is None:
+                self.is_valid = False
+                print("Invalid model configuration detected during encoder hidden dimensions calculation.")
+                # Set default values for attributes
+                self.bottleneck_size = 0
+                self.hidden_dims = []
+                self.encoding_layers = nn.ModuleList()
+                self.decoding_layers = nn.ModuleList()
+                self.get_hash()
+                return
+            print(f"encoder_hidden_dims: {encoder_hidden_dims}")
+
+            self.hidden_dims = encoder_hidden_dims
+            print(f"hidden_dims: {self.hidden_dims}")
+            self.bottleneck_size = encoder_hidden_dims[-1]
+            print(f"bottleneck_size: {self.bottleneck_size}")
+
+        # If the model is invalid, exit the initialization
+        if not self.is_valid:
+            # Ensure all necessary attributes are set before returning
+            self.get_hash()
+            return
+
+        # Generate the autoencoder with dynamic parameters
+        self.generate_autoencoder(
+            self.layer_type,
+            self.num_layers,
+            self.dataset_shape,
+            self.layer_step,
+            self.hidden_dims,
+            symmetrical=self.symmetrical  # Use the mapped shape
+        )
+
         self.get_hash()
         outputs = []
 
         outputs.append([self.hash_id,
+                        self.shape,
                         self.layer_type,
                         self.layer_step,
                         self.num_layers,
@@ -120,19 +163,19 @@ class RNNVAE(BaseVAE, nn.Module):
                         self.decoding_layers])
 
         Log.info(tabulate(outputs, headers=["ID",
-                                         "Shape (y1)",
-                                         "Layer type (y1)",
-                                         "Layer step (y2)",
-                                         "Layers (y3)",
-                                         "Activation func. (y4)",
-                                         "Optimizer (y5)",
-                                         "Bottleneck size",
-                                         "Encoder",
-                                         "Decoder", ], tablefmt="pretty"))
+                                            "Shape (y1)"
+                                            "Layer type (y2)",
+                                            "Layer step (y3)",
+                                            "Layers (y4)",
+                                            "Activation func. (y5)",
+                                            "Optimizer (y6)",
+                                            "Bottleneck size",
+                                            "Encoder",
+                                            "Decoder"], tablefmt="pretty"))
 
     def get_hash(self):
-
-        self.hash_id = hashlib.sha1(str(str(self.layer_type) +
+        self.hash_id = hashlib.sha1(str(str(self.shape) +
+                                        str(self.layer_type) +
                                         str(self.layer_step) +
                                         str(self.num_layers) +
                                         str(self.activation_name) +
@@ -142,117 +185,91 @@ class RNNVAE(BaseVAE, nn.Module):
                                         str(self.decoding_layers)).encode('utf-8')).hexdigest()
         return self.hash_id
 
-    def encode(self, input: Tensor) -> List[Tensor]:
-        """
-        Encodes the input by passing through the encoder network
-        and returns the latent codes.
-        :param input: (Tensor) Input tensor to encoder [N x seq_len x n_features]
-        :return: (Tensor) List of latent codes [mu, log_var]
-        """
+    def encode(self, x: Tensor) -> List[Tensor]:
+        print(f"Input to encoder: {x.shape}")
 
-        # Reshape the input tensor to match the expected dimensions for the encoder.
-        x = input.reshape((self.batch_size, self.seq_len, self.n_features))
+        # Pass through encoder layers
+        for i, layer in enumerate(self.encoding_layers[:-2]):
+            if isinstance(layer, (nn.LSTM, nn.GRU, nn.RNN)):
+                x, _ = layer(x)
+                x = self.activation(x)
+                print(f"Shape after encoder layer {i}: {x.shape}")
+            else:
+                x = layer(x)
+                x = self.activation(x)
+                print(f"Shape after encoder layer {i}: {x.shape}")
 
-        # Initialize hidden and cell states to None for the first iteration.
-        hidden_n, cell_n = None, None
+        # Use the output from the last time step
+        x_last = x[:, -1, :]
+        print(f"Encoder output at last time step: {x_last.shape}")
 
-        # Iterate through the encoding layers, excluding the last two (which are fully connected layers).
-        for layer in self.encoding_layers[:-2]:
-            if layer.mode == 'LSTM':
-                # Apply LSTM layer to the input tensor and update hidden and cell states.
-                x, (hidden_n, cell_n) = layer(x)
-            elif layer.mode == 'GRU' or layer.mode == 'RNN_TANH':
-                # Apply GRU or RNN_TANH layer to the input tensor and update hidden state.
-                x, hidden_n = layer(x)
-            # Apply the activation function to the output of the layer.
-            x = self.activation(x)
+        # Apply the final linear layers to obtain mu and log_var
+        mu = self.encoding_layers[-2](x_last)
+        print(f"Shape after Linear layer for mu: {mu.shape}")
 
-        # Reshape the hidden state to match the dimensions expected by the fully connected layers.
-        hidden_n = hidden_n.reshape((self.batch_size, self.bottleneck_size))
+        log_var = self.encoding_layers[-1](x_last)
+        print(f"Shape after Linear layer for log_var: {log_var.shape}")
 
-        # Apply the second-to-last encoding layer to the hidden state to obtain the mean (mu) of the latent distribution.
-        mu = self.encoding_layers[-2](hidden_n)
-
-        # Apply the last encoding layer to the hidden state to obtain the log variance (log_var) of the latent distribution.
-        log_var = self.encoding_layers[-1](hidden_n)
-
-        # Return the latent codes (mu and log_var).
         return [mu, log_var]
 
     def decode(self, z: Tensor) -> Tensor:
-        """
-        Maps the given latent codes onto the input space (e.g., time series or image).
-        :param z: (Tensor) [B x D] Latent tensor
-        :return: (Tensor) [B x seq_len x n_features] Reconstructed output
-        """
+        print(f"Latent input shape: {z.shape}")
 
-        # Reshape the latent code tensor z to match the input dimensions for the decoding layers.
-        x = z.reshape((self.batch_size, self.bottleneck_size))
+        # Map latent vector to decoder input
+        decoder_input = z
+        print(f"Decoder input: {decoder_input.shape}")
+        decoder_input = decoder_input.unsqueeze(1).repeat(1, self.seq_len, 1)
+        print(f"Decoder input after unsqueeze and repeat: {decoder_input.shape}")
 
-        # Initialize hidden and cell states (if applicable).
-        hidden_n, cell_n = None, None
+        x = decoder_input
 
-        # Iterate through the decoding layers, excluding the last one (which outputs the reconstructed tensor).
-        for layer in self.decoding_layers[:-1]:
-            if layer.mode == 'LSTM':
-                # Apply LSTM layer to the input tensor and update hidden and cell states.
-                x, (hidden_n, cell_n) = layer(x)
-            elif layer.mode == 'GRU' or layer.mode == 'RNN_TANH':
-                # Apply GRU or RNN_TANH layer to the input tensor and update hidden state.
-                x, hidden_n = layer(x)
-            # Apply the activation function to the output of the layer.
-            x = self.activation(x)
+        # Pass through decoder layers
+        for i, layer in enumerate(self.decoding_layers[:-1]):
+            if isinstance(layer, (nn.LSTM, nn.GRU, nn.RNN)):
+                x, _ = layer(x)
+                x = self.activation(x)
+                print(f"Shape after decoder layer {i}: {x.shape}")
+            else:
+                x = layer(x)
+                x = self.activation(x)
+                print(f"Shape after decoder layer {i}: {x.shape}")
 
-        # Apply the final decoding layer to the tensor to obtain the reconstructed output.
-        print(f"X shape: {x.shape}")
-        print(f"Last layer in decoder: {self.decoding_layers[-1]}")
-        reconstructed = self.decoding_layers[-1](x)
-        print(f"Reconstructed shape: {reconstructed.shape}")
-
-        # Return the reconstructed tensor.
-        return reconstructed
+        # Apply decoder output layer to map to n_features
+        batch_size, seq_len, hidden_dim = x.size()
+        x = x.contiguous().view(-1, hidden_dim)  # [batch_size*seq_len, hidden_dim]
+        x = self.decoding_layers[-1](x)  # [batch_size*seq_len, n_features]
+        x = x.view(batch_size, seq_len, self.n_features)
+        print(f"Reconstructed shape: {x.shape}")
+        return x
 
     def reparameterize(self, mu: Tensor, logvar: Tensor) -> Tensor:
-        """
-        Reparameterization trick to sample from N(mu, var) from
-        N(0,1).
-        :param mu: (Tensor) Mean of the latent Gaussian [B x D]
-        :param logvar: (Tensor) Standard deviation of the latent Gaussian [B x D]
-        :return: (Tensor) [B x D]
-        """
-        # Calculate the standard deviation from the log variance.
         std = torch.exp(0.5 * logvar)
-
-        # Generate random noise tensor eps with the same shape as the standard deviation tensor.
         eps = torch.randn_like(std)
+        z = mu + eps * std
+        print(f"Sampled latent vector z: {z.shape}")
+        return z
 
-        # Compute the latent variable z using the reparameterization trick.
-        return (eps * std) + mu
-
-    def forward(self, input: Tensor, **kwargs) -> List[Tensor]:
-
-        # Extract signal and target from the input dictionary.
+    def forward(self, input: dict, **kwargs) -> dict:
+        # Extract signal from the input dictionary.
         signal = input['signal']
-        target = input['target']
 
-        # Transpose the input tensor to swap dimensions for compatibility with the encoder.
-        input = signal.transpose(0, 1)
+        # Reshape data if necessary
+        if signal.dim() == 2:
+            # Univariate data: add an extra dimension
+            signal = signal.unsqueeze(-1)
 
         # Encode the input signal to obtain the latent distribution parameters (mu and log_var).
-        mu, log_var = self.encode(input)
+        mu, log_var = self.encode(signal)
 
         # Sample the latent variable z from the latent distribution using the reparameterization trick.
         z = self.reparameterize(mu, log_var)
-
-        # Swap dimensions back to the original shape (not needed if not transposed earlier).
-        input = input.transpose(0, 1)
 
         # Decode the latent variable z to reconstruct the original input.
         reconstructed = self.decode(z)
 
         # Create a dictionary containing the original signal, reconstructed signal, and latent distribution parameters.
         response = {
-            'signal': input,
+            'signal': signal,
             'reconstructed': reconstructed,
             'mu': mu,
             'log_var': log_var
@@ -262,13 +279,6 @@ class RNNVAE(BaseVAE, nn.Module):
         return response
 
     def loss_function(self, curr_device: str = 'cuda', **kwargs) -> dict:
-        """
-        Computes the VAE loss function.
-        KL(N(\mu, \sigma), N(0, 1)) = \log \frac{1}{\sigma} + \frac{\sigma^2 + \mu^2}{2} - \frac{1}{2}
-        :param args:
-        :param kwargs:
-        :return:
-        """
         input = kwargs['signal']
         recons = kwargs['reconstructed']
         mu = kwargs['mu']
@@ -276,7 +286,7 @@ class RNNVAE(BaseVAE, nn.Module):
 
         kld_weight = kwargs['M_N']  # Account for the minibatch samples from the dataset
         print(f"Input shape: {input.shape}")
-        print(f"Recons shape: {recons.shape}")
+        print(f"Reconstructed shape: {recons.shape}")
         recons_loss = F.mse_loss(recons, input)
 
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0)
@@ -288,33 +298,16 @@ class RNNVAE(BaseVAE, nn.Module):
     def sample(self,
                num_samples: int,
                current_device: int, **kwargs) -> Tensor:
-        """
-        Samples from the latent space and return the corresponding
-        image space map.
-        :param num_samples: (Int) Number of samples
-        :param current_device: (Int) Device to run the model
-        :return: (Tensor)
-        """
-        z = torch.randn(num_samples, self.bottleneck_size)
-
-        z = z.to(current_device)
-
+        z = torch.randn(num_samples, self.bottleneck_size).to(current_device)
         samples = self.decode(z)
         return samples
 
     def generate(self, x: Tensor, **kwargs) -> Tensor:
-        """
-        Given an input image x, returns the reconstructed image
-        :param x: (Tensor) [B x C x H x W]
-        :return: (Tensor) [B x C x H x W]
-        """
-        reconstructed = self.forward(x)[0]
+        reconstructed = self.forward(x)['reconstructed']
         return reconstructed
 
     def get_layer_object(self, input_size, hidden_size, num_layers, batch_first):
-
-        # Ensure hidden_size is of type int
-        hidden_size = int(hidden_size) if isinstance(hidden_size, (np.integer, np.int64)) else hidden_size
+        hidden_size = int(hidden_size) if isinstance(hidden_size, (np.integer, np.int64, float)) else hidden_size
 
         if self.layer_type == 'LSTM':
             return nn.LSTM(
@@ -337,336 +330,225 @@ class RNNVAE(BaseVAE, nn.Module):
                 input_size=input_size,
                 hidden_size=hidden_size,
                 num_layers=num_layers,
+                nonlinearity='tanh',
                 batch_first=batch_first
             )
 
     def map_shape(self, gene):
-        gene = np.array([gene])
-        bins = np.array([0.0, 0.5])
-        inds = np.digitize(gene, bins)
+        gene = float(gene)
+        shapes = ["SYMMETRICAL", "A-SYMMETRICAL"]
+        num_shapes = len(shapes)
+        index = int(gene * num_shapes)
+        if index >= num_shapes:
+            index = num_shapes - 1  # Adjust index if gene is 1.0 or slightly above due to floating-point precision
 
-        if inds[0] - 1 == 0:
-            return "SYMMETRICAL"
-
-        elif inds[0] - 1 == 1:
-            return "A-SYMMETRICAL"
-
+        if 0 <= index < num_shapes:
+            return shapes[index]
         else:
-            raise ValueError(f"Value not between boundaries 0.0 and 1.0. Value is: {inds[0] - 1}")
+            raise ValueError(f"Gene value {gene} is out of bounds [0.0, 1.0].")
 
     def map_layer_type(self, gene):
-        gene = np.array([gene])
-        bins = np.array([0.33, 0.66, 1.01])
-        inds = np.digitize(gene, bins)
-        bin = inds[0]
+        gene = float(gene)
+        layer_types = ["LSTM", "GRU", "RNN_TANH"]
+        num_types = len(layer_types)
+        index = int(gene * num_types)
+        if index >= num_types:
+            index = num_types - 1  # Adjust index if gene is 1.0 or slightly above due to floating-point precision
 
-        if bin == 0:
-            return "LSTM"
-
-        elif bin == 1:
-            return "GRU"
-
-        elif bin == 2:
-            return "RNN_TANH"
-
+        if 0 <= index < num_types:
+            return layer_types[index]
         else:
-            raise ValueError(f"Value not between boundaries 0.0 and 1.0. Value is: {inds[0] - 1}")
-
-    def map_layer_step(self, gene, dataset_shape):
-        gene = np.array([gene])
-        bins = []
-        value = 1 / dataset_shape[1]
-        step = value
-        for col in range(0, dataset_shape[1]):
-            bins.append(step)
-            step += value
-        bins[-1] = 1.01
-        inds = np.digitize(gene, bins)
-        return inds[0]
-
-    def map_num_layers(self, gene, layer_step, dataset_shape):
-        if layer_step == 0:
-            max_layers = dataset_shape[1]
-            return max_layers
-
-        else:
-            max_layers = round(dataset_shape[1] / layer_step)
-
-        if max_layers == 1:
-            return 1
-
-        else:
-            gene = np.array([gene])
-
-            bins = []
-            value = 1 / max_layers
-            step = value
-            for col in range(0, max_layers):
-                bins.append(step)
-                step += value
-            bins[-1] = 1.01
-            inds = np.digitize(gene, bins)
-
-            return int(inds[0])
+            raise ValueError(f"Gene value {gene} is out of bounds [0.0, 1.0].")
 
     def map_activation(self, gene):
-        gene = np.array([gene])
-        bins = np.array([0.0, 0.125, 0.25, 0.375, 0.500, 0.625, 0.750, 0.875, 1.01])
-        inds = np.digitize(gene, bins)
+        gene = float(gene)
+        activation_functions = [
+            F.elu,
+            F.relu,
+            F.leaky_relu,
+            F.rrelu,
+            F.selu,
+            F.celu,
+            F.gelu,
+            torch.tanh
+        ]
+        activation_names = [
+            "ELU",
+            "ReLU",
+            "Leaky ReLU",
+            "RReLU",
+            "SELU",
+            "CELU",
+            "GELU",
+            "Tanh"
+        ]
 
-        if inds[0] - 1 == 0:
-            self.activation_name = "ELU"
-            return F.elu
+        num_activations = len(activation_functions)
+        index = int(gene * num_activations)
+        if index >= num_activations:
+            index = num_activations - 1  # Adjust index if gene is 1.0 or slightly above due to floating-point precision
 
-        elif inds[0] - 1 == 1:
-            self.activation_name = "RELU"
-            return F.relu
-
-        elif inds[0] - 1 == 2:
-            self.activation_name = "Leaky RELU"
-            return F.leaky_relu
-
-        elif inds[0] - 1 == 3:
-            self.activation_name = "RRELU"
-            return F.rrelu
-
-        elif inds[0] - 1 == 4:
-            self.activation_name = "SELU"
-            return F.selu
-
-        elif inds[0] - 1 == 5:
-            self.activation_name = "CELU"
-            return F.celu
-
-        elif inds[0] - 1 == 6:
-            self.activation_name = "GELU"
-            return F.gelu
-
-        elif inds[0] - 1 == 7:
-            self.activation_name = "TANH"
-            return torch.tanh
-
+        if 0 <= index < num_activations:
+            self.activation_name = activation_names[index]
+            return activation_functions[index]
         else:
+            raise ValueError(f"Gene value {gene} is out of bounds [0.0, 1.0).")
 
-            raise ValueError(f"Value not between boundaries 0.0 and 1.0. Value is: {inds[0] - 1}")
+    def map_layer_step(self, gene, n_features):
+        gene = float(gene)
+        min_step = 1
+        max_step = n_features
+        layer_step = int(min_step + gene * (max_step - min_step))
+        layer_step = max(min(layer_step, max_step), min_step)
+        print(f"Mapped layer_step: {layer_step}")
+        return layer_step
 
-    def generate_autoencoder(self, layer_type, layers, dataset_shape, layer_step, shape="SYMMETRICAL"):
+    def map_layer_step_univariate(self, gene, seq_len):
+        gene = float(gene)
+        min_step = 1
+        max_step = max(1, seq_len // 10)  # Adjust the divisor as needed
+        layer_step = int(min_step + gene * (max_step - min_step))
+        layer_step = max(min(layer_step, max_step), min_step)
+        print(f"Mapped layer_step (univariate): {layer_step}")
+        return layer_step
 
-        if shape == "SYMMETRICAL":
+    def map_num_layers(self, gene, n_features):
+        gene = float(gene)
+        min_layers = 1
+        max_layers = n_features  # Set maximum number of layers to n_features
+        num_layers = int(min_layers + gene * (max_layers - min_layers))
+        num_layers = max(min(num_layers, max_layers), min_layers)
+        print(f"Mapped num_layers: {num_layers}")
+        return num_layers
 
-            i = dataset_shape[1]
-            z = dataset_shape[1] - layer_step
-            num_of_layers = layers
-            input = self.n_features
-            hidden_dim = self.seq_len
-            last_decoder_layer_flag = True
+    def map_num_layers_univariate(self, gene, seq_len):
+        gene = float(gene)
+        min_layers = 1
+        max_layers = max(2, seq_len // 20)  # Adjust the divisor as needed
+        num_layers = int(min_layers + gene * (max_layers - min_layers))
+        num_layers = max(min(num_layers, max_layers), min_layers)
+        print(f"Mapped num_layers (univariate): {num_layers}")
+        return num_layers
 
-            while layers != 0:
-                """Minimum depth reached"""
-                # TODO Check negatives
-                if hidden_dim < 1:
-                    break
+    def calculate_hidden_dims(self, input_dim, layer_step, num_layers):
+        hidden_dims = []
+        current_dim = input_dim
 
-                if num_of_layers == 1:
-                    self.encoding_layers.append(self.get_layer_object(
-                        input_size=input,
-                        hidden_size=hidden_dim,
-                        num_layers=1,
-                        batch_first=True
-                    ))
-
-                    self.encoding_layers.append(self.get_layer_object(
-                        input_size=hidden_dim,
-                        hidden_size=hidden_dim - layer_step,
-                        num_layers=1,
-                        batch_first=True
-                    ))
-
-                    self.decoding_layers.insert(0, self.get_layer_object(
-                        input_size=hidden_dim - layer_step,
-                        hidden_size=hidden_dim,
-                        num_layers=1,
-                        batch_first=True
-                    ))
-
-                    break
-
-                self.encoding_layers.append(self.get_layer_object(
-                    input_size=input,
-                    hidden_size=hidden_dim,
-                    num_layers=1,
-                    batch_first=True
-                ))
-
-                if last_decoder_layer_flag:
-                    """ Last layer needs to have same input and hidden dims"""
-                    input = input * hidden_dim
-                    last_decoder_layer_flag = False
-
-                self.decoding_layers.insert(0, self.get_layer_object(
-                    input_size=hidden_dim,
-                    hidden_size=input,
-                    num_layers=1,
-                    batch_first=True
-                ))
-
-                input = hidden_dim
-                hidden_dim = hidden_dim - layer_step
-
-                i = i - layer_step
-                z = z - layer_step
-                layers = layers - 1
-
-            if len(self.encoding_layers) == 0:
-                self.bottleneck_size = 0
-            else:
-                self.bottleneck_size = int(self.encoding_layers[-1].hidden_size)
-                self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
-                self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
-                self.decoding_layers.append(nn.Linear(dataset_shape[1], self.seq_len))
-
-        elif shape == "A-SYMMETRICAL":
-            i = dataset_shape[1]
-            z = dataset_shape[1] - layer_step
-
-            input_dimension = 1
-            hidden_dimension = dataset_shape[1]
-
-            if layers == 1:
-                self.encoding_layers.append(self.get_layer_object(
-                    input_size=input_dimension,
-                    hidden_size=hidden_dimension,
-                    num_layers=1,
-                    batch_first=True
-                ))
-
-                self.decoding_layers.insert(0, self.get_layer_object(
-                    input_size=hidden_dimension,
-                    hidden_size=hidden_dimension,
-                    num_layers=1,
-                    batch_first=True
-                ))
-
-            if layers >= 2:
-                random.seed(datetime.now())
-                layers_encoder = random.randint(1, layers)
-                layers_decoder = layers - layers_encoder
-
-                encoder_counter = layers_encoder
-                decoder_counter = layers_decoder
-
-                if layers_decoder == 0:
-                    layers_encoder = layers_encoder - 1
-                    layers_decoder = 1
-
-                    encoder_counter = layers_encoder
-                    decoder_counter = layers_decoder
-
-                while encoder_counter != 0:
-
-                    if hidden_dimension < 1:
-                        hidden_dimension += layer_step
-                        break
-
-                    self.encoding_layers.append(self.get_layer_object(
-                        input_size=input_dimension,
-                        hidden_size=hidden_dimension,
-                        num_layers=1,
-                        batch_first=True
-                    ))
-                    if encoder_counter > 1:
-                        input_dimension = hidden_dimension
-                        hidden_dimension -= layer_step
-                    else:
-                        break
-                    i = i - layer_step
-                    z = z - layer_step
-                    encoder_counter = encoder_counter - 1
-
-                while decoder_counter != 0:
-
-                    if layers_encoder == 1 and layers_decoder >= layers_encoder:
-
-                        for layer in range(layers_decoder):
-                            self.decoding_layers.append(self.get_layer_object(
-                                input_size=dataset_shape[1],
-                                hidden_size=dataset_shape[1],
-                                num_layers=1,
-                                batch_first=True
-                            ))
-                        break
-
-                    if layers_decoder == 1:
-                        self.decoding_layers.insert(0, self.get_layer_object(
-                            input_size=hidden_dimension,
-                            hidden_size=dataset_shape[1],
-                            num_layers=1,
-                            batch_first=True
-                        ))
-                        break
-
-                    layer_step = int((dataset_shape[1] - i) / decoder_counter)  # Make more complex logic
-                    last_i = i
-                    i = i + layer_step
-                    z = z + layer_step
-
-                    if layers_decoder > layers_encoder:
-
-                        self.decoding_layers.append(self.get_layer_object(
-                            input_size=hidden_dimension,
-                            hidden_size=i,
-                            num_layers=1,
-                            batch_first=True
-                        ))
-                        hidden_dimension = i
-
-                    else:
-                        self.decoding_layers.append(self.get_layer_object(
-                            input_size=hidden_dimension,
-                            hidden_size=i,
-                            num_layers=1,
-                            batch_first=True
-                        ))
-                        hidden_dimension += layer_step
-                        input_dimension += layer_step
-
-                    decoder_counter = decoder_counter - 1
-
-            if len(self.encoding_layers) == 0:
-                self.bottleneck_size = 0
-            else:
-                self.bottleneck_size = int(self.encoding_layers[-1].hidden_size)
-                self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
-                self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
-                self.decoding_layers.append(nn.Linear(dataset_shape[1], self.seq_len))
-
-    def map_optimizer(self, gene, architecture):
-        gene = np.array([gene])
-        bins = np.array([0.0, 0.167, 0.334, 0.50, 0.667, 0.834, 1.01])
-        inds = np.digitize(gene, bins)
-
-        """When AE does not have any layers"""
-        if len(list(architecture.parameters())) == 0:
-            architecture.optimizer_name = "Empty"
+        # Pre-check if the given layer_step and num_layers will result in positive hidden dimensions
+        min_hidden_dim = current_dim - layer_step * num_layers
+        if min_hidden_dim <= 0:
+            # Configuration is invalid
+            print("Invalid configuration: layer_step and num_layers combination results in non-positive hidden dimensions.")
             return None
 
-        if inds[0] - 1 == 0:
-            return "Adam"
+        for idx in range(num_layers):
+            current_dim -= layer_step
+            if current_dim <= 0:
+                print("Invalid configuration: layer_step is too large, resulting in non-positive hidden dimensions.")
+                return None
+            hidden_dims.append(int(current_dim))
+        return hidden_dims
 
-        elif inds[0] - 1 == 1:
-            return "Adagrad"
+    def calculate_univariate_hidden_dims(self, h_init, layer_step, num_layers):
+        hidden_dims = []
+        current_dim = h_init
 
-        elif inds[0] - 1 == 2:
-            return "SGD"
+        # Pre-check if the given layer_step and num_layers will result in positive hidden dimensions
+        min_hidden_dim = current_dim - layer_step * num_layers
+        if min_hidden_dim <= 0:
+            # Configuration is invalid
+            print("Invalid configuration: layer_step and num_layers combination results in non-positive hidden dimensions.")
+            return None
 
-        elif inds[0] - 1 == 3:
-            return "RAdam"
+        for idx in range(num_layers):
+            current_dim -= layer_step
+            if current_dim <= 0:
+                print("Invalid configuration: layer_step is too large, resulting in non-positive hidden dimensions.")
+                return None
+            hidden_dims.append(int(current_dim))
+        return hidden_dims
 
-        elif inds[0] - 1 == 4:
-            return "ASGD"
+    def calculate_decoder_hidden_dims(self, start_dim, end_dim, layer_step, num_layers):
+        hidden_dims = []
+        current_dim = start_dim
 
-        elif inds[0] - 1 == 5:
-            return "RPROP"
+        # Pre-check if the given layer_step and num_layers will reach or exceed the end_dim
+        max_possible_dim = current_dim + layer_step * num_layers
+        if max_possible_dim < end_dim:
+            # Configuration is invalid
+            print("Invalid configuration: Decoder cannot reach end_dim with the given layer_step and num_layers.")
+            return None
 
+        for idx in range(num_layers):
+            current_dim += layer_step
+            if current_dim >= end_dim and idx != num_layers - 1:
+                # Adjust current_dim to not exceed end_dim before the last layer
+                current_dim = end_dim
+            hidden_dims.append(int(current_dim))
+        # Ensure the last layer dimension is at least end_dim
+        if hidden_dims and hidden_dims[-1] < end_dim:
+            hidden_dims.append(end_dim)
+        return hidden_dims
+
+    def generate_autoencoder(self, layer_type, num_layers, dataset_shape, layer_step, hidden_dims, symmetrical=True):
+        self.encoder_hidden_dims = hidden_dims
+        encoder_input_size = self.n_features
+        # Build the encoder layers
+        for hidden_dim in self.encoder_hidden_dims:
+            self.encoding_layers.append(self.get_layer_object(
+                input_size=encoder_input_size,
+                hidden_size=hidden_dim,
+                num_layers=1,
+                batch_first=True
+            ))
+            encoder_input_size = hidden_dim
+
+        # Add the linear layers to the encoder
+        self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
+        self.encoding_layers.append(nn.Linear(self.bottleneck_size, self.bottleneck_size))
+
+        # Build the decoder layers
+        self.decoding_layers = nn.ModuleList()
+        if symmetrical:
+            # Symmetrical decoder
+            self.decoder_hidden_dims = self.encoder_hidden_dims[::-1]
         else:
-            raise ValueError(f"Value not between boundaries 0.0 and 1.0. Value is: {inds[0] - 1}")
+            # Asymmetrical decoder
+            # Define different hidden dimensions for decoder
+            self.decoder_hidden_dims = self.calculate_decoder_hidden_dims(
+                start_dim=self.bottleneck_size,
+                end_dim=self.n_features,
+                layer_step=layer_step,
+                num_layers=num_layers
+            )
+            if self.decoder_hidden_dims is None:
+                self.is_valid = False
+                print("Invalid model configuration detected during decoder hidden dimensions calculation.")
+                return
+
+        # Define the mapping from latent space to decoder input
+        decoder_input_size = self.bottleneck_size
+        for hidden_dim in self.decoder_hidden_dims:
+            self.decoding_layers.append(self.get_layer_object(
+                input_size=decoder_input_size,
+                hidden_size=hidden_dim,
+                num_layers=1,
+                batch_first=True
+            ))
+            decoder_input_size = hidden_dim
+
+        self.decoding_layers.append(nn.Linear(decoder_input_size, self.n_features))
+
+    def map_optimizer(self, gene, architecture):
+        gene = float(gene)
+        optimizer_names = ["Adam", "Adagrad", "SGD", "RAdam", "ASGD", "RPROP"]
+        num_optimizers = len(optimizer_names)
+        index = int(gene * num_optimizers)
+        if index >= num_optimizers:
+            index = num_optimizers - 1  # Adjust index if gene is 1.0 or slightly above due to floating-point precision
+
+        if 0 <= index < num_optimizers:
+            self.optimizer_name = optimizer_names[index]
+            return optimizer_names[index]
+        else:
+            raise ValueError(f"Gene value {gene} is out of bounds [0.0, 1.0].")

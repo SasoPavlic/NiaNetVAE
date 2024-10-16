@@ -234,7 +234,6 @@ if __name__ == '__main__':
     print(config)
 
     seed_everything(config['exp_params']['manual_seed'], True)
-    # TODO Check in your previous code how the tensor changes shape through flow
     # Setup data loader
     data_loader = select_dataloader(config)
     data_loader.setup()

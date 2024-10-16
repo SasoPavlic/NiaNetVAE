@@ -79,7 +79,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
         self.iteration += 1
 
         model = RNNVAE(solution, **config)
-        existing_entry = conn.get_entries(hash_id=model.hash_id)
+        existing_entry = conn.get_entries(hash_id=model.get_hash())
         path = config['logging_params']['save_dir'] + str(self.iteration) + "_" + alg_name + "_" + model.hash_id
         config['logging_params']['model_path'] = path
         Path(path).mkdir(parents=True, exist_ok=True)
@@ -91,7 +91,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
 
         else:
             """Punishing bad decisions"""
-            if len(model.encoding_layers) == 0 or len(model.decoding_layers) == 0:
+            if not model.is_valid:
                 fitness = int(9e10)
                 complexity = int(9e10)
                 error = int(9e10)
@@ -153,13 +153,14 @@ class RNNVAEAEArchitecture(ExtendedProblem):
 def solve_architecture_problem(selected_algorithms):
     """
     Dimensionality:
-    y1: layer type
-    y2: layer step,
-    y3: number of layers,
-    y4: activation function
-    y5: optimizer algorithm.
+    y1: topology shape,
+    y2: layer type
+    y3: layer step,
+    y4: number of layers,
+    y5: activation function
+    y6: optimizer algorithm.
     """
-    DIMENSIONALITY = 5
+    DIMENSIONALITY = 6
 
     algorithms = {
         "particle_swarm": ParticleSwarmAlgorithm(),
