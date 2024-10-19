@@ -10,7 +10,9 @@ class EvaluationMetrics:
         self.MSE_metric = torchmetrics.MeanSquaredError()  # Low is better
         self.RMSE_metric = torchmetrics.MeanSquaredError(squared=False)  # Low is better
         self.DTW_metric = DynamicTimeWarping()  # Low is better
-        self.R2_metric = torchmetrics.R2Score(num_outputs=num_outputs, multioutput='uniform_average')  # High is better
+        self.R2_metric = torchmetrics.R2Score(
+            num_outputs=num_outputs, multioutput='uniform_average'
+        )  # High is better
 
         self.MAE = None
         self.MSE = None
@@ -26,18 +28,45 @@ class EvaluationMetrics:
         self.R2_metric.to(device)
 
     def update(self, predictions, targets):
-        self.MAE_metric.update(predictions, targets)
-        self.MSE_metric.update(predictions, targets)
-        self.RMSE_metric.update(predictions, targets)
-        self.DTW_metric.update(predictions, targets)
-        self.R2_metric.update(predictions, targets)
+        # Reshape predictions and targets for metrics that require specific dimensions
+        reshaped_predictions = predictions.view(predictions.size(0), -1)
+        reshaped_targets = targets.view(targets.size(0), -1)
+
+        # Update MAE
+        self.MAE_metric.update(reshaped_predictions, reshaped_targets)
+        print("Updated MAE_metric")
+
+        # Update MSE
+        self.MSE_metric.update(reshaped_predictions, reshaped_targets)
+        print("Updated MSE_metric")
+
+        # Update RMSE
+        self.RMSE_metric.update(reshaped_predictions, reshaped_targets)
+        print("Updated RMSE_metric")
+
+        # Update R2 Score
+        self.R2_metric.update(reshaped_predictions, reshaped_targets)
+        print("Updated R2_metric")
+
+        # Check if data is univariate
+        if predictions.size(-1) == 1:
+            self.DTW_metric.update(predictions, targets)
+            print("Updated DTW_metric")
+        else:
+            print("Skipping DTW_metric for multivariate data")
 
     def compute(self):
         self.MAE = self.MAE_metric.compute().item()
         self.MSE = self.MSE_metric.compute().item()
-        self.RMSE = torch.sqrt(self.RMSE_metric.compute()).item()
-        self.DTW = self.DTW_metric.compute().item()
+        self.RMSE = self.RMSE_metric.compute().item()
         self.R2 = self.R2_metric.compute().item()
+
+        # Check if DTW metric has been updated
+        dtw_value = self.DTW_metric.compute()
+        if torch.isnan(dtw_value):
+            self.DTW = float(0.0)
+        else:
+            self.DTW = dtw_value.item()
 
         return {
             'MAE': self.MAE,
@@ -48,9 +77,10 @@ class EvaluationMetrics:
         }
 
     def are_metrics_complete(self):
-        return all(metric_value is not None for metric_value in
-                   [self.MAE, self.MSE, self.RMSE, self.DTW, self.R2])
-
+        return all(
+            metric_value is not None
+            for metric_value in [self.MAE, self.MSE, self.RMSE, self.DTW, self.R2]
+        )
 
     def normalize(self, value, min_value, max_value):
         """
@@ -77,32 +107,40 @@ class DynamicTimeWarping(torchmetrics.Metric):
 
     def update(self, predictions, targets):
         # Ensure predictions and targets are on the CPU and converted to numpy arrays
-        predictions = predictions.cpu().numpy()
-        targets = targets.cpu().numpy()
+        predictions = predictions.detach().cpu().numpy()
+        targets = targets.detach().cpu().numpy()
 
         batch_size = predictions.shape[0]
         for i in range(batch_size):
-            self.dtw_distance += self._dtw(predictions[i], targets[i])
+            distance = self._dtw(predictions[i], targets[i])
+            self.dtw_distance += torch.tensor(distance)
             self.num_samples += 1
+        print(f"Updated DTW_metric for batch of size {batch_size}")
 
     def compute(self):
-        return self.dtw_distance / self.num_samples
+        if self.num_samples > 0:
+            return self.dtw_distance / self.num_samples
+        else:
+            return torch.tensor(float('nan'))
 
     def _dtw(self, x, y):
+        # x and y have shape [seq_len, n_features]
+        x = x.flatten()
+        y = y.flatten()
+
         # Initialize the cost matrix
         n, m = len(x), len(y)
-        cost = np.full((n, m), np.inf)
+        cost = np.full((n + 1, m + 1), np.inf)
         cost[0, 0] = 0
 
         # Populate the cost matrix
-        for i in range(n):
-            for j in range(m):
-                dist = (x[i] - y[j]) ** 2
-                if i > 0:
-                    cost[i, j] = min(cost[i, j], cost[i - 1, j] + dist)
-                if j > 0:
-                    cost[i, j] = min(cost[i, j], cost[i, j - 1] + dist)
-                if i > 0 and j > 0:
-                    cost[i, j] = min(cost[i, j], cost[i - 1, j - 1] + dist)
+        for i in range(1, n + 1):
+            for j in range(1, m + 1):
+                dist = (x[i - 1] - y[j - 1]) ** 2
+                cost[i, j] = dist + min(
+                    cost[i - 1, j],    # Insertion
+                    cost[i, j - 1],    # Deletion
+                    cost[i - 1, j - 1]  # Match
+                )
 
-        return cost[n - 1, m - 1]
+        return cost[n, m]
