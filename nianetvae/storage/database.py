@@ -64,16 +64,17 @@ class SQLiteConnector():
             self.create_connection()
             json_solution = json.dumps(solution.tolist())
 
-            # Convert start_time and end_time to strings when storing in the database
+            # Convert timestamp, start_time and end_time to strings when storing in the database
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S") if start_time else None
             end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S") if end_time else None
 
             df = pd.DataFrame({'hash_id': str(model.hash_id),
                                'algorithm_name': str(alg_name),
-                               'timestamp': str(datetime.now().strftime("%H:%M %d-%m-%Y")),
+                               'timestamp': timestamp,
                                'start_time': start_time_str,  # Store the start time as a string
                                'end_time': end_time_str,  # Store the end time as a string
-                               'duration': duration,  # Store the duration
+                               'duration': int(duration),  # Store the duration
                                'iteration': int(iteration),
                                'encoding_layers': str(model.encoding_layers),
                                'decoding_layers': str(model.decoding_layers),
@@ -106,7 +107,7 @@ class SQLiteConnector():
                             timestamp       TEXT,
                             start_time      TEXT,  # Add a start time column
                             end_time        TEXT,  # Add an end time column
-                            duration        REAL,  # Add a duration column
+                            duration(s)        INTEGER,  # Add a duration column
                             iteration       INTEGER,
                             activation      TEXT,
                             optimizer       TEXT,

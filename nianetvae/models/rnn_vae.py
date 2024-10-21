@@ -86,15 +86,13 @@ class RNNVAE(BaseVAE, nn.Module):
             # For univariate data, set an initial hidden dimension
             # Compute layer_step
             self.layer_step = self.map_layer_step_univariate(y3, seq_len)
-            print(f"layer_step: {self.layer_step}")
             # Compute num_layers
             self.num_layers = self.map_num_layers_univariate(y4, seq_len)
-            print(f"num_layers: {self.num_layers}")
             # Calculate encoder hidden dimensions
             encoder_hidden_dims = self.calculate_univariate_hidden_dims(seq_len, self.layer_step, self.num_layers)
             if encoder_hidden_dims is None:
                 self.is_valid = False
-                print("Invalid model configuration detected during encoder hidden dimensions calculation.")
+                Log.error("Invalid model configuration detected during encoder hidden dimensions calculation.")
                 # Set default values for attributes
                 self.bottleneck_size = 0
                 self.hidden_dims = []
@@ -102,22 +100,18 @@ class RNNVAE(BaseVAE, nn.Module):
                 self.decoding_layers = nn.ModuleList()
                 self.get_hash()
                 return
-            print(f"encoder_hidden_dims: {encoder_hidden_dims}")
+
             self.hidden_dims = encoder_hidden_dims
-            print(f"hidden_dims: {self.hidden_dims}")
             self.bottleneck_size = encoder_hidden_dims[-1]
-            print(f"bottleneck_size: {self.bottleneck_size}")
         else:
             # For multivariate data, compute hidden_dim, layer_step, num_layers
             self.layer_step = self.map_layer_step(y3, self.n_features)
-            print(f"layer_step: {self.layer_step}")
             self.num_layers = self.map_num_layers(y4, self.n_features)
-            print(f"num_layers: {self.num_layers}")
             # Calculate encoder hidden dimensions
             encoder_hidden_dims = self.calculate_hidden_dims(self.n_features, self.layer_step, self.num_layers)
             if encoder_hidden_dims is None:
                 self.is_valid = False
-                print("Invalid model configuration detected during encoder hidden dimensions calculation.")
+                Log.error("Invalid model configuration detected during encoder hidden dimensions calculation.")
                 # Set default values for attributes
                 self.bottleneck_size = 0
                 self.hidden_dims = []
@@ -125,12 +119,9 @@ class RNNVAE(BaseVAE, nn.Module):
                 self.decoding_layers = nn.ModuleList()
                 self.get_hash()
                 return
-            print(f"encoder_hidden_dims: {encoder_hidden_dims}")
 
             self.hidden_dims = encoder_hidden_dims
-            print(f"hidden_dims: {self.hidden_dims}")
             self.bottleneck_size = encoder_hidden_dims[-1]
-            print(f"bottleneck_size: {self.bottleneck_size}")
 
         # If the model is invalid, exit the initialization
         if not self.is_valid:
@@ -163,7 +154,7 @@ class RNNVAE(BaseVAE, nn.Module):
                         self.decoding_layers])
 
         Log.info(tabulate(outputs, headers=["ID",
-                                            "Shape (y1)"
+                                            "Shape (y1)",
                                             "Layer type (y2)",
                                             "Layer step (y3)",
                                             "Layers (y4)",
@@ -180,9 +171,7 @@ class RNNVAE(BaseVAE, nn.Module):
                                         str(self.num_layers) +
                                         str(self.activation_name) +
                                         str(self.optimizer_name) +
-                                        str(self.bottleneck_size) +
-                                        str(self.encoding_layers) +
-                                        str(self.decoding_layers)).encode('utf-8')).hexdigest()
+                                        str(self.bottleneck_size)).encode('utf-8')).hexdigest()
         return self.hash_id
 
     def encode(self, x: Tensor) -> List[Tensor]:
@@ -400,16 +389,16 @@ class RNNVAE(BaseVAE, nn.Module):
         max_step = n_features
         layer_step = int(min_step + gene * (max_step - min_step))
         layer_step = max(min(layer_step, max_step), min_step)
-        print(f"Mapped layer_step: {layer_step}")
+        Log.debug(f"Mapped layer_step: {layer_step}")
         return layer_step
 
     def map_layer_step_univariate(self, gene, seq_len):
         gene = float(gene)
         min_step = 1
-        max_step = max(1, seq_len // 10)  # Adjust the divisor as needed
+        max_step = max(1, seq_len)
         layer_step = int(min_step + gene * (max_step - min_step))
         layer_step = max(min(layer_step, max_step), min_step)
-        print(f"Mapped layer_step (univariate): {layer_step}")
+        Log.debug(f"Mapped layer_step (univariate): {layer_step}")
         return layer_step
 
     def map_num_layers(self, gene, n_features):
@@ -418,16 +407,16 @@ class RNNVAE(BaseVAE, nn.Module):
         max_layers = n_features  # Set maximum number of layers to n_features
         num_layers = int(min_layers + gene * (max_layers - min_layers))
         num_layers = max(min(num_layers, max_layers), min_layers)
-        print(f"Mapped num_layers: {num_layers}")
+        Log.debug(f"Mapped num_layers: {num_layers}")
         return num_layers
 
     def map_num_layers_univariate(self, gene, seq_len):
         gene = float(gene)
         min_layers = 1
-        max_layers = max(2, seq_len // 20)  # Adjust the divisor as needed
+        max_layers = max(2, seq_len)
         num_layers = int(min_layers + gene * (max_layers - min_layers))
         num_layers = max(min(num_layers, max_layers), min_layers)
-        print(f"Mapped num_layers (univariate): {num_layers}")
+        Log.debug(f"Mapped num_layers (univariate): {num_layers}")
         return num_layers
 
     def calculate_hidden_dims(self, input_dim, layer_step, num_layers):
@@ -438,15 +427,17 @@ class RNNVAE(BaseVAE, nn.Module):
         min_hidden_dim = current_dim - layer_step * num_layers
         if min_hidden_dim <= 0:
             # Configuration is invalid
-            print("Invalid configuration: layer_step and num_layers combination results in non-positive hidden dimensions.")
+            Log.error("Invalid configuration: layer_step and num_layers combination results in non-positive hidden dimensions.")
             return None
 
         for idx in range(num_layers):
             current_dim -= layer_step
             if current_dim <= 0:
-                print("Invalid configuration: layer_step is too large, resulting in non-positive hidden dimensions.")
+                Log.error("Invalid configuration: layer_step is too large, resulting in non-positive hidden dimensions.")
                 return None
             hidden_dims.append(int(current_dim))
+
+        Log.debug((f"encoder_hidden_dims: {hidden_dims}"))
         return hidden_dims
 
     def calculate_univariate_hidden_dims(self, h_init, layer_step, num_layers):
@@ -457,15 +448,16 @@ class RNNVAE(BaseVAE, nn.Module):
         min_hidden_dim = current_dim - layer_step * num_layers
         if min_hidden_dim <= 0:
             # Configuration is invalid
-            print("Invalid configuration: layer_step and num_layers combination results in non-positive hidden dimensions.")
+            Log.error("Invalid configuration: layer_step and num_layers combination results in non-positive hidden dimensions.")
             return None
 
         for idx in range(num_layers):
             current_dim -= layer_step
             if current_dim <= 0:
-                print("Invalid configuration: layer_step is too large, resulting in non-positive hidden dimensions.")
+                Log.error("Invalid configuration: layer_step is too large, resulting in non-positive hidden dimensions.")
                 return None
             hidden_dims.append(int(current_dim))
+        Log.debug((f"encoder_hidden_dims: {hidden_dims}"))
         return hidden_dims
 
     def calculate_decoder_hidden_dims(self, start_dim, end_dim, layer_step, num_layers):
@@ -476,7 +468,7 @@ class RNNVAE(BaseVAE, nn.Module):
         max_possible_dim = current_dim + layer_step * num_layers
         if max_possible_dim < end_dim:
             # Configuration is invalid
-            print("Invalid configuration: Decoder cannot reach end_dim with the given layer_step and num_layers.")
+            Log.error("Invalid configuration: Decoder cannot reach end_dim with the given layer_step and num_layers.")
             return None
 
         for idx in range(num_layers):
@@ -523,7 +515,7 @@ class RNNVAE(BaseVAE, nn.Module):
             )
             if self.decoder_hidden_dims is None:
                 self.is_valid = False
-                print("Invalid model configuration detected during decoder hidden dimensions calculation.")
+                Log.error("Invalid model configuration detected during decoder hidden dimensions calculation.")
                 return
 
         # Define the mapping from latent space to decoder input

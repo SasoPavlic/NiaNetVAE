@@ -1,12 +1,17 @@
 import json
 import logging
 import re
-
+import sys
 from colorama import Fore, Back, Style
 from colorama import init as colorama_init
 
+class MaxLevelFilter(logging.Filter):
+    def __init__(self, max_level):
+        self.max_level = max_level
 
-# https://betterprogramming.pub/how-to-implement-logging-in-your-python-application-1730315003c4
+    def filter(self, record):
+        # Allow log records with level less than the max_level
+        return record.levelno < self.max_level
 
 class Log:
     """Class responsible for logging information."""
@@ -19,15 +24,18 @@ class Log:
     def enable(cls, storage):
         colorama_init()
         cls.logger = logging.getLogger(storage['name'])
+        cls.logger.setLevel(logging.DEBUG)
+        cls.logger.propagate = False  # Prevent propagation to ancestor loggers
 
-        # Stream handler for stdout (info, debug, warning)
-        stdout_handler = logging.StreamHandler()
+        # Stream handler for stdout (DEBUG, INFO, WARNING)
+        stdout_handler = logging.StreamHandler(sys.stdout)
         stdout_handler.setLevel(logging.DEBUG)
         stdout_formatter = logging.Formatter("%(message)s")
         stdout_handler.setFormatter(stdout_formatter)
+        stdout_handler.addFilter(MaxLevelFilter(logging.ERROR))
 
-        # Stream handler for stderr (error, critical)
-        stderr_handler = logging.StreamHandler()
+        # Stream handler for stderr (ERROR, CRITICAL)
+        stderr_handler = logging.StreamHandler(sys.stderr)
         stderr_handler.setLevel(logging.ERROR)
         stderr_formatter = logging.Formatter("%(message)s")
         stderr_handler.setFormatter(stderr_formatter)
@@ -41,8 +49,6 @@ class Log:
         file_formatter = FileFormatter("%(asctime)s\n%(message)s")
         file_handler.setFormatter(file_formatter)
         cls.logger.addHandler(file_handler)
-
-        cls.logger.setLevel(logging.DEBUG)
 
     @classmethod
     def header(cls, message, type="WHITE"):
@@ -76,7 +82,6 @@ class Log:
         if not isinstance(message, str):
             message = str(message)
         return ''.join(options) + message + '\033[0m'
-
 
 class FileFormatter(logging.Formatter):
     def plain(self, string):

@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torchmetrics
 from torchmetrics import R2Score, MeanAbsoluteError, MeanSquaredError
+from log import Log  # Ensure you have your custom Log module imported
 
 
 class EvaluationMetrics:
@@ -10,15 +11,13 @@ class EvaluationMetrics:
         self.MSE_metric = torchmetrics.MeanSquaredError()  # Low is better
         self.RMSE_metric = torchmetrics.MeanSquaredError(squared=False)  # Low is better
         self.DTW_metric = DynamicTimeWarping()  # Low is better
-        self.R2_metric = torchmetrics.R2Score(
-            num_outputs=num_outputs, multioutput='uniform_average'
-        )  # High is better
+        self.R2_metric = torchmetrics.R2Score(num_outputs=num_outputs, multioutput='uniform_average')  # High is better
 
-        self.MAE = None
-        self.MSE = None
-        self.RMSE = None
-        self.DTW = None
-        self.R2 = None
+        self.MAE = 0.0
+        self.MSE = 0.0
+        self.RMSE = 0.0
+        self.DTW = 0.0
+        self.R2 = 0.0
 
     def to(self, device):
         self.MAE_metric.to(device)
@@ -33,40 +32,87 @@ class EvaluationMetrics:
         reshaped_targets = targets.view(targets.size(0), -1)
 
         # Update MAE
-        self.MAE_metric.update(reshaped_predictions, reshaped_targets)
-        print("Updated MAE_metric")
+        try:
+            self.MAE_metric.update(reshaped_predictions, reshaped_targets)
+        except Exception as e:
+            Log.error(f"Error updating MAE_metric: {e}")
+            self.MAE_metric = None  # Mark as None to skip computation
 
         # Update MSE
-        self.MSE_metric.update(reshaped_predictions, reshaped_targets)
-        print("Updated MSE_metric")
+        try:
+            self.MSE_metric.update(reshaped_predictions, reshaped_targets)
+        except Exception as e:
+            Log.error(f"Error updating MSE_metric: {e}")
+            self.MSE_metric = None
 
         # Update RMSE
-        self.RMSE_metric.update(reshaped_predictions, reshaped_targets)
-        print("Updated RMSE_metric")
+        try:
+            self.RMSE_metric.update(reshaped_predictions, reshaped_targets)
+        except Exception as e:
+            Log.error(f"Error updating RMSE_metric: {e}")
+            self.RMSE_metric = None
 
         # Update R2 Score
-        self.R2_metric.update(reshaped_predictions, reshaped_targets)
-        print("Updated R2_metric")
+        try:
+            self.R2_metric.update(reshaped_predictions, reshaped_targets)
+        except Exception as e:
+            Log.error(f"Error updating R2_metric: {e}")
+            self.R2_metric = None
 
         # Check if data is univariate
         if predictions.size(-1) == 1:
-            self.DTW_metric.update(predictions, targets)
-            print("Updated DTW_metric")
+            try:
+                self.DTW_metric.update(predictions, targets)
+            except Exception as e:
+                Log.error(f"Error updating DTW_metric: {e}")
+                self.DTW_metric = None
         else:
             print("Skipping DTW_metric for multivariate data")
 
     def compute(self):
-        self.MAE = self.MAE_metric.compute().item()
-        self.MSE = self.MSE_metric.compute().item()
-        self.RMSE = self.RMSE_metric.compute().item()
-        self.R2 = self.R2_metric.compute().item()
+        # Compute MAE
+        try:
+            if self.MAE_metric is not None:
+                self.MAE = self.MAE_metric.compute().item()
+        except Exception as e:
+            Log.error(f"Error computing MAE_metric: {e}")
+            self.MAE = 0.0
 
-        # Check if DTW metric has been updated
-        dtw_value = self.DTW_metric.compute()
-        if torch.isnan(dtw_value):
-            self.DTW = float(0.0)
-        else:
-            self.DTW = dtw_value.item()
+        # Compute MSE
+        try:
+            if self.MSE_metric is not None:
+                self.MSE = self.MSE_metric.compute().item()
+        except Exception as e:
+            Log.error(f"Error computing MSE_metric: {e}")
+            self.MSE = 0.0
+
+        # Compute RMSE
+        try:
+            if self.RMSE_metric is not None:
+                self.RMSE = self.RMSE_metric.compute().item()
+        except Exception as e:
+            Log.error(f"Error computing RMSE_metric: {e}")
+            self.RMSE = 0.0
+
+        # Compute R2
+        try:
+            if self.R2_metric is not None:
+                self.R2 = self.R2_metric.compute().item()
+        except Exception as e:
+            Log.error(f"Error computing R2_metric: {e}")
+            self.R2 = 0.0
+
+        # Compute DTW
+        try:
+            if self.DTW_metric is not None:
+                dtw_value = self.DTW_metric.compute()
+                if torch.isnan(dtw_value):
+                    self.DTW = 0.0
+                else:
+                    self.DTW = dtw_value.item()
+        except Exception as e:
+            Log.error(f"Error computing DTW_metric: {e}")
+            self.DTW = 0.0
 
         return {
             'MAE': self.MAE,
@@ -95,6 +141,9 @@ class EvaluationMetrics:
             float: The normalized value between 0 and 1.
         """
         range_value = max_value - min_value
+        if range_value == 0:
+            Log.error("Normalization range is zero.")
+            return 0.0
         normalized_value = (value - min_value) / range_value
         return normalized_value
 
@@ -112,35 +161,46 @@ class DynamicTimeWarping(torchmetrics.Metric):
 
         batch_size = predictions.shape[0]
         for i in range(batch_size):
-            distance = self._dtw(predictions[i], targets[i])
-            self.dtw_distance += torch.tensor(distance)
-            self.num_samples += 1
-        print(f"Updated DTW_metric for batch of size {batch_size}")
+            try:
+                distance = self._dtw(predictions[i], targets[i])
+                self.dtw_distance += torch.tensor(distance)
+                self.num_samples += 1
+            except Exception as e:
+                Log.error(f"Error computing DTW for sample {i}: {e}")
 
     def compute(self):
         if self.num_samples > 0:
             return self.dtw_distance / self.num_samples
         else:
-            return torch.tensor(float('nan'))
+            return torch.tensor(0.0)
 
     def _dtw(self, x, y):
         # x and y have shape [seq_len, n_features]
         x = x.flatten()
         y = y.flatten()
 
-        # Initialize the cost matrix
         n, m = len(x), len(y)
+
+        # Early exit if sequences are empty
+        if n == 0 or m == 0:
+            Log.error("One of the sequences is empty in DTW computation.")
+            return 0.0
+
+        # Initialize the cost matrix
         cost = np.full((n + 1, m + 1), np.inf)
         cost[0, 0] = 0
 
         # Populate the cost matrix
-        for i in range(1, n + 1):
-            for j in range(1, m + 1):
-                dist = (x[i - 1] - y[j - 1]) ** 2
-                cost[i, j] = dist + min(
-                    cost[i - 1, j],    # Insertion
-                    cost[i, j - 1],    # Deletion
-                    cost[i - 1, j - 1]  # Match
-                )
-
-        return cost[n, m]
+        try:
+            for i in range(1, n + 1):
+                for j in range(1, m + 1):
+                    dist = (x[i - 1] - y[j - 1]) ** 2
+                    cost[i, j] = dist + min(
+                        cost[i - 1, j],    # Insertion
+                        cost[i, j - 1],    # Deletion
+                        cost[i - 1, j - 1]  # Match
+                    )
+            return cost[n, m]
+        except Exception as e:
+            Log.error(f"Error in DTW computation: {e}")
+            return 0.0
