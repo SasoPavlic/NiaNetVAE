@@ -13,11 +13,12 @@ class EvaluationMetrics:
         self.DTW_metric = DynamicTimeWarping()  # Low is better
         self.R2_metric = torchmetrics.R2Score(num_outputs=num_outputs, multioutput='uniform_average')  # High is better
 
-        self.MAE = 0.0
-        self.MSE = 0.0
-        self.RMSE = 0.0
-        self.DTW = 0.0
-        self.R2 = 0.0
+        # Initialize metrics with worst possible values
+        self.MAE = int(9e10)
+        self.MSE = int(9e10)
+        self.RMSE = int(9e10)
+        self.DTW = int(9e10)
+        self.R2 = float('-inf')
 
     def to(self, device):
         self.MAE_metric.to(device)
@@ -76,7 +77,7 @@ class EvaluationMetrics:
                 self.MAE = self.MAE_metric.compute().item()
         except Exception as e:
             Log.error(f"Error computing MAE_metric: {e}")
-            self.MAE = 0.0
+            self.MAE = int(9e10)
 
         # Compute MSE
         try:
@@ -84,7 +85,7 @@ class EvaluationMetrics:
                 self.MSE = self.MSE_metric.compute().item()
         except Exception as e:
             Log.error(f"Error computing MSE_metric: {e}")
-            self.MSE = 0.0
+            self.MSE = int(9e10)
 
         # Compute RMSE
         try:
@@ -92,7 +93,7 @@ class EvaluationMetrics:
                 self.RMSE = self.RMSE_metric.compute().item()
         except Exception as e:
             Log.error(f"Error computing RMSE_metric: {e}")
-            self.RMSE = 0.0
+            self.RMSE = int(9e10)
 
         # Compute R2
         try:
@@ -102,17 +103,17 @@ class EvaluationMetrics:
             Log.error(f"Error computing R2_metric: {e}")
             self.R2 = 0.0
 
-        # Compute DTW
+        # Compute DTW only for Univariate dataset
         try:
             if self.DTW_metric is not None:
                 dtw_value = self.DTW_metric.compute()
                 if torch.isnan(dtw_value):
-                    self.DTW = 0.0
+                    self.DTW = int(9e10)
                 else:
                     self.DTW = dtw_value.item()
         except Exception as e:
             Log.error(f"Error computing DTW_metric: {e}")
-            self.DTW = 0.0
+            self.DTW = int(9e10)
 
         return {
             'MAE': self.MAE,
@@ -172,7 +173,7 @@ class DynamicTimeWarping(torchmetrics.Metric):
         if self.num_samples > 0:
             return self.dtw_distance / self.num_samples
         else:
-            return torch.tensor(0.0)
+            return torch.tensor(int(9e10))  # Worst possible value for DTW
 
     def _dtw(self, x, y):
         # x and y have shape [seq_len, n_features]
@@ -184,7 +185,7 @@ class DynamicTimeWarping(torchmetrics.Metric):
         # Early exit if sequences are empty
         if n == 0 or m == 0:
             Log.error("One of the sequences is empty in DTW computation.")
-            return 0.0
+            return int(9e10)  # Worst possible value for DTW
 
         # Initialize the cost matrix
         cost = np.full((n + 1, m + 1), np.inf)
@@ -203,4 +204,4 @@ class DynamicTimeWarping(torchmetrics.Metric):
             return cost[n, m]
         except Exception as e:
             Log.error(f"Error in DTW computation: {e}")
-            return 0.0
+            return int(9e10)  # Worst possible value for DTW

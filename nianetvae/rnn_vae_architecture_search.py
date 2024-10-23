@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from lightning.pytorch import Trainer
 # from lightning.pytorch.plugins import DDPPlugin
-from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping, BatchSizeFinder
+from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
 from niapy.algorithms.basic import ParticleSwarmAlgorithm, DifferentialEvolution, FireflyAlgorithm, GeneticAlgorithm
 from niapy.algorithms.modified import SelfAdaptiveDifferentialEvolution
@@ -23,25 +23,38 @@ conn = None
 datamodule = None
 
 
-def calculate_fitness(model, experiment):
+def calculate_fitness(model, experiment, n_features, seq_len):
     if experiment.metrics.are_metrics_complete():
-
+        # Calculate error_x
         error_x = (
                 experiment.metrics.MSE +
                 experiment.metrics.RMSE +
-                experiment.metrics.MAE +
-                experiment.metrics.DTW
+                experiment.metrics.MAE
         )
+
+        # Include DTW only if it was computed
+        if n_features == 1 and experiment.metrics.DTW != int(9e10):
+            error_x += experiment.metrics.DTW
+        else:
+            Log.info("DTW metric not included in error calculation.")
+
         error_y = experiment.metrics.R2
 
+        # Complexity calculation
         C_LAYERS = 10000
         C_BOTTLENECK = 1000
 
-        max_layers, min_layers = config['data_params']['seq_len'], 0
-        max_bottleneck, min_bottleneck = config['data_params']['seq_len'], 0
+        max_layers = seq_len
+        min_layers = 0
+        max_bottleneck = seq_len
+        min_bottleneck = 0
 
-        normalized_num_layers = experiment.metrics.normalize(len(model.encoding_layers), min_layers, max_layers)
-        normalized_bottleneck = experiment.metrics.normalize(model.bottleneck_size, min_bottleneck, max_bottleneck)
+        normalized_num_layers = experiment.metrics.normalize(
+            len(model.encoding_layers), min_layers, max_layers
+        )
+        normalized_bottleneck = experiment.metrics.normalize(
+            model.bottleneck_size, min_bottleneck, max_bottleneck
+        )
 
         complexity = (normalized_num_layers * C_LAYERS) + (normalized_bottleneck * C_BOTTLENECK)
         error = error_x - error_y
@@ -53,7 +66,8 @@ def calculate_fitness(model, experiment):
         return int(9e10), int(9e10), int(9e10)
 
 
-def upload_save_model(alg_name, iteration, solution, error, model, experiment, fitness, complexity, path, start_time, end_time, duration):
+def upload_save_model(alg_name, iteration, solution, error, model, experiment, fitness, complexity, path, start_time,
+                      end_time, duration):
     conn.post_entries(model, fitness, solution, error, complexity, alg_name, iteration,
                       experiment.metrics.MSE,
                       experiment.metrics.RMSE,
@@ -138,7 +152,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 duration = (end_time - start_time).total_seconds()
                 trainer.test(experiment, datamodule=datamodule)
 
-                fitness, error, complexity = calculate_fitness(model, experiment)
+                fitness, error, complexity = calculate_fitness(model, experiment, config['data_params']['n_features'],config['data_params']['seq_len'] )
 
                 Log.debug(tabulate([[complexity, fitness]], headers=["Complexity", "Fitness"],
                                    tablefmt="pretty"))

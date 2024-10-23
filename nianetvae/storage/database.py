@@ -7,7 +7,7 @@ import pandas as pd
 
 from log import Log
 
-infinity = float(99999999999)
+infinity = int(9e10)
 
 
 class SQLiteConnector():
@@ -82,6 +82,7 @@ class SQLiteConnector():
                                'activation': str(model.activation_name),
                                'optimizer': str(model.optimizer_name),
                                'bottleneck_size': int(model.bottleneck_size),
+                               'fitness': int(fitness),
                                'complexity': int(complexity),
                                'error': float(error),
                                'MAE': float(MAE),
@@ -89,7 +90,6 @@ class SQLiteConnector():
                                'RMSE': float(RMSE),
                                'DTW': float(DTW),
                                'R2': float(R2),
-                               'fitness': int(fitness),
                                'solution_array': str(json_solution).strip()
                                }, index=[0])
             df.to_sql(self.table_name, self.connection, if_exists='append', index=False)  # writes to file

@@ -9,10 +9,10 @@ nia_search:
     - self_adaptive_differential_evolution
 
 data_params:
-  dataset_type: "MSL"  # Can be "ECG5000", "YahooA1", "KPI", "MSL"
-  data_path: "data/msl_dataset/" # Can be ecg5000_dataset, yahoo_dataset, kpi_dataset, "msl_dataset"
+  dataset_type: "YahooA1"  # Can be "ECG5000", "YahooA1", "KPI", "MSL"
+  data_path: "data/yahoo_dataset/" # Can be ecg5000_dataset, yahoo_dataset, kpi_dataset, "msl_dataset"
   seq_len: 200 # 140, 200
-  n_features: 55 # MSL:55 Multiple features problem https://stackoverflow.com/questions/71565854/lstm-autoencoder-set-up-for-multiple-features-using-pytorch
+  n_features: 1 # MSL:55 Multiple features problem https://stackoverflow.com/questions/71565854/lstm-autoencoder-set-up-for-multiple-features-using-pytorch
   data_percentage: 5
   batch_size: 10
   train_size: 70
@@ -22,12 +22,12 @@ data_params:
   pin_memory: True
 
 trainer_params:
-  min_epochs: 2
-  max_epochs: 2
+  min_epochs: 1
+  max_epochs: 1
 
 early_stop:
   monitor: "val_loss"
-  patience: 5
+  patience: 1
   min_delta: 0.00
   mode: "min"
 
