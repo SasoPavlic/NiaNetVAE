@@ -19,7 +19,6 @@ class YahooA1Dataset(Dataset):
         self.data, self.targets = self._window_data()
 
     def _window_data(self):
-        # TODO Check how this is working (pomojem se zazene vsaki epoch)
         # Create sliding windows for the data, with corresponding labels
         windows = []
         wlabels = []
@@ -34,9 +33,14 @@ class YahooA1Dataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        sample = {'signal': self.data[idx],
-                  'target': self.targets[idx].int()}
-        return sample
+        signal = self.data[idx]
+        # Reshape data if necessary
+        if signal.dim() == 1:
+            # Univariate data: add an extra dimension
+            signal = signal.unsqueeze(-1)
+
+        target = self.targets[idx]
+        return {'signal': signal, 'target': target.int()}
 
 
 # Custom Yahoo DataLoader for A1Benchmark
@@ -54,6 +58,9 @@ class YahooA1DataLoader(BaseDataLoader):
             all_data.append(df)
 
         combined_df = pd.concat(all_data)
+        #TODO make dynamic approach
+        # Very dangerours to do this in general since this is the timeseriesdataset which needs temproal dependencies
+        combined_df = combined_df.sample(frac = 1, random_state=42)
 
         # Apply data percentage filter
         combined_df = combined_df.sample(frac=self.data_percentage / 100.0, random_state=42)

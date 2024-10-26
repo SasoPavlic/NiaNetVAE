@@ -19,12 +19,15 @@ class ECG5000Dataset(Dataset):
     def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, index):
-        sample = {
-            'signal': self.data[index],
-            'target': self.targets[index]
-        }
-        return sample
+    def __getitem__(self, idx):
+        signal = self.data[idx]
+        # Reshape data if necessary
+        if signal.dim() == 1:
+            # Univariate data: add an extra dimension
+            signal = signal.unsqueeze(-1)
+
+        target = self.targets[idx]
+        return {'signal': signal, 'target': target.int()}
 
 
 class ECG5000DataLoader(BaseDataLoader):

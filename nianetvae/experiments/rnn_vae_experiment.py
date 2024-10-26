@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 import torch
@@ -7,7 +8,9 @@ from lightning.pytorch.callbacks import LearningRateFinder
 from torch import Tensor, tensor
 
 from log import Log
+from nianetvae.experiments.anomaly_detection import *
 from nianetvae.experiments.evaluationmetrics import EvaluationMetrics
+from nianetvae.experiments.visualization import plot_roc_curve
 from nianetvae.models.base import BaseVAE
 
 
@@ -65,12 +68,12 @@ class RMSE(torchmetrics.Metric):
 
 class RNNVAExperiment(LightningModule):
     def __init__(self,
-                 lstm_vae_model: BaseVAE, **kwargs) -> None:
+                 lstm_vae_model: BaseVAE, path, **kwargs) -> None:
         super(RNNVAExperiment, self).__init__()
 
         self.results = None
         self.model = lstm_vae_model
-        self.model_path = kwargs['logging_params']['model_path']
+        self.path = path
         self.learning_rate = 0.01
         self.params = kwargs['exp_params']
         self.seq_len = kwargs['data_params']['seq_len']
@@ -126,7 +129,7 @@ class RNNVAExperiment(LightningModule):
                                                  M_N=self.params['kld_weight'],
                                                  batch_idx=batch_idx)
 
-        self.log_dict({key: val.item() for key, val in self.train_loss.items()}, sync_dist=True, on_step=False,
+        self.log_dict({key: val.item() for key, val in self.train_loss.items()}, sync_dist=True, on_step=True,
                       on_epoch=True)
         torch.cuda.empty_cache()
         return self.train_loss['loss']
@@ -167,3 +170,47 @@ class RNNVAExperiment(LightningModule):
                       on_epoch=True, batch_size=batch['signal'].shape[0])
 
         torch.cuda.empty_cache()
+
+    def on_train_end(self):
+        # Perform anomaly detection after training is complete
+
+        all_predictions = []
+        all_targets = []
+        all_labels = []
+
+        dataloader = self.trainer.datamodule.test_dataloader()
+
+        with torch.no_grad():
+            for batch in dataloader:
+                batch['signal'] = batch['signal'].to(self.device)
+                batch['target'] = batch['target'].to(self.device)
+
+                x = batch['signal']  # x now has shape (batch_size, seq_len, n_features)
+                labels = batch['target']
+
+                response = self.model(batch)  # Pass x directly to the model
+
+                all_predictions.append(response["reconstructed"])
+                all_targets.append(x)
+                all_labels.append(labels)
+
+        # Concatenate all batches
+        all_predictions = torch.cat(all_predictions, dim=0)
+        all_targets = torch.cat(all_targets, dim=0)
+        all_labels = torch.cat(all_labels, dim=0)
+
+        # Perform anomaly detection
+        save_path = os.path.join(os.getcwd(), self.path)
+        self.anomaly_metrics = perform_anomaly_detection(
+            all_predictions, all_targets, all_labels, save_path=save_path
+        )
+
+        if self.anomaly_metrics:
+            # Print metrics for debugging
+            print("Anomaly Detection Metrics:")
+            print(f"Precision: {self.anomaly_metrics['precision']}")
+            print(f"Recall: {self.anomaly_metrics['recall']}")
+            print(f"F1-Score: {self.anomaly_metrics['f1_score']}")
+            print(f"ROC AUC: {self.anomaly_metrics['roc_auc']}")
+        else:
+            print("Anomaly detection was not performed due to errors.")

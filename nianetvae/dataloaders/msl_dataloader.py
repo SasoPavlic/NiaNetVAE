@@ -33,8 +33,14 @@ class MSLDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        sample = {'signal': self.data[idx], 'target': self.targets[idx].int()}
-        return sample
+        signal = self.data[idx]
+        # Reshape data if necessary
+        if signal.dim() == 1:
+            # Univariate data: add an extra dimension
+            signal = signal.unsqueeze(-1)
+
+        target = self.targets[idx]
+        return {'signal': signal, 'target': target.int()}
 
 
 # Custom MSL DataLoader with CSV anomaly reading

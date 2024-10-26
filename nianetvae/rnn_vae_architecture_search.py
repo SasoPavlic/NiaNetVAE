@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -68,16 +69,40 @@ def calculate_fitness(model, experiment, n_features, seq_len):
 
 def upload_save_model(alg_name, iteration, solution, error, model, experiment, fitness, complexity, path, start_time,
                       end_time, duration):
-    conn.post_entries(model, fitness, solution, error, complexity, alg_name, iteration,
-                      experiment.metrics.MSE,
-                      experiment.metrics.RMSE,
-                      experiment.metrics.MAE,
-                      experiment.metrics.DTW,
-                      experiment.metrics.R2,
-                      start_time,
-                      end_time,
-                      duration)
-    torch.save(model.state_dict(), path + f"/model.pt")
+    # Extract anomaly detection metrics if available
+    anomaly_metrics = experiment.anomaly_metrics if hasattr(experiment, 'anomaly_metrics') else {}
+
+    # Unpack anomaly metrics with default values if they are missing
+    precision = anomaly_metrics.get('precision', None)
+    recall = anomaly_metrics.get('recall', None)
+    f1_score = anomaly_metrics.get('f1_score', None)
+    roc_auc = anomaly_metrics.get('roc_auc', None)
+
+    # Save entries to the database, including the anomaly metrics
+    conn.post_entries(
+        model=model,
+        fitness=fitness,
+        solution=solution,
+        error=error,
+        complexity=complexity,
+        alg_name=alg_name,
+        iteration=iteration,
+        mse=experiment.metrics.MSE,
+        rmse=experiment.metrics.RMSE,
+        mae=experiment.metrics.MAE,
+        dtw=experiment.metrics.DTW,
+        r2=experiment.metrics.R2,
+        start_time=start_time,
+        end_time=end_time,
+        duration=duration,
+        precision=precision,
+        recall=recall,
+        f1_score=f1_score,
+        roc_auc=roc_auc
+    )
+
+    # Save the model state
+    torch.save(model.state_dict(), os.path.join(path, "model.pt"))
 
 
 class RNNVAEAEArchitecture(ExtendedProblem):
@@ -111,7 +136,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 error = int(9e10)
                 conn.post_entries(model, fitness, solution, error, complexity, alg_name, self.iteration)
             else:
-                experiment = RNNVAExperiment(model, **config)
+                experiment = RNNVAExperiment(model, path=path, **config)
                 tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
                                               name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id)
 
@@ -133,7 +158,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                       # ),
                                       FineTuneLearningRateFinder(**config['fine_tune_lr_finder']),
                                       EarlyStopping(**config['early_stop'],
-                                                    verbose=False,
+                                                    verbose=True,
                                                     check_finite=True),
                                       # ModelCheckpoint(save_top_k=1,
                                       #                 dirpath=os.path.join(tb_logger.log_dir, "checkpoints"),
@@ -152,7 +177,8 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 duration = (end_time - start_time).total_seconds()
                 trainer.test(experiment, datamodule=datamodule)
 
-                fitness, error, complexity = calculate_fitness(model, experiment, config['data_params']['n_features'],config['data_params']['seq_len'] )
+                fitness, error, complexity = calculate_fitness(model, experiment, config['data_params']['n_features'],
+                                                               config['data_params']['seq_len'])
 
                 Log.debug(tabulate([[complexity, fitness]], headers=["Complexity", "Fitness"],
                                    tablefmt="pretty"))

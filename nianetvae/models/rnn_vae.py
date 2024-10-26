@@ -27,7 +27,11 @@ class RNNVAE(BaseVAE, nn.Module):
         y5: activation function
         y6: optimizer algorithm.
         """
+
+        #MSL dataset
+        #solution = [0.98304425, 0.10804011, 0.15121107, 0.09719232, 0.65059224, 0.65365383]
         # Initialize validity flag
+        #TODO Check if the skip of model creation for invalid model works
         self.is_valid = True
 
         # Extract data parameters
@@ -94,10 +98,10 @@ class RNNVAE(BaseVAE, nn.Module):
                 self.is_valid = False
                 Log.error("Invalid model configuration detected during encoder hidden dimensions calculation.")
                 # Set default values for attributes
-                self.bottleneck_size = 0
+                self.bottleneck_size = None
                 self.hidden_dims = []
-                self.encoding_layers = nn.ModuleList()
-                self.decoding_layers = nn.ModuleList()
+                self.encoding_layers = None
+                self.decoding_layers = None
                 self.get_hash()
                 return
 
@@ -113,10 +117,10 @@ class RNNVAE(BaseVAE, nn.Module):
                 self.is_valid = False
                 Log.error("Invalid model configuration detected during encoder hidden dimensions calculation.")
                 # Set default values for attributes
-                self.bottleneck_size = 0
+                self.bottleneck_size = None
                 self.hidden_dims = []
-                self.encoding_layers = nn.ModuleList()
-                self.decoding_layers = nn.ModuleList()
+                self.encoding_layers = None
+                self.decoding_layers = None
                 self.get_hash()
                 return
 
@@ -175,40 +179,40 @@ class RNNVAE(BaseVAE, nn.Module):
         return self.hash_id
 
     def encode(self, x: Tensor) -> List[Tensor]:
-        print(f"Input to encoder: {x.shape}")
+        #print(f"Input to encoder: {x.shape}")
 
         # Pass through encoder layers
         for i, layer in enumerate(self.encoding_layers[:-2]):
             if isinstance(layer, (nn.LSTM, nn.GRU, nn.RNN)):
                 x, _ = layer(x)
                 x = self.activation(x)
-                print(f"Shape after encoder layer {i}: {x.shape}")
+                #print(f"Shape after encoder layer {i}: {x.shape}")
             else:
                 x = layer(x)
                 x = self.activation(x)
-                print(f"Shape after encoder layer {i}: {x.shape}")
+                #print(f"Shape after encoder layer {i}: {x.shape}")
 
         # Use the output from the last time step
         x_last = x[:, -1, :]
-        print(f"Encoder output at last time step: {x_last.shape}")
+        #print(f"Encoder output at last time step: {x_last.shape}")
 
         # Apply the final linear layers to obtain mu and log_var
         mu = self.encoding_layers[-2](x_last)
-        print(f"Shape after Linear layer for mu: {mu.shape}")
+        #print(f"Shape after Linear layer for mu: {mu.shape}")
 
         log_var = self.encoding_layers[-1](x_last)
-        print(f"Shape after Linear layer for log_var: {log_var.shape}")
+        #print(f"Shape after Linear layer for log_var: {log_var.shape}")
 
         return [mu, log_var]
 
     def decode(self, z: Tensor) -> Tensor:
-        print(f"Latent input shape: {z.shape}")
+        #print(f"Latent input shape: {z.shape}")
 
         # Map latent vector to decoder input
         decoder_input = z
-        print(f"Decoder input: {decoder_input.shape}")
+        #print(f"Decoder input: {decoder_input.shape}")
         decoder_input = decoder_input.unsqueeze(1).repeat(1, self.seq_len, 1)
-        print(f"Decoder input after unsqueeze and repeat: {decoder_input.shape}")
+        #print(f"Decoder input after unsqueeze and repeat: {decoder_input.shape}")
 
         x = decoder_input
 
@@ -217,35 +221,32 @@ class RNNVAE(BaseVAE, nn.Module):
             if isinstance(layer, (nn.LSTM, nn.GRU, nn.RNN)):
                 x, _ = layer(x)
                 x = self.activation(x)
-                print(f"Shape after decoder layer {i}: {x.shape}")
+                #print(f"Shape after decoder layer {i}: {x.shape}")
             else:
                 x = layer(x)
                 x = self.activation(x)
-                print(f"Shape after decoder layer {i}: {x.shape}")
+                #print(f"Shape after decoder layer {i}: {x.shape}")
 
         # Apply decoder output layer to map to n_features
         batch_size, seq_len, hidden_dim = x.size()
         x = x.contiguous().view(-1, hidden_dim)  # [batch_size*seq_len, hidden_dim]
         x = self.decoding_layers[-1](x)  # [batch_size*seq_len, n_features]
         x = x.view(batch_size, seq_len, self.n_features)
-        print(f"Reconstructed shape: {x.shape}")
+        #print(f"Reconstructed shape: {x.shape}")
         return x
 
     def reparameterize(self, mu: Tensor, logvar: Tensor) -> Tensor:
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         z = mu + eps * std
-        print(f"Sampled latent vector z: {z.shape}")
+        #print(f"Sampled latent vector z: {z.shape}")
         return z
 
     def forward(self, input: dict, **kwargs) -> dict:
         # Extract signal from the input dictionary.
         signal = input['signal']
 
-        # Reshape data if necessary
-        if signal.dim() == 2:
-            # Univariate data: add an extra dimension
-            signal = signal.unsqueeze(-1)
+
 
         # Encode the input signal to obtain the latent distribution parameters (mu and log_var).
         mu, log_var = self.encode(signal)
@@ -274,8 +275,8 @@ class RNNVAE(BaseVAE, nn.Module):
         log_var = kwargs['log_var']
 
         kld_weight = kwargs['M_N']  # Account for the minibatch samples from the dataset
-        print(f"Input shape: {input.shape}")
-        print(f"Reconstructed shape: {recons.shape}")
+        #print(f"Input shape: {input.shape}")
+        #print(f"Reconstructed shape: {recons.shape}")
         recons_loss = F.mse_loss(recons, input)
 
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0)

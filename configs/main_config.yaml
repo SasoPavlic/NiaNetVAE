@@ -9,21 +9,21 @@ nia_search:
     - self_adaptive_differential_evolution
 
 data_params:
-  dataset_type: "YahooA1"  # Can be "ECG5000", "YahooA1", "KPI", "MSL"
-  data_path: "data/yahoo_dataset/" # Can be ecg5000_dataset, yahoo_dataset, kpi_dataset, "msl_dataset"
+  dataset_type: "KPI"  # Can be "ECG5000", "YahooA1", "KPI", "MSL"
+  data_path: "data/kpi_dataset/" # Can be ecg5000_dataset, yahoo_dataset, kpi_dataset, "msl_dataset"
   seq_len: 200 # 140, 200
   n_features: 1 # MSL:55 Multiple features problem https://stackoverflow.com/questions/71565854/lstm-autoencoder-set-up-for-multiple-features-using-pytorch
-  data_percentage: 5
-  batch_size: 10
+  data_percentage: 10
+  batch_size: 64
   train_size: 70
   val_size: 10
   test_size: 20
-  num_workers: 0
+  num_workers: 15
   pin_memory: True
 
 trainer_params:
-  min_epochs: 1
-  max_epochs: 1
+  min_epochs: 2
+  max_epochs: 3
 
 early_stop:
   monitor: "val_loss"
@@ -35,7 +35,7 @@ fine_tune_lr_finder:
   tune_n_epochs: 5
   lr_finder:
     mode: "exponential" #"linear"
-    num_training_steps: 100
+    num_training_steps: 10
     attr_name: "learning_rate"
     update_attr: True
     early_stop_threshold: # None # https://github.com/Lightning-AI/lightning/issues/4846#issuecomment-1014148839
@@ -46,7 +46,7 @@ model_params:
 exp_params:
   weight_decay: 0.001
   kld_weight: 0.1
-  manual_seed: 1265
+  manual_seed: 42
 
 logging_params:
   name: "RNNVAE"
