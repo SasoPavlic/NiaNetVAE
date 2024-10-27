@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support, roc_curve
 
+from log import Log
 from nianetvae.experiments.visualization import plot_roc_curve
 
 
@@ -39,11 +40,11 @@ def determine_threshold(errors, labels):
         tuple: (optimal_threshold, fpr, tpr, thresholds, roc_auc, optimal_idx)
     """
     if np.isnan(errors).any():
-        print("Errors contain NaN values. Cannot compute ROC curve.")
+        Log.error("Errors contain NaN values. Cannot compute ROC curve.")
         return None, None, None, None, None, None
 
     if len(np.unique(labels)) < 2:
-        print("Only one class present in labels. Cannot compute ROC curve.")
+        Log.error("Only one class present in labels. Cannot compute ROC curve.")
         return None, None, None, None, None, None
 
     try:
@@ -54,7 +55,7 @@ def determine_threshold(errors, labels):
         optimal_threshold = thresholds[optimal_idx]
         return optimal_threshold, fpr, tpr, thresholds, roc_auc, optimal_idx
     except ValueError as e:
-        print(f"Error computing ROC curve: {e}")
+        Log.error(f"Error computing ROC curve: {e}")
         return None, None, None, None, None, None
 
 def calculate_anomaly_scores(errors, threshold):
@@ -110,7 +111,7 @@ def perform_anomaly_detection(all_predictions, all_targets, all_labels, save_pat
 
     # Check for NaN values in errors
     if np.isnan(errors).any():
-        print("Errors contain NaN values. Skipping anomaly detection for this model.")
+        Log.debug("Errors contain NaN values. Skipping anomaly detection for this model.")
         return {
             'precision': None,
             'recall': None,
@@ -120,7 +121,7 @@ def perform_anomaly_detection(all_predictions, all_targets, all_labels, save_pat
 
     unique_labels = np.unique(labels)
     if len(unique_labels) < 2:
-        print("Only one class present in labels. Cannot compute ROC AUC.")
+        Log.debug("Only one class present in labels. Cannot compute ROC AUC.")
         return {
             'precision': None,
             'recall': None,
@@ -130,7 +131,7 @@ def perform_anomaly_detection(all_predictions, all_targets, all_labels, save_pat
 
     threshold, fpr, tpr, thresholds, roc_auc, optimal_idx = determine_threshold(errors, labels)
     if threshold is None:
-        print("Could not determine threshold due to errors in ROC computation.")
+        Log.debug("Could not determine threshold due to errors in ROC computation.")
         return {
             'precision': None,
             'recall': None,

@@ -13,6 +13,7 @@ from niapy.algorithms.modified import SelfAdaptiveDifferentialEvolution
 from niapy.task import OptimizationType
 from tabulate import tabulate
 
+import nianetvae.experiments.evaluationmetrics
 from log import Log
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment, FineTuneLearningRateFinder
 from nianetvae.models.rnn_vae import RNNVAE
@@ -149,17 +150,17 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                   # auto_select_gpus=True,
 
                                   callbacks=[
-                                      LearningRateMonitor(),
+                                      # LearningRateMonitor(),
+                                      # FineTuneLearningRateFinder(**config['fine_tune_lr_finder']),
+                                      # EarlyStopping(**config['early_stop'],
+                                      #               verbose=True,
+                                      #               check_finite=True),
                                       # BatchSizeFinder(
                                       #     mode="power",  # "power" or "binsearch" modes
                                       #     steps_per_trial=3,  # Number of steps to run with each batch size
                                       #     init_val=2,  # Initial batch size to start search with
                                       #     max_trials=25,  # Max number of trials (batch size increases) to try
                                       # ),
-                                      FineTuneLearningRateFinder(**config['fine_tune_lr_finder']),
-                                      EarlyStopping(**config['early_stop'],
-                                                    verbose=True,
-                                                    check_finite=True),
                                       # ModelCheckpoint(save_top_k=1,
                                       #                 dirpath=os.path.join(tb_logger.log_dir, "checkpoints"),
                                       #                 monitor="loss",

@@ -60,6 +60,7 @@ class YahooA1DataLoader(BaseDataLoader):
         combined_df = pd.concat(all_data)
         #TODO make dynamic approach
         # Very dangerours to do this in general since this is the timeseriesdataset which needs temproal dependencies
+        # Cekiraj se v drugih datalaoderjih
         combined_df = combined_df.sample(frac = 1, random_state=42)
 
         # Apply data percentage filter

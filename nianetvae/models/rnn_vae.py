@@ -285,13 +285,6 @@ class RNNVAE(BaseVAE, nn.Module):
         details = {'loss': loss, 'Reconstruction_Loss': recons_loss.detach(), 'KLD': -kld_loss.detach()}
         return details
 
-    def sample(self,
-               num_samples: int,
-               current_device: int, **kwargs) -> Tensor:
-        z = torch.randn(num_samples, self.bottleneck_size).to(current_device)
-        samples = self.decode(z)
-        return samples
-
     def generate(self, x: Tensor, **kwargs) -> Tensor:
         reconstructed = self.forward(x)['reconstructed']
         return reconstructed

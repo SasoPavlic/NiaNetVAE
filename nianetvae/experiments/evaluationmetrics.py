@@ -1,6 +1,9 @@
+from typing import Any
+
 import numpy as np
 import torch
 import torchmetrics
+from torch import tensor, Tensor
 from torchmetrics import R2Score, MeanAbsoluteError, MeanSquaredError
 from log import Log  # Ensure you have your custom Log module imported
 
@@ -205,3 +208,27 @@ class DynamicTimeWarping(torchmetrics.Metric):
         except Exception as e:
             Log.error(f"Error in DTW computation: {e}")
             return int(9e10)  # Worst possible value for DTW
+
+
+class RMSE(torchmetrics.Metric):
+    # https: // www.pytorchlightning.ai / blog / torchmetrics - pytorch - metrics - built - to - scale
+    def __init__(self, **kwargs: Any, ) -> None:
+        super().__init__(**kwargs)
+
+        self.add_state("sum_squared_error", default=tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("n_observations", default=tensor(0), dist_reduce_fx="sum")
+
+    def update(self, preds: Tensor, target: Tensor) -> None:  # type: ignore
+        """Update state with predictions and targets.
+
+        Args:
+            preds: Predictions from model
+            target: Ground truth values
+        """
+
+        self.sum_squared_error += torch.sum((preds - target) ** 2)
+        self.n_observations += preds.numel()
+
+    def compute(self) -> Tensor:
+        """Computes mean squared error over state."""
+        return torch.sqrt(self.sum_squared_error / self.n_observations)

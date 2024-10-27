@@ -1,16 +1,10 @@
-import os
-from typing import Any
-
-import torch
-import torchmetrics
 from lightning.pytorch import LightningModule
 from lightning.pytorch.callbacks import LearningRateFinder
-from torch import Tensor, tensor
+from torch import Tensor
 
 from log import Log
 from nianetvae.experiments.anomaly_detection import *
 from nianetvae.experiments.evaluationmetrics import EvaluationMetrics
-from nianetvae.experiments.visualization import plot_roc_curve
 from nianetvae.models.base import BaseVAE
 
 
@@ -40,30 +34,6 @@ class FineTuneLearningRateFinder(LearningRateFinder):
             else:
                 self.lr_find(trainer, pl_module)
                 print(f"Learning rate: {pl_module.learning_rate}")
-
-
-class RMSE(torchmetrics.Metric):
-    # https: // www.pytorchlightning.ai / blog / torchmetrics - pytorch - metrics - built - to - scale
-    def __init__(self, **kwargs: Any, ) -> None:
-        super().__init__(**kwargs)
-
-        self.add_state("sum_squared_error", default=tensor(0.0), dist_reduce_fx="sum")
-        self.add_state("n_observations", default=tensor(0), dist_reduce_fx="sum")
-
-    def update(self, preds: Tensor, target: Tensor) -> None:  # type: ignore
-        """Update state with predictions and targets.
-
-        Args:
-            preds: Predictions from model
-            target: Ground truth values
-        """
-
-        self.sum_squared_error += torch.sum((preds - target) ** 2)
-        self.n_observations += preds.numel()
-
-    def compute(self) -> Tensor:
-        """Computes mean squared error over state."""
-        return torch.sqrt(self.sum_squared_error / self.n_observations)
 
 
 class RNNVAExperiment(LightningModule):
