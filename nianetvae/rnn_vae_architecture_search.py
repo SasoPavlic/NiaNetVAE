@@ -78,6 +78,7 @@ def upload_save_model(alg_name, iteration, solution, error, model, experiment, f
     recall = anomaly_metrics.get('recall', None)
     f1_score = anomaly_metrics.get('f1_score', None)
     roc_auc = anomaly_metrics.get('roc_auc', None)
+    pr_auc = anomaly_metrics.get('pr_auc', None)
 
     # Save entries to the database, including the anomaly metrics
     conn.post_entries(
@@ -99,7 +100,8 @@ def upload_save_model(alg_name, iteration, solution, error, model, experiment, f
         precision=precision,
         recall=recall,
         f1_score=f1_score,
-        roc_auc=roc_auc
+        roc_auc=roc_auc,
+        pr_auc=pr_auc
     )
 
     # Save the model state

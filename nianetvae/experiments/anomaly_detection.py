@@ -2,10 +2,16 @@
 import os
 import numpy as np
 import torch
-from sklearn.metrics import roc_auc_score, precision_recall_fscore_support, roc_curve
+from sklearn.metrics import (
+    roc_auc_score,
+    precision_recall_fscore_support,
+    roc_curve,
+    precision_recall_curve,
+    average_precision_score
+)
 
 from log import Log
-from nianetvae.experiments.visualization import plot_roc_curve
+from nianetvae.experiments.visualization import plot_roc_curve, plot_precision_recall_curve
 
 
 class AnomalyDetectionMetrics:
@@ -56,37 +62,52 @@ class AnomalyDetectionMetrics:
                 'precision': None,
                 'recall': None,
                 'f1_score': None,
-                'roc_auc': None
+                'roc_auc': None,
+                'pr_auc': None
             }
 
         unique_labels = np.unique(labels)
         if len(unique_labels) < 2:
-            Log.debug("Only one class present in labels. Cannot compute ROC AUC.")
+            Log.debug("Only one class present in labels. Cannot compute ROC AUC or PR AUC.")
             return {
                 'precision': None,
                 'recall': None,
                 'f1_score': None,
-                'roc_auc': None
+                'roc_auc': None,
+                'pr_auc': None
             }
 
-        # Determine threshold
-        threshold, fpr, tpr, thresholds, roc_auc, optimal_idx = self.determine_threshold(errors, labels)
-        if threshold is None:
-            Log.debug("Could not determine threshold due to errors in ROC computation.")
+        # Determine thresholds and metrics
+        threshold_info = self.determine_thresholds(errors, labels)
+        if threshold_info is None:
+            Log.debug("Could not determine thresholds due to errors in ROC or PR curve computation.")
             return {
                 'precision': None,
                 'recall': None,
                 'f1_score': None,
-                'roc_auc': None
+                'roc_auc': None,
+                'pr_auc': None
             }
 
-        anomalies = self.calculate_anomaly_scores(errors, threshold)
-        metrics = self.calculate_evaluation_metrics(anomalies, labels, roc_auc=roc_auc)
+        (
+            optimal_threshold,
+            fpr, tpr, roc_thresholds, roc_auc, roc_optimal_idx,
+            precision_vals, recall_vals, pr_thresholds, pr_auc, pr_optimal_idx
+        ) = threshold_info
 
-        # Plot ROC curve if save_path is provided
+        # Classify anomalies based on the optimal threshold from ROC curve
+        anomalies = self.calculate_anomaly_scores(errors, optimal_threshold)
+        metrics = self.calculate_evaluation_metrics(anomalies, labels, roc_auc=roc_auc, pr_auc=pr_auc)
+
+        # Plot ROC and PR curves if save_path is provided
         if save_path is not None:
-            save_path = os.path.join(save_path, f'roc_curve_{metrics["roc_auc"]}.pdf')
-            plot_roc_curve(fpr, tpr, roc_auc, optimal_idx, thresholds, save_path=save_path)
+            # Plot ROC curve
+            roc_save_path = os.path.join(save_path, f'roc_curve_{metrics["roc_auc"]}.pdf')
+            plot_roc_curve(fpr, tpr, roc_auc, roc_optimal_idx, roc_thresholds, save_path=roc_save_path)
+
+            # Plot Precision-Recall curve
+            pr_save_path = os.path.join(save_path, f'pr_curve_{metrics["pr_auc"]}.pdf')
+            plot_precision_recall_curve(precision_vals, recall_vals, pr_auc, pr_optimal_idx, pr_thresholds, save_path=pr_save_path)
 
         return metrics
 
@@ -111,35 +132,49 @@ class AnomalyDetectionMetrics:
         return errors
 
     @staticmethod
-    def determine_threshold(errors, labels):
+    def determine_thresholds(errors, labels):
         """
-        Determines the optimal threshold for anomaly detection using the ROC curve.
+        Determines the optimal thresholds for anomaly detection using ROC and PR curves.
 
         Args:
             errors (numpy.ndarray): Reconstruction errors for each sample.
             labels (numpy.ndarray): True labels (1 for anomaly, 0 for normal).
 
         Returns:
-            tuple: (optimal_threshold, fpr, tpr, thresholds, roc_auc, optimal_idx)
+            tuple: Contains ROC and PR curve information and optimal thresholds.
         """
         if np.isnan(errors).any():
-            Log.error("Errors contain NaN values. Cannot compute ROC curve.")
-            return None, None, None, None, None, None
+            Log.error("Errors contain NaN values. Cannot compute ROC or PR curves.")
+            return None
 
         if len(np.unique(labels)) < 2:
-            Log.error("Only one class present in labels. Cannot compute ROC curve.")
-            return None, None, None, None, None, None
+            Log.error("Only one class present in labels. Cannot compute ROC or PR curves.")
+            return None
 
         try:
-            fpr, tpr, thresholds = roc_curve(labels, errors)
+            # ROC Curve and AUC
+            fpr, tpr, roc_thresholds = roc_curve(labels, errors)
             roc_auc = roc_auc_score(labels, errors)
-            # Find the threshold that gives the best balance between TPR and FPR
-            optimal_idx = np.argmax(tpr - fpr)
-            optimal_threshold = thresholds[optimal_idx]
-            return optimal_threshold, fpr, tpr, thresholds, roc_auc, optimal_idx
+            # Find the optimal threshold for ROC
+            roc_optimal_idx = np.argmax(tpr - fpr)
+            optimal_threshold = roc_thresholds[roc_optimal_idx]
+
+            # Precision-Recall Curve and AUC
+            precision_vals, recall_vals, pr_thresholds = precision_recall_curve(labels, errors)
+            pr_auc = average_precision_score(labels, errors)
+            # Find the optimal threshold for PR Curve
+            pr_fscore = 2 * precision_vals * recall_vals / (precision_vals + recall_vals + 1e-10)
+            pr_optimal_idx = np.nanargmax(pr_fscore)
+            # Note: We keep the optimal_threshold from ROC for consistency
+
+            return (
+                optimal_threshold,
+                fpr, tpr, roc_thresholds, roc_auc, roc_optimal_idx,
+                precision_vals, recall_vals, pr_thresholds, pr_auc, pr_optimal_idx
+            )
         except ValueError as e:
-            Log.error(f"Error computing ROC curve: {e}")
-            return None, None, None, None, None, None
+            Log.error(f"Error computing ROC or PR curves: {e}")
+            return None
 
     @staticmethod
     def calculate_anomaly_scores(errors, threshold):
@@ -157,7 +192,7 @@ class AnomalyDetectionMetrics:
         return anomalies
 
     @staticmethod
-    def calculate_evaluation_metrics(anomalies, labels, roc_auc):
+    def calculate_evaluation_metrics(anomalies, labels, roc_auc, pr_auc):
         """
         Calculates evaluation metrics for anomaly detection.
 
@@ -165,14 +200,16 @@ class AnomalyDetectionMetrics:
             anomalies (numpy.ndarray): Predicted anomaly labels.
             labels (numpy.ndarray): True anomaly labels.
             roc_auc (float): ROC AUC score computed from continuous errors.
+            pr_auc (float): PR AUC score computed from continuous errors.
 
         Returns:
-            dict: Dictionary containing precision, recall, f1_score, and roc_auc.
+            dict: Dictionary containing precision, recall, f1_score, roc_auc, and pr_auc.
         """
         precision, recall, f1_score, _ = precision_recall_fscore_support(labels, anomalies, average='binary')
         return {
             'precision': round(precision, 3),
             'recall': round(recall, 3),
             'f1_score': round(f1_score, 3),
-            'roc_auc': round(roc_auc, 3) if roc_auc is not None else None
+            'roc_auc': round(roc_auc, 3) if roc_auc is not None else None,
+            'pr_auc': round(pr_auc, 3) if pr_auc is not None else None
         }

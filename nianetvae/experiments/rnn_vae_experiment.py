@@ -168,6 +168,7 @@ class RNNVAExperiment(LightningModule):
                 ["Recall", f"{self.anomaly_metrics['recall']:.3f}"],
                 ["F1-Score", f"{self.anomaly_metrics['f1_score']:.3f}"],
                 ["ROC AUC", f"{self.anomaly_metrics['roc_auc']:.3f}"],
+                ["PR AUC", f"{self.anomaly_metrics['pr_auc']:.3f}"],  # Added
             ]
             Log.info("\nAnomaly Detection Metrics:")
             print(tabulate(metrics_list, headers=["Metric", "Value"], tablefmt="pretty"))

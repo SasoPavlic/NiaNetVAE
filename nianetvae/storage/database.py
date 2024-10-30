@@ -61,6 +61,7 @@ class SQLiteConnector:
                 recall REAL,
                 f1_score REAL,
                 roc_auc REAL,
+                pr_auc REAL,
                 solution_array TEXT
             );
             '''
@@ -114,7 +115,7 @@ class SQLiteConnector:
     def post_entries(self, model, fitness, solution, error, complexity, alg_name, iteration,
                      mse=infinity, rmse=infinity, mae=infinity, dtw=infinity, r2=float('-inf'),
                      start_time=None, end_time=None, duration=None,
-                     precision=None, recall=None, f1_score=None, roc_auc=None):
+                     precision=None, recall=None, f1_score=None, roc_auc=None, pr_auc=None):
         """Insert a new entry into the database, including anomaly detection metrics."""
         try:
             self.create_connection()
@@ -153,6 +154,7 @@ class SQLiteConnector:
                 'recall': float(recall) if recall is not None else None,
                 'f1_score': float(f1_score) if f1_score is not None else None,
                 'roc_auc': float(roc_auc) if roc_auc is not None else None,
+                'pr_auc': float(pr_auc) if pr_auc is not None else None,
                 'solution_array': json_solution.strip()
             }
 
