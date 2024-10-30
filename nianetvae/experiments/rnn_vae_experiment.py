@@ -1,11 +1,14 @@
 from lightning.pytorch import LightningModule
 from lightning.pytorch.callbacks import LearningRateFinder
 from tabulate import tabulate
+
 from torch import Tensor
 
 from log import Log
 from nianetvae.experiments.anomaly_detection import *
 from nianetvae.experiments.evaluationmetrics import EvaluationMetrics
+from nianetvae.experiments.anomaly_detection import AnomalyDetectionMetrics
+
 from nianetvae.models.base import BaseVAE
 
 
@@ -55,6 +58,7 @@ class RNNVAExperiment(LightningModule):
         self.val_loss = None
         self.test_loss = None
         self.metrics = EvaluationMetrics(num_outputs=(self.seq_len * kwargs['data_params']['n_features']))
+        self.anomaly_detection_metrics = AnomalyDetectionMetrics()
         try:
             self.hold_graph = self.params['retain_first_backpass']
         except:
@@ -121,44 +125,18 @@ class RNNVAExperiment(LightningModule):
         torch.cuda.empty_cache()
         return self.val_loss['loss']
 
-    def test_step(self, batch, batch_idx, optimizer_idx=0):
-        torch.cuda.empty_cache()
-        results = self.forward(batch)
-
-        # Keep in mind metrics takes a lot of time to calculate!
-        self.metrics.to(self.curr_device)
-
-        self.test_loss = self.model.loss_function(self.curr_device,
-                                                 **results,
-                                                 M_N=self.params['kld_weight'],
-                                                 batch_idx=batch_idx)
-
-        self.metrics.update(results['signal'], results['reconstructed'])
-
-        self.results = self.metrics.compute()
-
-        self.log_dict(self.results,
-                      prog_bar=True, sync_dist=True, on_step=False,
-                      on_epoch=True, batch_size=batch['signal'].shape[0])
-
-        torch.cuda.empty_cache()
-
     def test_step(self, batch, batch_idx):
         torch.cuda.empty_cache()
         results = self.forward(batch)
 
-        # Keep in mind metrics takes a lot of time to calculate!
+        # Update evaluation metrics
         self.metrics.to(self.curr_device)
-
-        # Compute test loss
         self.test_loss = self.model.loss_function(
             self.curr_device,
             **results,
             M_N=self.params['kld_weight'],
             batch_idx=batch_idx
         )
-
-        # Update metrics
         self.metrics.update(results['signal'], results['reconstructed'])
         self.results = self.metrics.compute()
 
@@ -169,39 +147,29 @@ class RNNVAExperiment(LightningModule):
             on_epoch=True, batch_size=batch['signal'].shape[0]
         )
 
-        # Collect predictions and targets for anomaly detection
-        if not hasattr(self, 'all_predictions'):
-            self.all_predictions = []
-            self.all_targets = []
-            self.all_labels = []
-
-        self.all_predictions.append(results['reconstructed'].detach().cpu())
-        self.all_targets.append(batch['signal'].detach().cpu())
-        self.all_labels.append(batch['target'].detach().cpu())
+        # Update anomaly detection metrics
+        self.anomaly_detection_metrics.update(
+            predictions=results['reconstructed'],
+            targets=batch['signal'],
+            labels=batch['target']
+        )
 
         torch.cuda.empty_cache()
 
     def on_test_end(self):
-        # Concatenate all collected data
-        all_predictions = torch.cat(self.all_predictions, dim=0)
-        all_targets = torch.cat(self.all_targets, dim=0)
-        all_labels = torch.cat(self.all_labels, dim=0)
-
-        # Perform anomaly detection
+        # Compute anomaly detection metrics
         save_path = os.path.join(os.getcwd(), self.path)
-        self.anomaly_metrics = perform_anomaly_detection(
-            all_predictions, all_targets, all_labels, save_path=save_path
-        )
+        self.anomaly_metrics = self.anomaly_detection_metrics.compute(save_path=save_path)
 
         # Print metrics using Tabulate
         if self.anomaly_metrics:
-            metrics_list = [[key.capitalize(), f"{value:.3f}"] for key, value in self.anomaly_metrics.items()]
+            metrics_list = [
+                ["Precision", f"{self.anomaly_metrics['precision']:.3f}"],
+                ["Recall", f"{self.anomaly_metrics['recall']:.3f}"],
+                ["F1-Score", f"{self.anomaly_metrics['f1_score']:.3f}"],
+                ["ROC AUC", f"{self.anomaly_metrics['roc_auc']:.3f}"],
+            ]
             Log.info("\nAnomaly Detection Metrics:")
             print(tabulate(metrics_list, headers=["Metric", "Value"], tablefmt="pretty"))
         else:
             Log.error("Anomaly detection was not performed due to errors.")
-
-        # Clean up the collected data
-        del self.all_predictions
-        del self.all_targets
-        del self.all_labels

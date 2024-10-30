@@ -27,11 +27,12 @@ class EvaluationMetrics:
         self.MAE_metric.to(device)
         self.MSE_metric.to(device)
         self.RMSE_metric.to(device)
-        self.DTW_metric.to(device)
         self.R2_metric.to(device)
+        if self.DTW_metric is not None:
+            self.DTW_metric.to(device)
 
     def update(self, predictions, targets):
-        # Reshape predictions and targets for metrics that require specific dimensions
+        # Reshape predictions and targets
         reshaped_predictions = predictions.view(predictions.size(0), -1)
         reshaped_targets = targets.view(targets.size(0), -1)
 
@@ -40,7 +41,7 @@ class EvaluationMetrics:
             self.MAE_metric.update(reshaped_predictions, reshaped_targets)
         except Exception as e:
             Log.error(f"Error updating MAE_metric: {e}")
-            self.MAE_metric = None  # Mark as None to skip computation
+            self.MAE_metric = None
 
         # Update MSE
         try:
@@ -63,15 +64,15 @@ class EvaluationMetrics:
             Log.error(f"Error updating R2_metric: {e}")
             self.R2_metric = None
 
-        # Check if data is univariate
+        # Update DTW only for univariate data
         if predictions.size(-1) == 1:
             try:
                 self.DTW_metric.update(predictions, targets)
             except Exception as e:
                 Log.error(f"Error updating DTW_metric: {e}")
-                self.DTW_metric = None
+                self.DTW_metric = None  # Mark as None to skip computation
         else:
-            print("Skipping DTW_metric for multivariate data")
+            self.DTW_metric = None  # Set DTW_metric to None
 
     def compute(self):
         # Compute MAE
@@ -106,17 +107,19 @@ class EvaluationMetrics:
             Log.error(f"Error computing R2_metric: {e}")
             self.R2 = 0.0
 
-        # Compute DTW only for Univariate dataset
-        try:
-            if self.DTW_metric is not None:
+        # Compute DTW only if DTW_metric is not None
+        if self.DTW_metric is not None:
+            try:
                 dtw_value = self.DTW_metric.compute()
                 if torch.isnan(dtw_value):
                     self.DTW = int(9e10)
                 else:
                     self.DTW = dtw_value.item()
-        except Exception as e:
-            Log.error(f"Error computing DTW_metric: {e}")
-            self.DTW = int(9e10)
+            except Exception as e:
+                Log.error(f"Error computing DTW_metric: {e}")
+                self.DTW = int(9e10)
+        else:
+            self.DTW = int(9e10)  # Assign default value or handle as needed
 
         return {
             'MAE': self.MAE,
