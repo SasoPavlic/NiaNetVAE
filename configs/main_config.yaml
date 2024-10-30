@@ -1,6 +1,6 @@
 nia_search:
-  evaluations: 100
   runs: 1
+  evaluations: 100
   algorithms:
     - particle_swarm
     - genetic_algorithm
@@ -9,21 +9,22 @@ nia_search:
     - self_adaptive_differential_evolution
 
 data_params:
-  dataset_type: "ECG5000"  # Can be "ECG5000", "YahooA1", "KPI", "MSL"
-  data_path: "data/ecg5000_dataset/" # Can be ecg5000_dataset, yahoo_dataset, kpi_dataset, "msl_dataset"
-  seq_len: 140 # 140, 200
+  dataset_type: "KPI"  # Can be "ECG5000", "YahooA1", "KPI", "MSL"
+  data_path: "data/kpi_dataset/" # Can be ecg5000_dataset, yahoo_dataset, kpi_dataset, "msl_dataset"
+  seq_len: 200 # 140, 200
   n_features: 1 # MSL:55 Multiple features problem https://stackoverflow.com/questions/71565854/lstm-autoencoder-set-up-for-multiple-features-using-pytorch
-  data_percentage: 10
+  data_percentage: 5
   batch_size: 64
   train_size: 70
   val_size: 10
   test_size: 20
   num_workers: 0
+  persistent_workers: False
   pin_memory: True
 
 trainer_params:
-  min_epochs: 2
-  max_epochs: 3
+  min_epochs: 1
+  max_epochs: 1
 
 early_stop:
   monitor: "val_loss"

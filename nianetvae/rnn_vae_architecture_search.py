@@ -147,6 +147,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                   devices=1,
                                   default_root_dir=tb_logger.root_dir,
                                   log_every_n_steps=50,
+                                  # profiler="simple",
                                   # auto_select_gpus=True,
 
                                   callbacks=[
@@ -173,10 +174,13 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 start_time = datetime.now()
                 Log.info(f'\nTraining start: {start_time.strftime("%Y-%m-%d %H:%M:%S")}')
                 trainer.fit(experiment, datamodule=datamodule)
-                end_time = datetime.now()
-                Log.info(f'\nTraining end: {end_time.strftime("%Y-%m-%d %H:%M:%S")}')
-                duration = (end_time - start_time).total_seconds()
+                Log.info(f'\nTraining end: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+
+                Log.info(f'\nTest start: {start_time.strftime("%Y-%m-%d %H:%M:%S")}')
                 trainer.test(experiment, datamodule=datamodule)
+                Log.info(f'\nTest end: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+                end_time = datetime.now()
+                duration = (end_time - start_time).total_seconds()
 
                 fitness, error, complexity = calculate_fitness(model, experiment, config['data_params']['n_features'],
                                                                config['data_params']['seq_len'])

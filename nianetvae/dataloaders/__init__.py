@@ -1,20 +1,17 @@
-# from nianetvae.dataloaders.ecg_dataloader import ECG5000_train
-# from nianetvae.dataloaders.ecg_dataloader import ECG5000_val
-# from nianetvae.dataloaders.ecg_dataloader import ECG5000_test
-# from nianetvae.dataloaders.ecg_dataloader import TimeSeriesDataset
-#
-# __all__ = ["ECG5000_train", "ECG5000_val", "ECG5000_test", "TimeSeriesDataset"]
-# __import__("pkg_resources").declare_namespace(__name__)
+from typing import Optional
+
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
-from typing import Optional
+
 
 class BaseDataLoader(LightningDataModule):
     def __init__(
             self,
             data_path: str,
             batch_size: int,
+            seq_len: int,
             num_workers: int,
+            persistent_workers: bool,
             pin_memory: bool,
             train_size: float,
             val_size: float,
@@ -25,7 +22,9 @@ class BaseDataLoader(LightningDataModule):
         super().__init__()
         self.data_path = data_path
         self.batch_size = batch_size
+        self.seq_len = seq_len
         self.num_workers = num_workers
+        self.persistent_workers = persistent_workers
         self.pin_memory = pin_memory
         self.train_size = train_size
         self.val_size = val_size
@@ -35,14 +34,35 @@ class BaseDataLoader(LightningDataModule):
     def setup(self, stage: Optional[str] = None) -> None:
         raise NotImplementedError("This method should be overridden by subclasses")
 
-    def train_dataloader(self) -> DataLoader:
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True,
-                          pin_memory=self.pin_memory)
+    def train_dataloader(self):
+        if self.train_dataset:
+            # Return a DataLoader for the training dataset
+            return DataLoader(
+                self.train_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers,
+                persistent_workers=self.persistent_workers,
+                pin_memory=self.pin_memory, drop_last=True
+            )
+        else:
+            return None
 
-    def val_dataloader(self) -> DataLoader:
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False,
-                          pin_memory=self.pin_memory)
+    def val_dataloader(self):
+        if self.val_dataset:
+            # Return a DataLoader for the validation dataset
+            return DataLoader(
+                self.val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers,
+                persistent_workers=self.persistent_workers,
+                pin_memory=self.pin_memory, drop_last=True
+            )
+        else:
+            return None
 
-    def test_dataloader(self) -> DataLoader:
-        return DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False,
-                          pin_memory=self.pin_memory)
+    def test_dataloader(self):
+        if self.test_dataset:
+            # Return a DataLoader for the test dataset
+            return DataLoader(
+                self.test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers,
+                persistent_workers=self.persistent_workers,
+                pin_memory=self.pin_memory, drop_last=True
+            )
+        else:
+            return None
