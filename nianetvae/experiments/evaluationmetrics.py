@@ -1,3 +1,5 @@
+# evaluationmetrics.py
+
 from typing import Any
 
 import numpy as np
@@ -78,7 +80,7 @@ class EvaluationMetrics:
         # Compute MAE
         try:
             if self.MAE_metric is not None:
-                self.MAE = self.MAE_metric.compute().item()
+                self.MAE = round(self.MAE_metric.compute().item(), 3)
         except Exception as e:
             Log.error(f"Error computing MAE_metric: {e}")
             self.MAE = int(9e10)
@@ -86,7 +88,7 @@ class EvaluationMetrics:
         # Compute MSE
         try:
             if self.MSE_metric is not None:
-                self.MSE = self.MSE_metric.compute().item()
+                self.MSE = round(self.MSE_metric.compute().item(), 3)
         except Exception as e:
             Log.error(f"Error computing MSE_metric: {e}")
             self.MSE = int(9e10)
@@ -94,7 +96,7 @@ class EvaluationMetrics:
         # Compute RMSE
         try:
             if self.RMSE_metric is not None:
-                self.RMSE = self.RMSE_metric.compute().item()
+                self.RMSE = round(self.RMSE_metric.compute().item(), 3)
         except Exception as e:
             Log.error(f"Error computing RMSE_metric: {e}")
             self.RMSE = int(9e10)
@@ -102,10 +104,10 @@ class EvaluationMetrics:
         # Compute R2
         try:
             if self.R2_metric is not None:
-                self.R2 = self.R2_metric.compute().item()
+                self.R2 = round(self.R2_metric.compute().item(), 3)
         except Exception as e:
             Log.error(f"Error computing R2_metric: {e}")
-            self.R2 = 0.0
+            self.R2 = float('-inf')
 
         # Compute DTW only if DTW_metric is not None
         if self.DTW_metric is not None:
@@ -114,7 +116,7 @@ class EvaluationMetrics:
                 if torch.isnan(dtw_value):
                     self.DTW = int(9e10)
                 else:
-                    self.DTW = dtw_value.item()
+                    self.DTW = round(dtw_value.item(), 3)
             except Exception as e:
                 Log.error(f"Error computing DTW_metric: {e}")
                 self.DTW = int(9e10)
@@ -214,24 +216,22 @@ class DynamicTimeWarping(torchmetrics.Metric):
 
 
 class RMSE(torchmetrics.Metric):
-    # https: // www.pytorchlightning.ai / blog / torchmetrics - pytorch - metrics - built - to - scale
-    def __init__(self, **kwargs: Any, ) -> None:
+    # Note: This class is not used since torchmetrics provides RMSE directly.
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-
         self.add_state("sum_squared_error", default=tensor(0.0), dist_reduce_fx="sum")
         self.add_state("n_observations", default=tensor(0), dist_reduce_fx="sum")
 
-    def update(self, preds: Tensor, target: Tensor) -> None:  # type: ignore
+    def update(self, preds: Tensor, target: Tensor) -> None:
         """Update state with predictions and targets.
 
         Args:
             preds: Predictions from model
             target: Ground truth values
         """
-
         self.sum_squared_error += torch.sum((preds - target) ** 2)
         self.n_observations += preds.numel()
 
     def compute(self) -> Tensor:
-        """Computes mean squared error over state."""
+        """Computes root mean squared error over state."""
         return torch.sqrt(self.sum_squared_error / self.n_observations)

@@ -3,6 +3,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
+
 def plot_roc_curve(fpr, tpr, roc_auc, optimal_idx, thresholds, save_path='roc_curve.pdf'):
     """
     Plots the ROC curve with the optimal threshold point and other annotations.
@@ -15,25 +16,40 @@ def plot_roc_curve(fpr, tpr, roc_auc, optimal_idx, thresholds, save_path='roc_cu
         thresholds (array-like): Thresholds used to compute fpr and tpr.
         save_path (str): Path to save the plot.
     """
+    # Ensure variables are numpy arrays
+    fpr = np.array(fpr)
+    tpr = np.array(tpr)
+    thresholds = np.array(thresholds)
+
+    # Round variables to 3 decimals
+    fpr = np.round(fpr, 3)
+    tpr = np.round(tpr, 3)
+    thresholds = np.round(thresholds, 3)
+    roc_auc = round(roc_auc, 3)
+
     plt.figure()
     lw = 2
     x = fpr[optimal_idx]
     y = tpr[optimal_idx]
 
+    # Round x and y to 3 decimals
+    x = round(x, 3)
+    y = round(y, 3)
+
     point1 = [0, 1]  # Ideal point in ROC space
     point2 = [x, y]
     x_values = [point1[0], point2[0]]
     y_values = [point1[1], point2[1]]
-    distance = round(np.sqrt((x - point1[0])**2 + (y - point1[1])**2), 2)
-    print(f"Distance: {distance}")
+    distance = round(np.sqrt((x - point1[0]) ** 2 + (y - point1[1]) ** 2), 3)
+    print(f"Distance: {distance:.3f}")
 
-    plt.plot(fpr, tpr, color="darkorange", lw=lw, label="Recurrent VAE (AUC = %0.2f)" % roc_auc)
-    plt.plot([0, 1], [0, 1], color="navy", lw=lw, linestyle="--", label='Random classifier (AUC = 0.50)')
-    plt.plot(x_values, y_values, color="red", lw=lw, linestyle=":", label=f'Distance = {distance}')
-    plt.plot(x, y, '-ro', label=f'Optimal threshold (FPR={round(x,2)}, TPR={round(y,2)})')
+    plt.plot(fpr, tpr, color="darkorange", lw=lw, label=f"Recurrent VAE (AUC = {roc_auc:.3f})")
+    plt.plot([0, 1], [0, 1], color="navy", lw=lw, linestyle="--", label='Random Classifier (AUC = 0.500)')
+    plt.plot(x_values, y_values, color="red", lw=lw, linestyle=":", label=f'Distance = {distance:.3f}')
+    plt.plot(x, y, '-ro', label=f'Optimal Threshold (FPR={x:.3f}, TPR={y:.3f})')
 
     # Annotate the optimal point
-    plt.annotate('(%.2f, %.2f)' % (x, y), xy=(x, y), ha='center')
+    plt.annotate(f'({x:.3f}, {y:.3f})', xy=(x, y), ha='center')
 
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
@@ -56,24 +72,39 @@ def plot_precision_recall_curve(precision, recall, pr_auc, optimal_idx, threshol
         thresholds (array-like): Thresholds used to compute precision and recall.
         save_path (str): Path to save the plot.
     """
+    # Ensure variables are numpy arrays
+    precision = np.array(precision)
+    recall = np.array(recall)
+    thresholds = np.array(thresholds)
+
+    # Round variables to 3 decimals
+    precision = np.round(precision, 3)
+    recall = np.round(recall, 3)
+    thresholds = np.round(thresholds, 3)
+    pr_auc = round(pr_auc, 3)
+
     plt.figure()
     lw = 2
     x = recall[optimal_idx]
     y = precision[optimal_idx]
 
+    # Round x and y to 3 decimals
+    x = round(x, 3)
+    y = round(y, 3)
+
     point1 = [1, 1]  # Ideal point in PR space
     point2 = [x, y]
     x_values = [point1[0], point2[0]]
     y_values = [point1[1], point2[1]]
-    distance = round(np.sqrt((x - point1[0])**2 + (y - point1[1])**2), 2)
-    print(f"Distance: {distance}")
+    distance = round(np.sqrt((x - point1[0]) ** 2 + (y - point1[1]) ** 2), 3)
+    print(f"Distance: {distance:.3f}")
 
-    plt.plot(recall, precision, color="darkorange", lw=lw, label="Recurrent VAE (AUC = %0.2f)" % pr_auc)
-    plt.plot(x_values, y_values, color="red", lw=lw, linestyle=":", label=f'Distance = {distance}')
-    plt.plot(x, y, '-ro', label=f'Optimal threshold (Recall={round(x,2)}, Precision={round(y,2)})')
+    plt.plot(recall, precision, color="darkorange", lw=lw, label=f"Recurrent VAE (AUC = {pr_auc:.3f})")
+    plt.plot(x_values, y_values, color="red", lw=lw, linestyle=":", label=f'Distance = {distance:.3f}')
+    plt.plot(x, y, '-ro', label=f'Optimal Threshold (Recall={x:.3f}, Precision={y:.3f})')
 
     # Annotate the optimal point
-    plt.annotate('(%.2f, %.2f)' % (x, y), xy=(x, y), ha='center')
+    plt.annotate(f'({x:.3f}, {y:.3f})', xy=(x, y), ha='center')
 
     plt.xlim([0.0, 1.05])
     plt.ylim([0.0, 1.05])

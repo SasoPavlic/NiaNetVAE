@@ -1,15 +1,15 @@
 # anomaly_detection.py
-import os
-import numpy as np
-import torch
-from sklearn.metrics import (
-    roc_auc_score,
-    precision_recall_fscore_support,
-    roc_curve,
-    precision_recall_curve,
-    average_precision_score
-)
 
+import os
+import torch
+import numpy as np
+from torchmetrics.functional import (
+    auroc,
+    roc,
+    precision_recall_curve,
+    average_precision,
+)
+from sklearn.metrics import precision_recall_fscore_support  # Reintroduced sklearn import
 from log import Log
 from nianetvae.experiments.visualization import plot_roc_curve, plot_precision_recall_curve
 
@@ -22,7 +22,7 @@ class AnomalyDetectionMetrics:
 
     def to(self, device):
         # If you plan to store tensors, move them to the specified device
-        pass  # In this case, we're storing data on CPU as numpy arrays
+        pass  # In this case, we're storing data on CPU
 
     def update(self, predictions, targets, labels):
         """
@@ -35,8 +35,8 @@ class AnomalyDetectionMetrics:
         """
         # Compute reconstruction errors for the batch
         batch_errors = self.compute_reconstruction_errors(predictions, targets)
-        # Convert labels to numpy
-        batch_labels = labels.detach().cpu().numpy()
+        # Ensure labels are on CPU
+        batch_labels = labels.detach().cpu()
         # Append to lists
         self.errors.append(batch_errors)
         self.labels.append(batch_labels)
@@ -52,11 +52,11 @@ class AnomalyDetectionMetrics:
             dict: Dictionary containing evaluation metrics.
         """
         # Concatenate all errors and labels
-        errors = np.concatenate(self.errors)
-        labels = np.concatenate(self.labels)
+        errors = torch.cat(self.errors)
+        labels = torch.cat(self.labels)
 
         # Check for NaN values in errors
-        if np.isnan(errors).any():
+        if torch.isnan(errors).any():
             Log.debug("Errors contain NaN values. Skipping anomaly detection for this model.")
             return {
                 'precision': None,
@@ -66,8 +66,7 @@ class AnomalyDetectionMetrics:
                 'pr_auc': None
             }
 
-        unique_labels = np.unique(labels)
-        if len(unique_labels) < 2:
+        if len(labels.unique()) < 2:
             Log.debug("Only one class present in labels. Cannot compute ROC AUC or PR AUC.")
             return {
                 'precision': None,
@@ -121,15 +120,11 @@ class AnomalyDetectionMetrics:
             targets (torch.Tensor): True targets of shape [batch_size, seq_len, n_features].
 
         Returns:
-            numpy.ndarray: Reconstruction errors of shape [batch_size].
+            torch.Tensor: Reconstruction errors of shape [batch_size].
         """
-        # Convert tensors to numpy arrays
-        predictions = predictions.detach().cpu().numpy()
-        targets = targets.detach().cpu().numpy()
-
         # Compute reconstruction errors per sample
-        errors = np.mean((predictions - targets) ** 2, axis=(1, 2))
-        return errors
+        errors = torch.mean((predictions - targets) ** 2, dim=(1, 2))
+        return errors.detach().cpu()
 
     @staticmethod
     def determine_thresholds(errors, labels):
@@ -137,42 +132,67 @@ class AnomalyDetectionMetrics:
         Determines the optimal thresholds for anomaly detection using ROC and PR curves.
 
         Args:
-            errors (numpy.ndarray): Reconstruction errors for each sample.
-            labels (numpy.ndarray): True labels (1 for anomaly, 0 for normal).
+            errors (torch.Tensor): Reconstruction errors for each sample.
+            labels (torch.Tensor): True labels (1 for anomaly, 0 for normal).
 
         Returns:
             tuple: Contains ROC and PR curve information and optimal thresholds.
         """
-        if np.isnan(errors).any():
+        if torch.isnan(errors).any():
             Log.error("Errors contain NaN values. Cannot compute ROC or PR curves.")
             return None
 
-        if len(np.unique(labels)) < 2:
+        if len(labels.unique()) < 2:
             Log.error("Only one class present in labels. Cannot compute ROC or PR curves.")
             return None
 
         try:
-            # ROC Curve and AUC
-            fpr, tpr, roc_thresholds = roc_curve(labels, errors)
-            roc_auc = roc_auc_score(labels, errors)
-            # Find the optimal threshold for ROC
+            # Compute ROC curve and AUC
+            fpr, tpr, roc_thresholds = roc(errors, labels.int(), task='binary')
+            roc_auc = auroc(errors, labels.int(), task='binary')
+
+            # Convert tensors to numpy arrays for plotting and processing
+            fpr = fpr.cpu().numpy()
+            tpr = tpr.cpu().numpy()
+            roc_thresholds = roc_thresholds.cpu().numpy()
+
+            # Find optimal threshold for ROC
             roc_optimal_idx = np.argmax(tpr - fpr)
             optimal_threshold = roc_thresholds[roc_optimal_idx]
 
-            # Precision-Recall Curve and AUC
-            precision_vals, recall_vals, pr_thresholds = precision_recall_curve(labels, errors)
-            pr_auc = average_precision_score(labels, errors)
-            # Find the optimal threshold for PR Curve
+            # Compute Precision-Recall curve and AUC
+            precision_vals, recall_vals, pr_thresholds = precision_recall_curve(errors, labels.int(), task='binary')
+            pr_auc = average_precision(errors, labels.int(), task='binary')
+
+            # Convert tensors to numpy arrays
+            precision_vals = precision_vals.cpu().numpy()
+            recall_vals = recall_vals.cpu().numpy()
+            pr_thresholds = pr_thresholds.cpu().numpy()
+
+            # Compute F1 scores to find optimal threshold
             pr_fscore = 2 * precision_vals * recall_vals / (precision_vals + recall_vals + 1e-10)
             pr_optimal_idx = np.nanargmax(pr_fscore)
-            # Note: We keep the optimal_threshold from ROC for consistency
+
+            # Round variables to 3 decimals
+            optimal_threshold = round(float(optimal_threshold), 3)
+            roc_auc = round(float(roc_auc), 3)
+            pr_auc = round(float(pr_auc), 3)
+
+            # Round arrays for plotting (optional)
+            fpr = np.round(fpr, 3)
+            tpr = np.round(tpr, 3)
+            roc_thresholds = np.round(roc_thresholds, 3)
+            precision_vals = np.round(precision_vals, 3)
+            recall_vals = np.round(recall_vals, 3)
+            pr_thresholds = np.round(pr_thresholds, 3)
 
             return (
                 optimal_threshold,
                 fpr, tpr, roc_thresholds, roc_auc, roc_optimal_idx,
                 precision_vals, recall_vals, pr_thresholds, pr_auc, pr_optimal_idx
             )
-        except ValueError as e:
+
+        except Exception as e:
             Log.error(f"Error computing ROC or PR curves: {e}")
             return None
 
@@ -182,13 +202,13 @@ class AnomalyDetectionMetrics:
         Classifies samples as anomalies based on the threshold.
 
         Args:
-            errors (numpy.ndarray): Reconstruction errors for each sample.
+            errors (torch.Tensor): Reconstruction errors for each sample.
             threshold (float): Threshold value for classifying anomalies.
 
         Returns:
-            numpy.ndarray: Binary array where 1 indicates an anomaly and 0 indicates normal.
+            torch.Tensor: Binary tensor where 1 indicates an anomaly and 0 indicates normal.
         """
-        anomalies = (errors >= threshold).astype(int)
+        anomalies = (errors >= threshold).int()
         return anomalies
 
     @staticmethod
@@ -197,19 +217,30 @@ class AnomalyDetectionMetrics:
         Calculates evaluation metrics for anomaly detection.
 
         Args:
-            anomalies (numpy.ndarray): Predicted anomaly labels.
-            labels (numpy.ndarray): True anomaly labels.
+            anomalies (torch.Tensor): Predicted anomaly labels.
+            labels (torch.Tensor): True anomaly labels.
             roc_auc (float): ROC AUC score computed from continuous errors.
             pr_auc (float): PR AUC score computed from continuous errors.
 
         Returns:
             dict: Dictionary containing precision, recall, f1_score, roc_auc, and pr_auc.
         """
-        precision, recall, f1_score, _ = precision_recall_fscore_support(labels, anomalies, average='binary')
+        # Convert tensors to NumPy arrays
+        anomalies_np = anomalies.detach().cpu().numpy()
+        labels_np = labels.detach().cpu().numpy()
+
+        # Use sklearn's precision_recall_fscore_support
+        precision, recall, f1_score, _ = precision_recall_fscore_support(labels_np, anomalies_np, average='binary')
+
+        # Round metrics to 3 decimals
+        precision = round(precision, 3)
+        recall = round(recall, 3)
+        f1_score = round(f1_score, 3)
+
         return {
-            'precision': round(precision, 3),
-            'recall': round(recall, 3),
-            'f1_score': round(f1_score, 3),
-            'roc_auc': round(roc_auc, 3) if roc_auc is not None else None,
-            'pr_auc': round(pr_auc, 3) if pr_auc is not None else None
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1_score,
+            'roc_auc': roc_auc,
+            'pr_auc': pr_auc
         }
