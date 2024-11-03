@@ -99,13 +99,16 @@ class RNNVAExperiment(LightningModule):
         torch.cuda.empty_cache()
         results = self.forward(batch)
         self.curr_device = batch['signal'].device
-        self.train_loss = self.model.loss_function(self.curr_device,
-                                                 **results,
-                                                 M_N=self.params['kld_weight'],
-                                                 batch_idx=batch_idx)
+        self.train_loss = self.model.loss_function(
+            self.curr_device,
+            **results,
+            M_N=self.params['kld_weight'],
+            batch_idx=batch_idx
+        )
 
-        self.log_dict({key: val.item() for key, val in self.train_loss.items()}, sync_dist=True, on_step=True,
-                      on_epoch=True)
+        # Log the main loss with prog_bar=True to display it in the progress bar
+        self.log('train_loss', self.train_loss['loss'], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+
         torch.cuda.empty_cache()
         return self.train_loss['loss']
 
@@ -113,15 +116,16 @@ class RNNVAExperiment(LightningModule):
         torch.cuda.empty_cache()
         results = self.forward(batch)
         self.curr_device = batch['signal'].device
-        self.val_loss = self.model.loss_function(self.curr_device,
-                                                 **results,
-                                                 M_N=self.params['kld_weight'],
-                                                 batch_idx=batch_idx)
+        self.val_loss = self.model.loss_function(
+            self.curr_device,
+            **results,
+            M_N=self.params['kld_weight'],
+            batch_idx=batch_idx
+        )
 
-        self.log_dict({f"val_{key}": val.item() for key, val in self.val_loss.items()}, sync_dist=True, on_step=False,
-                      on_epoch=True)
-        # TODO add more metrics
-        # https://github.com/Lightning-AI/metrics/issues/340#issuecomment-872073730
+        # Log the validation loss with prog_bar=True
+        self.log('val_loss', self.val_loss['loss'], on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
         torch.cuda.empty_cache()
         return self.val_loss['loss']
 
@@ -155,6 +159,7 @@ class RNNVAExperiment(LightningModule):
         )
 
         torch.cuda.empty_cache()
+        return self.results
 
     def on_test_end(self):
         # Compute anomaly detection metrics
@@ -171,6 +176,6 @@ class RNNVAExperiment(LightningModule):
                 ["PR AUC", f"{self.anomaly_metrics['pr_auc']:.3f}"],  # Added
             ]
             Log.info("\nAnomaly Detection Metrics:")
-            print(tabulate(metrics_list, headers=["Metric", "Value"], tablefmt="pretty"))
+            Log.info(tabulate(metrics_list, headers=["Metric", "Value"], tablefmt="pretty"))
         else:
             Log.error("Anomaly detection was not performed due to errors.")

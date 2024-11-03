@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 from nianetvae.dataloaders import BaseDataLoader
 
 
-# Custom dataset class for MSL
+# Custom dataset class for MSL and SMAP
 class MSLDataset(Dataset):
     def __init__(self, data, targets, seq_len=200, stride=1):
         # Convert data and targets to PyTorch tensors
@@ -67,15 +67,15 @@ class MSLDataLoader(BaseDataLoader):
         anomaly_file = os.path.join(self.data_path, 'labeled_anomalies.csv')
         anomaly_info = pd.read_csv(anomaly_file)
 
-        # Filter out MSL-specific rows
-        msl_anomalies = anomaly_info[anomaly_info['spacecraft'] == 'MSL']
+        # Filter out rows for the specified spacecraft
+        spacecraft_anomalies = anomaly_info[anomaly_info['spacecraft'] == self.dataset_type]
 
         # Initialize lists to hold training data and labels
         train_data_list = []
         train_labels_list = []
 
-        # Load all MSL .npy files based on chan_id in the CSV for training data
-        for index, row in msl_anomalies.iterrows():
+        # Load all .npy files based on chan_id in the CSV for training data
+        for index, row in spacecraft_anomalies.iterrows():
             file_name = row['chan_id'] + '.npy'
             file_path = os.path.join(self.data_path, 'train', file_name)
             if os.path.exists(file_path):
@@ -108,8 +108,8 @@ class MSLDataLoader(BaseDataLoader):
         test_data_list = []
         test_labels_list = []
 
-        # Load all MSL .npy files based on chan_id in the CSV for test data
-        for index, row in msl_anomalies.iterrows():
+        # Load all .npy files based on chan_id in the CSV for test data
+        for index, row in spacecraft_anomalies.iterrows():
             file_name = row['chan_id'] + '.npy'
             file_path = os.path.join(self.data_path, 'test', file_name)
             if os.path.exists(file_path):

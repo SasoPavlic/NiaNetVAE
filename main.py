@@ -25,6 +25,7 @@ def select_dataloader(config):
         "ECG5000": ECG5000DataLoader,
         "KPI": KPIDataLoader,
         "MSL": MSLDataLoader,
+        "SMAP": MSLDataLoader,  # Use the same data loader for SMAP
     }
 
     # Get the appropriate DataLoader class based on the dataset_type

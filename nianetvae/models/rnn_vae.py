@@ -31,7 +31,6 @@ class RNNVAE(BaseVAE, nn.Module):
         #MSL dataset
         #solution = [0.98304425, 0.10804011, 0.15121107, 0.09719232, 0.65059224, 0.65365383]
         # Initialize validity flag
-        #TODO Check if the skip of model creation for invalid model works
         self.is_valid = True
 
         # Extract data parameters
