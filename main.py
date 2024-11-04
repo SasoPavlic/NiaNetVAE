@@ -12,6 +12,7 @@ from log import Log
 from nianetvae.dataloaders.ecg_dataloader import ECG5000DataLoader
 from nianetvae.dataloaders.kpi_dataloader import KPIDataLoader
 from nianetvae.dataloaders.msl_dataloader import MSLDataLoader
+from nianetvae.dataloaders.smd_dataloader import SMDDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.storage.database import SQLiteConnector
 from nianetvae.rnn_vae_architecture_search import solve_architecture_problem
@@ -26,6 +27,7 @@ def select_dataloader(config):
         "KPI": KPIDataLoader,
         "MSL": MSLDataLoader,
         "SMAP": MSLDataLoader,  # Use the same data loader for SMAP
+        "SMD": SMDDataLoader,
     }
 
     # Get the appropriate DataLoader class based on the dataset_type
