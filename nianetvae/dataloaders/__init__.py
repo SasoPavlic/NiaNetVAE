@@ -1,7 +1,17 @@
 from typing import Optional
 
 from lightning import LightningDataModule
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
+
+from log import Log
+
+
+class EmptyDataset(Dataset):
+    def __len__(self):
+        return 0
+
+    def __getitem__(self, idx):
+        raise IndexError("This dataset is empty.")
 
 
 class BaseDataLoader(LightningDataModule):
@@ -36,35 +46,59 @@ class BaseDataLoader(LightningDataModule):
     def setup(self, stage: Optional[str] = None) -> None:
         raise NotImplementedError("This method should be overridden by subclasses")
 
+    def _empty_dataloader(self):
+        return DataLoader(
+            EmptyDataset(),
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            persistent_workers=self.persistent_workers,
+            pin_memory=self.pin_memory
+        )
+
     def train_dataloader(self):
         if self.train_dataset:
             # Return a DataLoader for the training dataset
             return DataLoader(
-                self.train_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers,
+                self.train_dataset,
+                batch_size=self.batch_size,
+                shuffle=False,
+                num_workers=self.num_workers,
                 persistent_workers=self.persistent_workers,
-                pin_memory=self.pin_memory, drop_last=True
+                pin_memory=self.pin_memory,
+                drop_last=True
             )
         else:
-            return None
+            Log.warning("Train dataset is None. Returning an empty DataLoader.")
+            return self._empty_dataloader()
 
     def val_dataloader(self):
         if self.val_dataset:
             # Return a DataLoader for the validation dataset
             return DataLoader(
-                self.val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers,
+                self.val_dataset,
+                batch_size=self.batch_size,
+                shuffle=False,
+                num_workers=self.num_workers,
                 persistent_workers=self.persistent_workers,
-                pin_memory=self.pin_memory, drop_last=True
+                pin_memory=self.pin_memory,
+                drop_last=True
             )
         else:
-            return None
+            Log.warning("Validation dataset is None. Returning an empty DataLoader.")
+            return self._empty_dataloader()
 
     def test_dataloader(self):
         if self.test_dataset:
             # Return a DataLoader for the test dataset
             return DataLoader(
-                self.test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers,
+                self.test_dataset,
+                batch_size=self.batch_size,
+                shuffle=False,
+                num_workers=self.num_workers,
                 persistent_workers=self.persistent_workers,
-                pin_memory=self.pin_memory, drop_last=True
+                pin_memory=self.pin_memory,
+                drop_last=True
             )
         else:
-            return None
+            Log.warning("Test dataset is None. Returning an empty DataLoader.")
+            return self._empty_dataloader()

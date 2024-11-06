@@ -9,12 +9,13 @@ nia_search:
     - self_adaptive_differential_evolution
 
 data_params:
-  dataset_type: "SMD"
-  data_path: "data/smd_dataset/"
-  seq_len: 200
-  n_features: 38
-  data_percentage: 10
-  batch_size: 64
+  dataset_type: "UCR"
+  data_path: "data/ucr_dataset/internal_bleeding/"
+  filename: "132_UCR_Anomaly_InternalBleeding10_3200_4526_4556.txt"
+  seq_len: 100
+  n_features: 1
+  data_percentage: 100
+  batch_size: 8
   train_size: 70
   val_size: 10
   test_size: 20
