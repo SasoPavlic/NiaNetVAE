@@ -68,7 +68,7 @@ class MSLDataLoader(BaseDataLoader):
         anomaly_info = pd.read_csv(anomaly_file)
 
         # Filter out rows for the specified spacecraft
-        spacecraft_anomalies = anomaly_info[anomaly_info['spacecraft'] == self.dataset_type]
+        spacecraft_anomalies = anomaly_info[anomaly_info['spacecraft'] == self.dataset_name]
 
         # Initialize lists to hold training data and labels
         train_data_list = []

@@ -47,13 +47,12 @@ import torch
 from sklearn.preprocessing import StandardScaler
 from nianetvae.dataloaders import BaseDataLoader
 
-
 class UCRDataLoader(BaseDataLoader):
-    def __init__(self, dataset_type: str, data_path: str, seq_len: int, data_percentage: float = 100.0,
+    def __init__(self, dataset_name: str, data_path: str, seq_len: int, data_percentage: float = 100.0,
                  batch_size: int = 32, train_size=70, val_size: float = 10.0, test_size: float = 20.0,
                  num_workers: int = 0, pin_memory: bool = False, persistent_workers: bool = False,
                  filename: str = None, **kwargs):
-        super().__init__(dataset_type=dataset_type, data_path=data_path, seq_len=seq_len, data_percentage=data_percentage,
+        super().__init__(dataset_name=dataset_name, data_path=data_path, seq_len=seq_len, data_percentage=data_percentage,
                          batch_size=batch_size, train_size=train_size, val_size=val_size, test_size=test_size,
                          num_workers=num_workers, pin_memory=pin_memory, persistent_workers=persistent_workers)
         self.filename = filename  # The specific file to use

@@ -1,0 +1,7 @@
+# smd_config.yaml
+
+data_params:
+  dataset_name: "SMD"
+  data_path: "data/smd_dataset/"
+  seq_len: 100  # Default value since Max Seq Length is not provided
+  n_features: 38

@@ -1,0 +1,7 @@
+# msl_config.yaml
+
+data_params:
+  dataset_name: "MSL"
+  data_path: "data/msl_dataset/"
+  seq_len: 100  # Default value since Max Seq Length is not provided
+  n_features: 55

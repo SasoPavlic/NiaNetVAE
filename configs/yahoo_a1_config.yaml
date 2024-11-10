@@ -1,0 +1,7 @@
+# yahoo_a1_config.yaml
+
+data_params:
+  dataset_name: "YahooA1"
+  data_path: "data/yahoo_dataset/"
+  seq_len: 100  # Default value since Max Seq Length is not provided
+  n_features: 1

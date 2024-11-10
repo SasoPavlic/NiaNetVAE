@@ -5,7 +5,6 @@ from pathlib import Path
 import torch
 import yaml
 from lightning.pytorch import seed_everything
-from lightning.pytorch.callbacks import EarlyStopping
 
 import nianetvae
 from log import Log
@@ -19,7 +18,7 @@ from nianetvae.storage.database import SQLiteConnector
 from nianetvae.rnn_vae_architecture_search import solve_architecture_problem
 
 def select_dataloader(config):
-    dataset_type = config["data_params"].get("dataset_type", "")
+    dataset_name = config["data_params"].get("dataset_name", "")
 
     # Define a mapping of dataset types to DataLoader classes
     dataloader_switch = {
@@ -30,13 +29,14 @@ def select_dataloader(config):
         "SMAP": MSLDataLoader,  # Use the same data loader for SMAP & MSL
         "SMD": SMDDataLoader,
         "UCR": UCRDataLoader,
+        # Add other datasets as needed
     }
 
-    # Get the appropriate DataLoader class based on the dataset_type
-    DataLoaderClass = dataloader_switch.get(dataset_type)
+    # Get the appropriate DataLoader class based on the dataset_name
+    DataLoaderClass = dataloader_switch.get(dataset_name)
 
     if DataLoaderClass is None:
-        raise ValueError(f"Unsupported dataset type: {dataset_type}")
+        raise ValueError(f"Unsupported dataset name: {dataset_name}")
 
     # Initialize the DataLoader with the corresponding parameters
     return DataLoaderClass(**config["data_params"])
@@ -59,13 +59,35 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    # Load main configuration
     with open(args.filename, 'r') as file:
         try:
             config = yaml.load(file, Loader=yaml.Loader)  # yaml.safe_load(file)
         except yaml.YAMLError as exc:
             Log.error("Error while loading config file")
             Log.error(exc)
+            exit(1)
 
+    # Load dataset-specific configuration
+    dataset_config_file = config['dataset']['config_file']
+    with open(dataset_config_file, 'r') as file:
+        try:
+            dataset_config = yaml.load(file, Loader=yaml.Loader)
+        except yaml.YAMLError as exc:
+            Log.error(f"Error while loading dataset config file: {dataset_config_file}")
+            Log.error(exc)
+            exit(1)
+
+    # Merge dataset_config into config
+    config.update(dataset_config)
+
+    # Merge shared data loader parameters into data_params
+    shared_data_loader_params = config.get('data_loader_params', {})
+    if 'data_params' not in config:
+        config['data_params'] = {}
+    config['data_params'].update(shared_data_loader_params)
+
+    # Continue with the rest of the code
     config['logging_params']['save_dir'] += RUN_UUID + '/'
     Path(config['logging_params']['save_dir']).mkdir(parents=True, exist_ok=True)
 

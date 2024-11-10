@@ -17,7 +17,7 @@ class EmptyDataset(Dataset):
 class BaseDataLoader(LightningDataModule):
     def __init__(
             self,
-            dataset_type: str,
+            dataset_name: str,
             data_path: str,
             batch_size: int,
             seq_len: int,
@@ -31,7 +31,7 @@ class BaseDataLoader(LightningDataModule):
             **kwargs,
     ):
         super().__init__()
-        self.dataset_type = dataset_type
+        self.dataset_name = dataset_name
         self.data_path = data_path
         self.batch_size = batch_size
         self.seq_len = seq_len

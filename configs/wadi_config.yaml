@@ -1,0 +1,7 @@
+# wadi_config.yaml
+
+data_params:
+  dataset_name: "WADI"
+  data_path: "data/wadi_dataset/"
+  seq_len: 100  # Default value since Max Seq Length is not provided
+  n_features: 123
