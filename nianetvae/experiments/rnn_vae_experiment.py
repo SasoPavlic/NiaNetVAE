@@ -41,8 +41,7 @@ class FineTuneLearningRateFinder(LearningRateFinder):
 
 
 class RNNVAExperiment(LightningModule):
-    def __init__(self,
-                 model: BaseVAE, path, **kwargs) -> None:
+    def __init__(self, model: BaseVAE, path, **kwargs) -> None:
         super(RNNVAExperiment, self).__init__()
 
         self.results = None
@@ -155,7 +154,8 @@ class RNNVAExperiment(LightningModule):
         self.anomaly_detection_metrics.update(
             predictions=results['reconstructed'],
             targets=batch['signal'],
-            labels=batch['target']
+            labels=batch['target'],
+            ts_ids=batch.get('ts_id', None)  # Pass ts_id if available
         )
 
         torch.cuda.empty_cache()
@@ -172,8 +172,18 @@ class RNNVAExperiment(LightningModule):
                 ["Precision", f"{self.anomaly_metrics['precision']:.3f}"],
                 ["Recall", f"{self.anomaly_metrics['recall']:.3f}"],
                 ["F1-Score", f"{self.anomaly_metrics['f1_score']:.3f}"],
-                ["ROC AUC", f"{self.anomaly_metrics['roc_auc']:.3f}"],
-                ["PR AUC", f"{self.anomaly_metrics['pr_auc']:.3f}"],  # Added
+                ["ROC AUC",
+                 f"{self.anomaly_metrics['roc_auc']:.3f}" if self.anomaly_metrics['roc_auc'] is not None else "N/A"],
+                ["PR AUC",
+                 f"{self.anomaly_metrics['pr_auc']:.3f}" if self.anomaly_metrics['pr_auc'] is not None else "N/A"],
+                ["PR AUC Mean", f"{self.anomaly_metrics['pr_auc_mean']:.3f}" if self.anomaly_metrics[
+                                                                                    'pr_auc_mean'] is not None else "N/A"],
+                ["PR AUC Std", f"{self.anomaly_metrics['pr_auc_std']:.3f}" if self.anomaly_metrics[
+                                                                                  'pr_auc_std'] is not None else "N/A"],
+                ["ROC AUC Mean", f"{self.anomaly_metrics['roc_auc_mean']:.3f}" if self.anomaly_metrics[
+                                                                                      'roc_auc_mean'] is not None else "N/A"],
+                ["ROC AUC Std", f"{self.anomaly_metrics['roc_auc_std']:.3f}" if self.anomaly_metrics[
+                                                                                    'roc_auc_std'] is not None else "N/A"],
             ]
             Log.info("\nAnomaly Detection Metrics:")
             Log.info(tabulate(metrics_list, headers=["Metric", "Value"], tablefmt="pretty"))

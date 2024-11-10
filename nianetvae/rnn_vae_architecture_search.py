@@ -174,11 +174,11 @@ class RNNVAEAEArchitecture(ExtendedProblem):
 
                 Log.info(f"======= Training {config['logging_params']['name']} =======")
                 start_time = datetime.now()
-                Log.info(f'\nTraining start: {start_time.strftime("%Y-%m-%d %H:%M:%S")}')
+                Log.info(f'\nTraining start: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
                 trainer.fit(experiment, datamodule=datamodule)
                 Log.info(f'\nTraining end: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
 
-                Log.info(f'\nTest start: {start_time.strftime("%Y-%m-%d %H:%M:%S")}')
+                Log.info(f'\nTest start: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
                 trainer.test(experiment, datamodule=datamodule)
                 Log.info(f'\nTest end: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
                 end_time = datetime.now()

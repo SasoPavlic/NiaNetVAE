@@ -10,64 +10,72 @@ from torch.utils.data import Dataset
 from nianetvae.dataloaders import BaseDataLoader
 
 
-# Custom dataset class for MSL and SMAP
 class MSLDataset(Dataset):
-    def __init__(self, data, targets, seq_len=200, stride=1):
-        # Convert data and targets to PyTorch tensors
-        self.data = torch.tensor(data).float()  # Shape: [num_samples, num_features]
-        self.targets = torch.tensor(targets).float()  # Shape: [num_samples]
-        self.seq_len = seq_len  # Sequence length for each sample
-        self.stride = stride  # Stride for creating sequences
-        self.sequences, self.labels = self._create_sequences()  # Generate sequences and corresponding labels
+    def __init__(self, data_list, labels_list, seq_len=200, stride=1):
+        self.seq_len = seq_len
+        self.stride = stride
+        self.sequences = []
+        self.labels = []
+        self.ts_ids = []  # List to store time series IDs
 
-    def _create_sequences(self):
-        # Check if data length is sufficient to create sequences
-        if len(self.data) < self.seq_len:
-            print(
-                f"Data length ({len(self.data)}) is less than seq_len ({self.seq_len}). No sequences will be created.")
-            # Return empty tensors if not enough data
-            return torch.empty((0, self.seq_len, self.data.shape[1])), torch.empty((0,))
+        # Iterate over each time series in the data list
+        for ts_id, (data, labels) in enumerate(zip(data_list, labels_list)):
+            data = torch.tensor(data).float()  # Shape: [num_samples, num_features]
+            labels = torch.tensor(labels).float()  # Shape: [num_samples]
+            seqs, lbls = self._create_sequences(data, labels)
+            self.sequences.extend(seqs)
+            self.labels.extend(lbls)
+            self.ts_ids.extend([ts_id] * len(seqs))  # Assign the same ts_id to all sequences from this time series
 
+        if self.sequences:
+            # Stack sequences and labels into tensors
+            self.sequences = torch.stack(self.sequences)  # Shape: [num_sequences, seq_len, num_features]
+            self.labels = torch.tensor(self.labels).int()  # Shape: [num_sequences]
+            self.ts_ids = torch.tensor(self.ts_ids).int()  # Shape: [num_sequences]
+        else:
+            # Handle the case where no sequences were created
+            self.sequences = torch.empty((0, self.seq_len, data_list[0].shape[1]))
+            self.labels = torch.empty((0,), dtype=torch.int)
+            self.ts_ids = torch.empty((0,), dtype=torch.int)
+
+    def _create_sequences(self, data, labels):
         sequences = []
         seq_labels = []
-        # Create sequences using a sliding window approach
-        for i in range(0, len(self.data) - self.seq_len + 1, self.stride):
+        num_samples = len(data)
+
+        # Create sequences within the current time series
+        for i in range(0, num_samples - self.seq_len + 1, self.stride):
             # Extract a sequence of length seq_len
-            sequence = self.data[i:i + self.seq_len]  # Shape: [seq_len, num_features]
+            sequence = data[i:i + self.seq_len]  # Shape: [seq_len, num_features]
             # Determine the label for the sequence
             # Label is 1 if any of the targets within the sequence indicate an anomaly
-            label = 1 if self.targets[i:i + self.seq_len].sum() > 0 else 0
+            label = 1 if labels[i:i + self.seq_len].sum() > 0 else 0
             sequences.append(sequence)
             seq_labels.append(label)
 
-        if not sequences:
-            print(f"No sequences were created for data length {len(self.data)} with seq_len {self.seq_len}.")
-            # Return empty tensors if no sequences were created
-            return torch.empty((0, self.seq_len, self.data.shape[1])), torch.empty((0,))
-
-        # Stack sequences and labels into tensors
-        return torch.stack(sequences), torch.tensor(seq_labels)
+        return sequences, seq_labels
 
     def __len__(self):
         # Return the number of sequences
         return len(self.sequences)
 
     def __getitem__(self, idx):
-        # Get the sequence and label at the specified index
+        # Get the sequence, label, and ts_id at the specified index
         signal = self.sequences[idx]  # Shape: [seq_len, num_features]
         target = self.labels[idx]
-        return {'signal': signal, 'target': target.int()}
+        ts_id = self.ts_ids[idx]
+        return {'signal': signal, 'target': target, 'ts_id': ts_id}
 
 
-# Custom MSL DataLoader with CSV anomaly reading
+
+# Custom MSL DataLoader with separate handling of multiple time series
 class MSLDataLoader(BaseDataLoader):
-
     def setup(self, stage: Optional[str] = None) -> None:
         # Load anomaly sequences from labeled_anomalies.csv
         anomaly_file = os.path.join(self.data_path, 'labeled_anomalies.csv')
         anomaly_info = pd.read_csv(anomaly_file)
 
-        # Filter out rows for the specified spacecraft
+        # Filter out rows for the specified dataset_name (spacecraft)
         spacecraft_anomalies = anomaly_info[anomaly_info['spacecraft'] == self.dataset_name]
 
         # Initialize lists to hold training data and labels
@@ -95,15 +103,6 @@ class MSLDataLoader(BaseDataLoader):
                 train_data_list.append(data)
                 train_labels_list.append(labels)
 
-        # Concatenate all loaded training data and labels
-        if train_data_list:
-            train_data = np.concatenate(train_data_list, axis=0)  # Shape: [total_samples, num_features]
-            train_labels = np.concatenate(train_labels_list, axis=0)  # Shape: [total_samples]
-        else:
-            print("No training data found.")
-            train_data = np.array([])
-            train_labels = np.array([])
-
         # Initialize lists to hold test data and labels
         test_data_list = []
         test_labels_list = []
@@ -129,79 +128,58 @@ class MSLDataLoader(BaseDataLoader):
                 test_data_list.append(data)
                 test_labels_list.append(labels)
 
-        # Concatenate all loaded test data and labels
+        # Normalize train data
+        scaler = StandardScaler()
+        if train_data_list:
+            # Concatenate all training data to fit the scaler
+            all_train_data = np.concatenate(train_data_list, axis=0)
+            scaler.fit(all_train_data)
+            # Transform each time series individually
+            for idx in range(len(train_data_list)):
+                train_data_list[idx] = scaler.transform(train_data_list[idx])
+        else:
+            print("No training data found.")
+            self.train_dataset = None
+
+        # Normalize test data using the same scaler
         if test_data_list:
-            test_data = np.concatenate(test_data_list, axis=0)  # Shape: [total_samples, num_features]
-            test_labels = np.concatenate(test_labels_list, axis=0)  # Shape: [total_samples]
+            for idx in range(len(test_data_list)):
+                test_data_list[idx] = scaler.transform(test_data_list[idx])
         else:
             print("No test data found.")
-            test_data = np.array([])
-            test_labels = np.array([])
+            self.test_dataset = None
 
-        # Normalize train and test data using StandardScaler
-        scaler = StandardScaler()
-        if train_data.size > 0:
-            # Fit the scaler on the training data
-            scaler.fit(train_data)
-            # Transform the training data
-            train_data = scaler.transform(train_data)
-        if test_data.size > 0:
-            # Transform the test data using the same scaler
-            test_data = scaler.transform(test_data)
-
-        # Apply data percentage filter to use a subset of the data
-        num_train_samples = int(len(train_data) * (self.data_percentage / 100))
-        num_test_samples = int(len(test_data) * (self.data_percentage / 100))
-        train_data = train_data[:num_train_samples]
-        train_labels = train_labels[:num_train_samples]
-        test_data = test_data[:num_test_samples]
-        test_labels = test_labels[:num_test_samples]
-
-        # Split train data into training and validation sets based on val_size
-        val_size = int(len(train_data) * (self.val_size / 100))
-        if val_size == 0:
-            print("Validation size is zero. Adjust 'val_size' parameter.")
-            x_train, x_val = train_data, np.array([])
-            y_train, y_val = train_labels, np.array([])
-        else:
-            # No shuffling to preserve temporal order
-            x_train, x_val = train_data[:-val_size], train_data[-val_size:]
-            y_train, y_val = train_labels[:-val_size], train_labels[-val_size:]
-
-        # Create datasets if data length is sufficient
-        if len(x_train) >= self.seq_len:
-            self.train_dataset = MSLDataset(x_train, y_train, seq_len=self.seq_len)
+        # Create training dataset
+        if train_data_list:
+            self.train_dataset = MSLDataset(train_data_list, train_labels_list, seq_len=self.seq_len)
             if len(self.train_dataset) == 0:
                 print("No sequences created for training dataset.")
                 self.train_dataset = None
         else:
-            print(
-                f"Training data is shorter than seq_len ({len(x_train)} < {self.seq_len}). Skipping training dataset.")
             self.train_dataset = None
 
-        if len(x_val) >= self.seq_len:
-            self.val_dataset = MSLDataset(x_val, y_val, seq_len=self.seq_len)
-            if len(self.val_dataset) == 0:
-                print("No sequences created for validation dataset.")
-                self.val_dataset = None
-        else:
-            print(
-                f"Validation data is shorter than seq_len ({len(x_val)} < {self.seq_len}). Skipping validation dataset.")
-            self.val_dataset = None
+        # No validation dataset
+        self.val_dataset = None
 
-        if len(test_data) >= self.seq_len:
-            self.test_dataset = MSLDataset(test_data, test_labels, seq_len=self.seq_len)
+        # Create test dataset
+        if test_data_list:
+            self.test_dataset = MSLDataset(test_data_list, test_labels_list, seq_len=self.seq_len)
             if len(self.test_dataset) == 0:
                 print("No sequences created for test dataset.")
                 self.test_dataset = None
         else:
-            print(f"Test data is shorter than seq_len ({len(test_data)} < {self.seq_len}). Skipping test dataset.")
             self.test_dataset = None
 
         # Log dataset sizes
         if self.train_dataset:
             print(f"Total training sequences: {len(self.train_dataset)}")
+        else:
+            print("Training dataset is empty.")
         if self.val_dataset:
             print(f"Total validation sequences: {len(self.val_dataset)}")
+        else:
+            print("Validation dataset is empty.")
         if self.test_dataset:
             print(f"Total test sequences: {len(self.test_dataset)}")
+        else:
+            print("Test dataset is empty.")

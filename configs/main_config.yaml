@@ -16,7 +16,7 @@ model_params:
 
 trainer_params:
   min_epochs: 1
-  max_epochs: 2
+  max_epochs: 1
 
 early_stop:
   monitor: "val_loss"
@@ -57,7 +57,7 @@ data_loader_params:
 
 # Dataset configuration
 dataset:
-  config_file: "configs/msl_config.yaml"
+  config_file: "configs/smd_config.yaml"
 
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+
 #| Benchmark  | # datasets | # dims| Train size | Test size  | Anomaly% | Path              | Max Seq Length|
