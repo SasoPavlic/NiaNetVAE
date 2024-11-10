@@ -1,61 +1,75 @@
 import os
-from typing import Optional, List
+from typing import Optional
 
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 
+from log import Log
 from nianetvae.dataloaders import BaseDataLoader
 
 
-# Inherit from MSLDataset and adjust as needed
 class SMDDataset(Dataset):
-    def __init__(self, data, targets, seq_len=200, stride=1):
-        self.data = torch.tensor(data).float()  # Shape: [num_samples, num_features]
-        self.targets = torch.tensor(targets).float()  # Shape: [num_samples]
-        self.seq_len = seq_len  # Sequence length for each sample
-        self.stride = stride  # Stride for creating sequences
-        self.sequences, self.labels = self._create_sequences()  # Generate sequences and corresponding labels
+    def __init__(self, data_list, labels_list, seq_len=200, stride=1):
+        self.seq_len = seq_len
+        self.stride = stride
+        self.sequences = []
+        self.labels = []
+        self.ts_ids = []  # Time series IDs
 
-    def _create_sequences(self):
-        if len(self.data) < self.seq_len:
-            print(
-                f"Data length ({len(self.data)}) is less than seq_len ({self.seq_len}). No sequences will be created.")
-            return torch.empty((0, self.seq_len, self.data.shape[1])), torch.empty((0,))
+        # Iterate over each time series in the data list
+        for ts_id, (data, labels) in enumerate(zip(data_list, labels_list)):
+            data = torch.tensor(data).float()  # Shape: [num_samples, num_features]
+            labels = torch.tensor(labels).float()  # Shape: [num_samples]
+            seqs, lbls = self._create_sequences(data, labels)
+            self.sequences.extend(seqs)
+            self.labels.extend(lbls)
+            self.ts_ids.extend([ts_id] * len(seqs))  # Assign ts_id to sequences
 
+        if self.sequences:
+            # Stack sequences and labels into tensors
+            self.sequences = torch.stack(self.sequences)  # Shape: [num_sequences, seq_len, num_features]
+            self.labels = torch.tensor(self.labels).int()  # Shape: [num_sequences]
+            self.ts_ids = torch.tensor(self.ts_ids).int()  # Shape: [num_sequences]
+        else:
+            # Handle the case where no sequences were created
+            self.sequences = torch.empty((0, self.seq_len, data_list[0].shape[1]))
+            self.labels = torch.empty((0,), dtype=torch.int)
+            self.ts_ids = torch.empty((0,), dtype=torch.int)
+
+    def _create_sequences(self, data, labels):
         sequences = []
         seq_labels = []
-        # Create sequences using a sliding window approach
-        for i in range(0, len(self.data) - self.seq_len + 1, self.stride):
+        num_samples = len(data)
+
+        # Create sequences within the current time series
+        for i in range(0, num_samples - self.seq_len + 1, self.stride):
             # Extract a sequence of length seq_len
-            sequence = self.data[i:i + self.seq_len]  # Shape: [seq_len, num_features]
+            sequence = data[i:i + self.seq_len]  # Shape: [seq_len, num_features]
             # Determine the label for the sequence
             # Label is 1 if any of the targets within the sequence indicate an anomaly
-            label = 1 if self.targets[i:i + self.seq_len].sum() > 0 else 0
+            label = 1 if labels[i:i + self.seq_len].sum() > 0 else 0
             sequences.append(sequence)
             seq_labels.append(label)
 
-        if not sequences:
-            print(f"No sequences were created for data length {len(self.data)} with seq_len {self.seq_len}.")
-            return torch.empty((0, self.seq_len, self.data.shape[1])), torch.empty((0,))
-
-        return torch.stack(sequences), torch.tensor(seq_labels)
+        return sequences, seq_labels
 
     def __len__(self):
         return len(self.sequences)
 
     def __getitem__(self, idx):
         signal = self.sequences[idx]  # Shape: [seq_len, num_features]
-        target = self.labels[idx].int()
-        return {'signal': signal, 'target': target}
+        target = self.labels[idx]
+        ts_id = self.ts_ids[idx]
+        return {'signal': signal, 'target': target, 'ts_id': ts_id}
 
 
 class SMDDataLoader(BaseDataLoader):
 
     def setup(self, stage: Optional[str] = None) -> None:
-        # Dynamically get filenames from the data_path
+        # Directories for train, test, and test labels
         train_dir = os.path.join(self.data_path, 'train')
         test_dir = os.path.join(self.data_path, 'test')
         test_label_dir = os.path.join(self.data_path, 'test_label')
@@ -69,7 +83,7 @@ class SMDDataLoader(BaseDataLoader):
         if set(test_files) != set(test_label_files):
             raise ValueError("Mismatch between test files and test label files.")
 
-        # Initialize lists to hold training data and labels
+        # Initialize lists to hold training data and labels per time series
         train_data_list = []
         train_labels_list = []
 
@@ -83,16 +97,7 @@ class SMDDataLoader(BaseDataLoader):
                 train_data_list.append(data)
                 train_labels_list.append(labels)
 
-        # Concatenate all loaded training data and labels
-        if train_data_list:
-            train_data = np.concatenate(train_data_list, axis=0)
-            train_labels = np.concatenate(train_labels_list, axis=0)
-        else:
-            print("No training data found.")
-            train_data = np.array([])
-            train_labels = np.array([])
-
-        # Initialize lists to hold test data and labels
+        # Initialize lists to hold test data and labels per time series
         test_data_list = []
         test_labels_list = []
 
@@ -107,78 +112,99 @@ class SMDDataLoader(BaseDataLoader):
                 test_data_list.append(data)
                 test_labels_list.append(labels)
 
-        # Concatenate all loaded test data and labels
-        if test_data_list:
-            test_data = np.concatenate(test_data_list, axis=0)
-            test_labels = np.concatenate(test_labels_list, axis=0)
-        else:
-            print("No test data found.")
-            test_data = np.array([])
-            test_labels = np.array([])
-
-        # Normalize train and test data using StandardScaler
+        # Normalize train data
         scaler = StandardScaler()
-        if train_data.size > 0:
-            scaler.fit(train_data)
-            train_data = scaler.transform(train_data)
-        if test_data.size > 0:
-            test_data = scaler.transform(test_data)
-
-        # Apply data percentage filter
-        num_train_samples = int(len(train_data) * (self.data_percentage / 100))
-        num_test_samples = int(len(test_data) * (self.data_percentage / 100))
-        train_data = train_data[:num_train_samples]
-        train_labels = train_labels[:num_train_samples]
-        test_data = test_data[:num_test_samples]
-        test_labels = test_labels[:num_test_samples]
-
-        # Split train data into training and validation sets
-        val_size = int(len(train_data) * (self.val_size / 100))
-        if val_size == 0:
-            print("Validation size is zero. Adjust 'val_size' parameter.")
-            x_train, x_val = train_data, np.array([])
-            y_train, y_val = train_labels, np.array([])
+        if train_data_list:
+            # Concatenate all training data to fit the scaler
+            all_train_data = np.concatenate(train_data_list, axis=0)
+            scaler.fit(all_train_data)
+            # Transform each time series individually
+            for idx in range(len(train_data_list)):
+                train_data_list[idx] = scaler.transform(train_data_list[idx])
         else:
-            x_train, x_val = train_data[:-val_size], train_data[-val_size:]
-            y_train, y_val = train_labels[:-val_size], train_labels[-val_size:]
-
-        # Create datasets
-        if len(x_train) >= self.seq_len:
-            self.train_dataset = SMDDataset(x_train, y_train, seq_len=self.seq_len)
-            if len(self.train_dataset) == 0:
-                print("No sequences created for training dataset.")
-                self.train_dataset = None
-        else:
-            print(
-                f"Training data is shorter than seq_len ({len(x_train)} < {self.seq_len}). Skipping training dataset.")
+            Log.error("No training data found.")
             self.train_dataset = None
 
-        if len(x_val) >= self.seq_len:
-            self.val_dataset = SMDDataset(x_val, y_val, seq_len=self.seq_len)
+        # Normalize test data using the same scaler
+        if test_data_list:
+            for idx in range(len(test_data_list)):
+                test_data_list[idx] = scaler.transform(test_data_list[idx])
+        else:
+            Log.error("No test data found.")
+            self.test_dataset = None
+
+        # Apply data percentage filter
+        if self.data_percentage < 100:
+            num_train_samples = [int(len(data) * (self.data_percentage / 100)) for data in train_data_list]
+            train_data_list = [data[:n] for data, n in zip(train_data_list, num_train_samples)]
+            train_labels_list = [labels[:n] for labels, n in zip(train_labels_list, num_train_samples)]
+
+            num_test_samples = [int(len(data) * (self.data_percentage / 100)) for data in test_data_list]
+            test_data_list = [data[:n] for data, n in zip(test_data_list, num_test_samples)]
+            test_labels_list = [labels[:n] for labels, n in zip(test_labels_list, num_test_samples)]
+
+        # Split train data into training and validation sets per time series
+        x_train_list = []
+        y_train_list = []
+        x_val_list = []
+        y_val_list = []
+        for data, labels in zip(train_data_list, train_labels_list):
+            val_size = int(len(data) * (self.val_size / 100))
+            if val_size == 0:
+                Log.warning("Validation size is zero for one of the time series. Adjust 'val_size' parameter.")
+                x_train_list.append(data)
+                y_train_list.append(labels)
+                # Do not append empty arrays to x_val_list and y_val_list
+                # x_val_list.append(np.array([]))
+                # y_val_list.append(np.array([]))
+            else:
+                x_train_list.append(data[:-val_size])
+                y_train_list.append(labels[:-val_size])
+                x_val_list.append(data[-val_size:])
+                y_val_list.append(labels[-val_size:])
+
+        # Create training dataset
+        if x_train_list:
+            self.train_dataset = SMDDataset(x_train_list, y_train_list, seq_len=self.seq_len)
+            if len(self.train_dataset) == 0:
+                Log.error("No sequences created for training dataset.")
+                self.train_dataset = None
+        else:
+            self.train_dataset = None
+
+        # Create validation dataset only if validation data is available
+        has_validation_data = any(len(data) >= self.seq_len for data in x_val_list)
+        if has_validation_data:
+            self.val_dataset = SMDDataset(x_val_list, y_val_list, seq_len=self.seq_len)
             if len(self.val_dataset) == 0:
-                print("No sequences created for validation dataset.")
+                Log.warning("No sequences created for validation dataset.")
                 self.val_dataset = None
         else:
-            print(
-                f"Validation data is shorter than seq_len ({len(x_val)} < {self.seq_len}). Skipping validation dataset.")
+            Log.warning("Validation data is too short or not available. Skipping validation dataset.")
             self.val_dataset = None
 
-        if len(test_data) >= self.seq_len:
-            self.test_dataset = SMDDataset(test_data, test_labels, seq_len=self.seq_len)
+        # Create test dataset
+        if test_data_list:
+            self.test_dataset = SMDDataset(test_data_list, test_labels_list, seq_len=self.seq_len)
             if len(self.test_dataset) == 0:
-                print("No sequences created for test dataset.")
+                Log.error("No sequences created for test dataset.")
                 self.test_dataset = None
         else:
-            print(f"Test data is shorter than seq_len ({len(test_data)} < {self.seq_len}). Skipping test dataset.")
             self.test_dataset = None
 
         # Log dataset sizes
         if self.train_dataset:
-            print(f"Total training sequences: {len(self.train_dataset)}")
+            Log.info(f"Total training sequences: {len(self.train_dataset)}")
+        else:
+            Log.error("Training dataset is empty.")
         if self.val_dataset:
-            print(f"Total validation sequences: {len(self.val_dataset)}")
+            Log.info(f"Total validation sequences: {len(self.val_dataset)}")
+        else:
+            Log.warning("Validation dataset is empty.")
         if self.test_dataset:
-            print(f"Total test sequences: {len(self.test_dataset)}")
+            Log.info(f"Total test sequences: {len(self.test_dataset)}")
+        else:
+            Log.error("Test dataset is empty.")
 
     def load_file(self, file_path, labels=False):
         _, ext = os.path.splitext(file_path)
@@ -189,7 +215,7 @@ class SMDDataLoader(BaseDataLoader):
             elif ext == '.npy':
                 data = np.load(file_path)
             else:
-                print(f"Unsupported file format: {ext}")
+                Log.error(f"Unsupported file format: {ext}")
                 return None
 
             # Handle NaN values
@@ -200,5 +226,5 @@ class SMDDataLoader(BaseDataLoader):
                 data = data.flatten().astype(int)
             return data
         except Exception as e:
-            print(f"Error loading file {file_path}: {e}")
+            Log.error(f"Error loading file {file_path}: {e}")
             return None

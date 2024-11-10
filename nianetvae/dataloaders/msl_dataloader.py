@@ -7,6 +7,7 @@ import torch
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset
 
+from log import Log
 from nianetvae.dataloaders import BaseDataLoader
 
 
@@ -138,7 +139,7 @@ class MSLDataLoader(BaseDataLoader):
             for idx in range(len(train_data_list)):
                 train_data_list[idx] = scaler.transform(train_data_list[idx])
         else:
-            print("No training data found.")
+            Log.error("No training data found.")
             self.train_dataset = None
 
         # Normalize test data using the same scaler
@@ -146,14 +147,14 @@ class MSLDataLoader(BaseDataLoader):
             for idx in range(len(test_data_list)):
                 test_data_list[idx] = scaler.transform(test_data_list[idx])
         else:
-            print("No test data found.")
+            Log.error("No test data found.")
             self.test_dataset = None
 
         # Create training dataset
         if train_data_list:
             self.train_dataset = MSLDataset(train_data_list, train_labels_list, seq_len=self.seq_len)
             if len(self.train_dataset) == 0:
-                print("No sequences created for training dataset.")
+                Log.error("No sequences created for training dataset.")
                 self.train_dataset = None
         else:
             self.train_dataset = None
@@ -165,21 +166,21 @@ class MSLDataLoader(BaseDataLoader):
         if test_data_list:
             self.test_dataset = MSLDataset(test_data_list, test_labels_list, seq_len=self.seq_len)
             if len(self.test_dataset) == 0:
-                print("No sequences created for test dataset.")
+                Log.error("No sequences created for test dataset.")
                 self.test_dataset = None
         else:
             self.test_dataset = None
 
         # Log dataset sizes
         if self.train_dataset:
-            print(f"Total training sequences: {len(self.train_dataset)}")
+            Log.info(f"Total training sequences: {len(self.train_dataset)}")
         else:
-            print("Training dataset is empty.")
+            Log.error("Training dataset is empty.")
         if self.val_dataset:
-            print(f"Total validation sequences: {len(self.val_dataset)}")
+            Log.info(f"Total validation sequences: {len(self.val_dataset)}")
         else:
-            print("Validation dataset is empty.")
+            Log.warning("Validation dataset is empty.")
         if self.test_dataset:
-            print(f"Total test sequences: {len(self.test_dataset)}")
+            Log.info(f"Total test sequences: {len(self.test_dataset)}")
         else:
-            print("Test dataset is empty.")
+            Log.error("Test dataset is empty.")

@@ -57,7 +57,7 @@ data_loader_params:
 
 # Dataset configuration
 dataset:
-  config_file: "configs/smd_config.yaml"
+  config_file: "configs/msl_config.yaml"
 
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+
 #| Benchmark  | # datasets | # dims| Train size | Test size  | Anomaly% | Path              | Max Seq Length|
