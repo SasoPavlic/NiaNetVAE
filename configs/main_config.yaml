@@ -46,12 +46,12 @@ logging_params:
 
 # Shared Data Loader parameters
 data_loader_params:
-  data_percentage: 10
+  data_percentage: 100
   batch_size: 64
-  train_size: 80
-  val_size: 0
+  train_size: 70
+  val_size: 10
   test_size: 20
-  num_workers: 0
+  num_workers: 15
   persistent_workers: False
   pin_memory: True
 

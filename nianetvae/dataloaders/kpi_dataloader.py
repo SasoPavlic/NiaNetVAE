@@ -1,193 +1,159 @@
 import os
-from typing import Optional, List
+from typing import Optional, List, Tuple, Dict
 
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 
 from nianetvae.dataloaders import BaseDataLoader
 
-# Updated KPIDataset class to handle multiple time series
+
 class KPIDataset(Dataset):
-    def __init__(self, data_list, labels_list, seq_len=200, stride=1):
+    def __init__(self, data_list: List[np.ndarray], labels_list: List[np.ndarray], seq_len=200, stride=1):
         self.seq_len = seq_len
         self.stride = stride
-        self.sequences = []
-        self.labels = []
-        self.ts_ids = []  # Time series IDs
+        self.sequences, self.labels, self.ts_ids = [], [], []
 
-        # Iterate over each time series in the data list
         for ts_id, (data, labels) in enumerate(zip(data_list, labels_list)):
-            data = torch.tensor(data).float()  # Shape: [num_samples]
-            labels = torch.tensor(labels).float()  # Shape: [num_samples]
+            data = torch.tensor(data).float()
+            labels = torch.tensor(labels).float()
             seqs, lbls = self._create_sequences(data, labels)
             self.sequences.extend(seqs)
             self.labels.extend(lbls)
-            self.ts_ids.extend([ts_id] * len(seqs))  # Assign ts_id to sequences
+            self.ts_ids.extend([ts_id] * len(seqs))
 
         if self.sequences:
-            # Stack sequences and labels into tensors
-            self.sequences = torch.stack(self.sequences)  # Shape: [num_sequences, seq_len]
-            self.labels = torch.tensor(self.labels).int()  # Shape: [num_sequences]
-            self.ts_ids = torch.tensor(self.ts_ids).int()  # Shape: [num_sequences]
+            self.sequences = torch.stack(self.sequences)
+            self.labels = torch.tensor(self.labels).int()
+            self.ts_ids = torch.tensor(self.ts_ids).int()
         else:
-            # Handle the case where no sequences were created
             self.sequences = torch.empty((0, self.seq_len))
             self.labels = torch.empty((0,), dtype=torch.int)
             self.ts_ids = torch.empty((0,), dtype=torch.int)
 
-    def _create_sequences(self, data, labels):
-        sequences = []
-        seq_labels = []
-        num_samples = len(data)
-
-        # Create sequences within the current time series
-        for i in range(0, num_samples - self.seq_len + 1, self.stride):
-            # Extract a sequence of length seq_len
-            sequence = data[i:i + self.seq_len]  # Shape: [seq_len]
-            # Determine the label for the sequence
+    def _create_sequences(self, data: torch.Tensor, labels: torch.Tensor) -> Tuple[List[torch.Tensor], List[int]]:
+        sequences, seq_labels = [], []
+        for i in range(0, len(data) - self.seq_len + 1, self.stride):
+            sequence = data[i:i + self.seq_len]
             label = 1 if labels[i:i + self.seq_len].sum() > 0 else 0
             sequences.append(sequence)
             seq_labels.append(label)
-
         return sequences, seq_labels
 
     def __len__(self):
         return len(self.sequences)
 
     def __getitem__(self, idx):
-        signal = self.sequences[idx]  # Shape: [seq_len]
-        # Reshape data if necessary
+        signal = self.sequences[idx]
         if signal.dim() == 1:
-            # Univariate data: add an extra dimension to match model input expectations
-            signal = signal.unsqueeze(-1)  # Shape: [seq_len, 1]
+            signal = signal.unsqueeze(-1)
         target = self.labels[idx]
         ts_id = self.ts_ids[idx]
         return {'signal': signal, 'target': target.int(), 'ts_id': ts_id}
 
 
-# Updated KPI DataLoader class
 class KPIDataLoader(BaseDataLoader):
-
     def setup(self, stage: Optional[str] = None) -> None:
-        # Directories for train and test data
-        train_dir = os.path.join(self.data_path, 'train')
-        test_dir = os.path.join(self.data_path, 'test')
+        train_data_list, train_labels_list, test_data_list, test_labels_list = self._load_data_files()
+        print("Initial train data size:", sum(len(data) for data in train_data_list))
+        print("Initial test data size:", sum(len(data) for data in test_data_list))
 
-        # Get list of files in train and test directories
-        train_files = sorted([f for f in os.listdir(train_dir) if os.path.isfile(os.path.join(train_dir, f))])
-        test_files = sorted([f for f in os.listdir(test_dir) if os.path.isfile(os.path.join(test_dir, f))])
+        train_data_list, train_labels_list = self._normalize_and_filter(train_data_list, train_labels_list, fit=True)
+        test_data_list, test_labels_list = self._normalize_and_filter(test_data_list, test_labels_list, fit=False)
 
-        # Initialize lists to hold training data and labels per time series
-        train_data_list = []
-        train_labels_list = []
+        print("Filtered train data size:", sum(len(data) for data in train_data_list))
+        print("Filtered test data size:", sum(len(data) for data in test_data_list))
 
-        # Load all training files
-        for filename in train_files:
-            file_path = os.path.join(train_dir, filename)
-            data, labels = self.load_file(file_path, train=True)
-            if data is not None:
-                # Append data and zero labels to lists (unsupervised learning)
-                train_data_list.append(data)
-                train_labels_list.append(np.zeros(len(data), dtype=int))  # Unsupervised: use zero labels
-
-        # Initialize lists to hold test data and labels per time series
-        test_data_list = []
-        test_labels_list = []
-
-        # Load all test files
-        for filename in test_files:
-            file_path = os.path.join(test_dir, filename)
-            data, labels = self.load_file(file_path, train=False)
-            if data is not None:
-                test_data_list.append(data)
-                test_labels_list.append(labels)  # Test data contains labels
-
-        # Normalize train data
-        scaler = StandardScaler()
-        if train_data_list:
-            # Concatenate all training data to fit the scaler
-            all_train_data = np.concatenate(train_data_list, axis=0).reshape(-1, 1)
-            scaler.fit(all_train_data)
-            # Transform each time series individually
-            for idx in range(len(train_data_list)):
-                train_data_list[idx] = scaler.transform(train_data_list[idx].reshape(-1, 1)).flatten()
-        else:
-            print("No training data found.")
-            self.train_dataset = None
-
-        # Normalize test data using the same scaler
-        if test_data_list:
-            for idx in range(len(test_data_list)):
-                test_data_list[idx] = scaler.transform(test_data_list[idx].reshape(-1, 1)).flatten()
-        else:
-            print("No test data found.")
-            self.test_dataset = None
-
-        # Apply data percentage filter
-        if self.data_percentage < 100:
-            num_train_samples = [int(len(data) * (self.data_percentage / 100)) for data in train_data_list]
-            train_data_list = [data[:n] for data, n in zip(train_data_list, num_train_samples)]
-            train_labels_list = [labels[:n] for labels, n in zip(train_labels_list, num_train_samples)]
-
-            num_test_samples = [int(len(data) * (self.data_percentage / 100)) for data in test_data_list]
-            test_data_list = [data[:n] for data, n in zip(test_data_list, num_test_samples)]
-            test_labels_list = [labels[:n] for labels, n in zip(test_labels_list, num_test_samples)]
-
-        # Create datasets
-        if train_data_list:
-            self.train_dataset = KPIDataset(train_data_list, train_labels_list, seq_len=self.seq_len)
-            if len(self.train_dataset) == 0:
-                print("No sequences created for training dataset.")
-                self.train_dataset = None
-        else:
-            self.train_dataset = None
-
-        # No validation dataset (or create one if needed)
-        self.val_dataset = None
+        self._split_train_validation(train_data_list, train_labels_list)
 
         if test_data_list:
             self.test_dataset = KPIDataset(test_data_list, test_labels_list, seq_len=self.seq_len)
-            if len(self.test_dataset) == 0:
-                print("No sequences created for test dataset.")
-                self.test_dataset = None
-        else:
-            self.test_dataset = None
-
-        # Log dataset sizes
-        if self.train_dataset:
-            print(f"Total training sequences: {len(self.train_dataset)}")
-        else:
-            print("Training dataset is empty.")
-        if self.val_dataset:
-            print(f"Total validation sequences: {len(self.val_dataset)}")
-        else:
-            print("Validation dataset is empty.")
-        if self.test_dataset:
             print(f"Total test sequences: {len(self.test_dataset)}")
         else:
+            self.test_dataset = None
             print("Test dataset is empty.")
 
-    def load_file(self, file_path, train=True):
-        try:
-            # Load the CSV file into a dataframe
-            df = pd.read_csv(file_path)
-            # Ensure 'value' and 'label' columns exist for test data
-            if 'value' not in df.columns:
-                print(f"File {file_path} does not contain 'value' column.")
-                return None, None
+    def _load_raw_KPI(self, train_filename: str, test_filename: str) -> Tuple[Dict, Dict, Dict, Dict]:
+        train_data = pd.read_csv(train_filename)
+        train_data = train_data.set_index(['KPI ID', 'timestamp']).sort_index()
+        x_train, y_train, scaler = {}, {}, {}
+        for name, df in train_data.groupby(level=0):
+            x_train[name] = df['value'].to_numpy()
+            y_train[name] = df['label'].to_numpy()
+            meanv, stdv = df['value'].mean(), df['value'].std()
+            scaler[name] = (meanv, stdv)
+            x_train[name] = (x_train[name] - meanv) / stdv
 
-            # Extract 'value' column and handle NaNs
-            values = pd.to_numeric(df['value'], errors='coerce').fillna(0).values
+        test_data = pd.read_hdf(test_filename)
+        test_data['KPI ID'] = test_data['KPI ID'].apply(str)
+        test_data = test_data.set_index(['KPI ID', 'timestamp']).sort_index()
+        x_test, y_test = {}, {}
+        for name, df in test_data.groupby(level=0):
+            x_test[name] = df['value'].to_numpy()
+            y_test[name] = df['label'].to_numpy()
+            x_test[name] = (x_test[name] - scaler[name][0]) / scaler[name][1]
 
-            if not train and 'label' in df.columns:
-                labels = df['label'].fillna(0).astype(int).values
+        return x_train, y_train, x_test, y_test
+
+    def _load_data_files(self) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
+        train_file = os.path.join(self.data_path, 'train', 'phase2_train.csv')
+        test_file = os.path.join(self.data_path, 'test', 'phase2_ground_truth.hdf')
+
+        train_data_dict, train_labels_dict, test_data_dict, test_labels_dict = self._load_raw_KPI(train_file, test_file)
+
+        return (list(train_data_dict.values()), list(train_labels_dict.values()),
+                list(test_data_dict.values()), list(test_labels_dict.values()))
+
+    def _normalize_and_filter(self, data_list: List[np.ndarray], labels_list: List[np.ndarray], fit=True) -> Tuple[
+        List[np.ndarray], List[np.ndarray]]:
+        if not data_list:
+            return [], []
+
+        if fit:
+            self.scaler = StandardScaler()  # Set as an attribute of the class
+            all_data = np.concatenate(data_list).reshape(-1, 1)
+            self.scaler.fit(all_data)
+        else:
+            if not hasattr(self, 'scaler'):
+                raise AttributeError("Scaler not initialized. Ensure training data is normalized before test data.")
+
+        data_list = [self.scaler.transform(data.reshape(-1, 1)).flatten() for data in data_list]
+
+        if self.data_percentage < 100:
+            num_samples = [int(len(data) * (self.data_percentage / 100)) for data in data_list]
+            data_list = [data[:n] for data, n in zip(data_list, num_samples)]
+            labels_list = [labels[:n] for labels, n in zip(labels_list, num_samples)]
+
+        return data_list, labels_list
+
+    def _split_train_validation(self, train_data_list: List[np.ndarray], train_labels_list: List[np.ndarray]) -> None:
+        if self.val_size > 0:
+            train_data_split, val_data_split, train_labels_split, val_labels_split = [], [], [], []
+            for data, labels in zip(train_data_list, train_labels_list):
+                data_train, data_val, labels_train, labels_val = train_test_split(
+                    data, labels, test_size=self.val_size / 100, random_state=42)
+                train_data_split.append(data_train)
+                val_data_split.append(data_val)
+                train_labels_split.append(labels_train)
+                val_labels_split.append(labels_val)
+
+            if train_data_split:
+                self.train_dataset = KPIDataset(train_data_split, train_labels_split, seq_len=self.seq_len)
+                print(f"Total training sequences: {len(self.train_dataset)}")
             else:
-                labels = np.zeros(len(values), dtype=int)  # For unsupervised learning, use zero labels
+                self.train_dataset = None
+                print("Training dataset is empty.")
 
-            return values, labels
-        except Exception as e:
-            print(f"Error loading file {file_path}: {e}")
-            return None, None
+            if val_data_split:
+                self.val_dataset = KPIDataset(val_data_split, val_labels_split, seq_len=self.seq_len)
+                print(f"Total validation sequences: {len(self.val_dataset)}")
+            else:
+                self.val_dataset = None
+                print("Validation dataset is not created.")
+        else:
+            self.train_dataset = KPIDataset(train_data_list, train_labels_list, seq_len=self.seq_len)
+            self.val_dataset = None
+            print("Validation dataset is not created as val_size is set to 0.")
