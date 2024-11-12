@@ -1,129 +1,193 @@
 import os
-from typing import Optional
+from typing import Optional, List
 
+import numpy as np
 import pandas as pd
 import torch
-from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
+from sklearn.preprocessing import StandardScaler
 
 from nianetvae.dataloaders import BaseDataLoader
 
-
-# Custom dataset class for KPI
+# Updated KPIDataset class to handle multiple time series
 class KPIDataset(Dataset):
-    def __init__(self, data, targets, seq_len=200, stride=1):
-        # Convert data and targets to PyTorch tensors
-        self.data = torch.tensor(data).float()  # Shape: [num_samples]
-        self.targets = torch.tensor(targets).float()  # Shape: [num_samples]
-        self.seq_len = seq_len  # Sequence length for each sample
-        self.stride = stride  # Stride for creating sequences
-        self.data, self.targets = self._create_sequences()  # Generate sequences and corresponding labels
+    def __init__(self, data_list, labels_list, seq_len=200, stride=1):
+        self.seq_len = seq_len
+        self.stride = stride
+        self.sequences = []
+        self.labels = []
+        self.ts_ids = []  # Time series IDs
 
-    def _create_sequences(self):
-        # Create sliding sequences for the data, with corresponding labels
+        # Iterate over each time series in the data list
+        for ts_id, (data, labels) in enumerate(zip(data_list, labels_list)):
+            data = torch.tensor(data).float()  # Shape: [num_samples]
+            labels = torch.tensor(labels).float()  # Shape: [num_samples]
+            seqs, lbls = self._create_sequences(data, labels)
+            self.sequences.extend(seqs)
+            self.labels.extend(lbls)
+            self.ts_ids.extend([ts_id] * len(seqs))  # Assign ts_id to sequences
+
+        if self.sequences:
+            # Stack sequences and labels into tensors
+            self.sequences = torch.stack(self.sequences)  # Shape: [num_sequences, seq_len]
+            self.labels = torch.tensor(self.labels).int()  # Shape: [num_sequences]
+            self.ts_ids = torch.tensor(self.ts_ids).int()  # Shape: [num_sequences]
+        else:
+            # Handle the case where no sequences were created
+            self.sequences = torch.empty((0, self.seq_len))
+            self.labels = torch.empty((0,), dtype=torch.int)
+            self.ts_ids = torch.empty((0,), dtype=torch.int)
+
+    def _create_sequences(self, data, labels):
         sequences = []
         seq_labels = []
-        # Iterate over the data to create sequences
-        for i in range(0, len(self.data) - self.seq_len + 1, self.stride):
+        num_samples = len(data)
+
+        # Create sequences within the current time series
+        for i in range(0, num_samples - self.seq_len + 1, self.stride):
             # Extract a sequence of length seq_len
-            sequence = self.data[i:i + self.seq_len]  # Shape: [seq_len]
+            sequence = data[i:i + self.seq_len]  # Shape: [seq_len]
             # Determine the label for the sequence
-            # Since we have no anomaly labels, we default to 0
-            label = 1 if self.targets[i:i + self.seq_len].sum() > 0 else 0
+            label = 1 if labels[i:i + self.seq_len].sum() > 0 else 0
             sequences.append(sequence)
             seq_labels.append(label)
-        if not sequences:
-            # Handle case where no sequences were created
-            print(f"No sequences created: data length {len(self.data)} is less than seq_len {self.seq_len}")
-            # Return empty tensors if no sequences were created
-            return torch.empty((0, self.seq_len)), torch.empty((0,))
-        # Stack sequences and labels into tensors
-        return torch.stack(sequences), torch.tensor(seq_labels)
+
+        return sequences, seq_labels
 
     def __len__(self):
-        # Return the number of sequences
-        return len(self.data)
+        return len(self.sequences)
 
     def __getitem__(self, idx):
-        # Get the sequence and label at the specified index
-        signal = self.data[idx]  # Shape: [seq_len]
+        signal = self.sequences[idx]  # Shape: [seq_len]
         # Reshape data if necessary
         if signal.dim() == 1:
             # Univariate data: add an extra dimension to match model input expectations
             signal = signal.unsqueeze(-1)  # Shape: [seq_len, 1]
-        target = self.targets[idx]
-        return {'signal': signal, 'target': target.int()}
+        target = self.labels[idx]
+        ts_id = self.ts_ids[idx]
+        return {'signal': signal, 'target': target.int(), 'ts_id': ts_id}
 
 
-# Custom KPI DataLoader
+# Updated KPI DataLoader class
 class KPIDataLoader(BaseDataLoader):
 
     def setup(self, stage: Optional[str] = None) -> None:
-        # Load train and test data from respective CSV files
-        train_file = os.path.join(self.data_path, 'train.csv')
-        test_file = os.path.join(self.data_path, 'test.csv')
+        # Directories for train and test data
+        train_dir = os.path.join(self.data_path, 'train')
+        test_dir = os.path.join(self.data_path, 'test')
 
-        # Load train.csv and test.csv into dataframes
-        train_df = pd.read_csv(train_file)
-        test_df = pd.read_csv(test_file)
+        # Get list of files in train and test directories
+        train_files = sorted([f for f in os.listdir(train_dir) if os.path.isfile(os.path.join(train_dir, f))])
+        test_files = sorted([f for f in os.listdir(test_dir) if os.path.isfile(os.path.join(test_dir, f))])
 
-        # Only keep 'timestamp' and 'value' columns for data
-        train_df = train_df[['timestamp', 'value']]
-        test_df = test_df[['timestamp', 'value']]
+        # Initialize lists to hold training data and labels per time series
+        train_data_list = []
+        train_labels_list = []
 
-        # Apply data percentage filter to use a subset of the data
-        train_df = train_df.sample(frac=self.data_percentage / 100.0, random_state=42)
-        test_df = test_df.sample(frac=self.data_percentage / 100.0, random_state=42)
+        # Load all training files
+        for filename in train_files:
+            file_path = os.path.join(train_dir, filename)
+            data, labels = self.load_file(file_path, train=True)
+            if data is not None:
+                # Append data and zero labels to lists (unsupervised learning)
+                train_data_list.append(data)
+                train_labels_list.append(np.zeros(len(data), dtype=int))  # Unsupervised: use zero labels
 
-        # Convert 'value' column to numeric and extract values
-        train_values = pd.to_numeric(train_df['value']).values  # Shape: [num_samples]
-        test_values = pd.to_numeric(test_df['value']).values  # Shape: [num_samples]
+        # Initialize lists to hold test data and labels per time series
+        test_data_list = []
+        test_labels_list = []
 
-        # Since there are no labels, create zero labels
-        train_labels = [0] * len(train_values)
-        test_labels = [0] * len(test_values)
+        # Load all test files
+        for filename in test_files:
+            file_path = os.path.join(test_dir, filename)
+            data, labels = self.load_file(file_path, train=False)
+            if data is not None:
+                test_data_list.append(data)
+                test_labels_list.append(labels)  # Test data contains labels
 
-        # Handle NaN values by replacing them with 0
-        train_values = pd.Series(train_values).fillna(0).values
-        test_values = pd.Series(test_values).fillna(0).values
+        # Normalize train data
+        scaler = StandardScaler()
+        if train_data_list:
+            # Concatenate all training data to fit the scaler
+            all_train_data = np.concatenate(train_data_list, axis=0).reshape(-1, 1)
+            scaler.fit(all_train_data)
+            # Transform each time series individually
+            for idx in range(len(train_data_list)):
+                train_data_list[idx] = scaler.transform(train_data_list[idx].reshape(-1, 1)).flatten()
+        else:
+            print("No training data found.")
+            self.train_dataset = None
 
-        # Normalize train and test data using the training data's mean and std
-        mean_data, std_data = train_values.mean(), train_values.std()
-        # Avoid division by zero by checking if std_data is not zero
-        train_values = (train_values - mean_data) / (std_data if std_data != 0 else 1)
-        test_values = (test_values - mean_data) / (std_data if std_data != 0 else 1)
+        # Normalize test data using the same scaler
+        if test_data_list:
+            for idx in range(len(test_data_list)):
+                test_data_list[idx] = scaler.transform(test_data_list[idx].reshape(-1, 1)).flatten()
+        else:
+            print("No test data found.")
+            self.test_dataset = None
 
-        # Split train data into training and validation sets
-        x_train, x_val, y_train, y_val = train_test_split(
-            train_values, train_labels, test_size=self.val_size / 100, random_state=42
-        )
+        # Apply data percentage filter
+        if self.data_percentage < 100:
+            num_train_samples = [int(len(data) * (self.data_percentage / 100)) for data in train_data_list]
+            train_data_list = [data[:n] for data, n in zip(train_data_list, num_train_samples)]
+            train_labels_list = [labels[:n] for labels, n in zip(train_labels_list, num_train_samples)]
 
-        # Create datasets if data length is sufficient
-        if len(x_train) >= self.seq_len:
-            self.train_dataset = KPIDataset(x_train, y_train, seq_len=self.seq_len)
+            num_test_samples = [int(len(data) * (self.data_percentage / 100)) for data in test_data_list]
+            test_data_list = [data[:n] for data, n in zip(test_data_list, num_test_samples)]
+            test_labels_list = [labels[:n] for labels, n in zip(test_labels_list, num_test_samples)]
+
+        # Create datasets
+        if train_data_list:
+            self.train_dataset = KPIDataset(train_data_list, train_labels_list, seq_len=self.seq_len)
             if len(self.train_dataset) == 0:
                 print("No sequences created for training dataset.")
                 self.train_dataset = None
         else:
-            print(
-                f"Training data is shorter than seq_len ({len(x_train)} < {self.seq_len}). Skipping training dataset.")
             self.train_dataset = None
 
-        if len(x_val) >= self.seq_len:
-            self.val_dataset = KPIDataset(x_val, y_val, seq_len=self.seq_len)
-            if len(self.val_dataset) == 0:
-                print("No sequences created for validation dataset.")
-                self.val_dataset = None
-        else:
-            print(
-                f"Validation data is shorter than seq_len ({len(x_val)} < {self.seq_len}). Skipping validation dataset.")
-            self.val_dataset = None
+        # No validation dataset (or create one if needed)
+        self.val_dataset = None
 
-        if len(test_values) >= self.seq_len:
-            self.test_dataset = KPIDataset(test_values, test_labels, seq_len=self.seq_len)
+        if test_data_list:
+            self.test_dataset = KPIDataset(test_data_list, test_labels_list, seq_len=self.seq_len)
             if len(self.test_dataset) == 0:
                 print("No sequences created for test dataset.")
                 self.test_dataset = None
         else:
-            print(f"Test data is shorter than seq_len ({len(test_values)} < {self.seq_len}). Skipping test dataset.")
             self.test_dataset = None
+
+        # Log dataset sizes
+        if self.train_dataset:
+            print(f"Total training sequences: {len(self.train_dataset)}")
+        else:
+            print("Training dataset is empty.")
+        if self.val_dataset:
+            print(f"Total validation sequences: {len(self.val_dataset)}")
+        else:
+            print("Validation dataset is empty.")
+        if self.test_dataset:
+            print(f"Total test sequences: {len(self.test_dataset)}")
+        else:
+            print("Test dataset is empty.")
+
+    def load_file(self, file_path, train=True):
+        try:
+            # Load the CSV file into a dataframe
+            df = pd.read_csv(file_path)
+            # Ensure 'value' and 'label' columns exist for test data
+            if 'value' not in df.columns:
+                print(f"File {file_path} does not contain 'value' column.")
+                return None, None
+
+            # Extract 'value' column and handle NaNs
+            values = pd.to_numeric(df['value'], errors='coerce').fillna(0).values
+
+            if not train and 'label' in df.columns:
+                labels = df['label'].fillna(0).astype(int).values
+            else:
+                labels = np.zeros(len(values), dtype=int)  # For unsupervised learning, use zero labels
+
+            return values, labels
+        except Exception as e:
+            print(f"Error loading file {file_path}: {e}")
+            return None, None

@@ -46,7 +46,7 @@ logging_params:
 
 # Shared Data Loader parameters
 data_loader_params:
-  data_percentage: 100
+  data_percentage: 10
   batch_size: 64
   train_size: 80
   val_size: 0
@@ -57,7 +57,7 @@ data_loader_params:
 
 # Dataset configuration
 dataset:
-  config_file: "configs/msl_config.yaml"
+  config_file: "configs/kpi_config.yaml"
 
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+
 #| Benchmark  | # datasets | # dims| Train size | Test size  | Anomaly% | Path              | Max Seq Length|
