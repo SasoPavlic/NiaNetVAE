@@ -8,6 +8,7 @@ from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 
+from log import Log
 from nianetvae.dataloaders import BaseDataLoader
 
 
@@ -58,14 +59,9 @@ class KPIDataset(Dataset):
 class KPIDataLoader(BaseDataLoader):
     def setup(self, stage: Optional[str] = None) -> None:
         train_data_list, train_labels_list, test_data_list, test_labels_list = self._load_data_files()
-        print("Initial train data size:", sum(len(data) for data in train_data_list))
-        print("Initial test data size:", sum(len(data) for data in test_data_list))
 
         train_data_list, train_labels_list = self._normalize_and_filter(train_data_list, train_labels_list, fit=True)
         test_data_list, test_labels_list = self._normalize_and_filter(test_data_list, test_labels_list, fit=False)
-
-        print("Filtered train data size:", sum(len(data) for data in train_data_list))
-        print("Filtered test data size:", sum(len(data) for data in test_data_list))
 
         self._split_train_validation(train_data_list, train_labels_list)
 
@@ -74,7 +70,7 @@ class KPIDataLoader(BaseDataLoader):
             print(f"Total test sequences: {len(self.test_dataset)}")
         else:
             self.test_dataset = None
-            print("Test dataset is empty.")
+            Log.error("Test dataset is empty.")
 
     def _load_raw_KPI(self, train_filename: str, test_filename: str) -> Tuple[Dict, Dict, Dict, Dict]:
         train_data = pd.read_csv(train_filename)
@@ -142,18 +138,18 @@ class KPIDataLoader(BaseDataLoader):
 
             if train_data_split:
                 self.train_dataset = KPIDataset(train_data_split, train_labels_split, seq_len=self.seq_len)
-                print(f"Total training sequences: {len(self.train_dataset)}")
+                Log.info(f"Total training sequences: {len(self.train_dataset)}")
             else:
                 self.train_dataset = None
-                print("Training dataset is empty.")
+                Log.warning("Training dataset is empty.")
 
             if val_data_split:
                 self.val_dataset = KPIDataset(val_data_split, val_labels_split, seq_len=self.seq_len)
-                print(f"Total validation sequences: {len(self.val_dataset)}")
+                Log.info(f"Total validation sequences: {len(self.val_dataset)}")
             else:
                 self.val_dataset = None
-                print("Validation dataset is not created.")
+                Log.warning("Validation dataset is not created.")
         else:
             self.train_dataset = KPIDataset(train_data_list, train_labels_list, seq_len=self.seq_len)
             self.val_dataset = None
-            print("Validation dataset is not created as val_size is set to 0.")
+            Log.info("Validation dataset is not created as val_size is set to 0.")

@@ -1,186 +1,149 @@
 import os
-from typing import Optional
+from typing import Optional, List, Tuple, Dict
 
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
-
+from sklearn.preprocessing import StandardScaler
 from log import Log
 from nianetvae.dataloaders import BaseDataLoader
 
 
 class MSLDataset(Dataset):
-    def __init__(self, data_list, labels_list, seq_len=200, stride=1):
+    def __init__(self, data_list: List[np.ndarray], labels_list: List[np.ndarray], seq_len=200, stride=1):
         self.seq_len = seq_len
         self.stride = stride
-        self.sequences = []
-        self.labels = []
-        self.ts_ids = []  # List to store time series IDs
+        self.sequences, self.labels, self.ts_ids = [], [], []
 
-        # Iterate over each time series in the data list
         for ts_id, (data, labels) in enumerate(zip(data_list, labels_list)):
-            data = torch.tensor(data).float()  # Shape: [num_samples, num_features]
-            labels = torch.tensor(labels).float()  # Shape: [num_samples]
+            data = torch.tensor(data).float()
+            labels = torch.tensor(labels).float()
             seqs, lbls = self._create_sequences(data, labels)
             self.sequences.extend(seqs)
             self.labels.extend(lbls)
-            self.ts_ids.extend([ts_id] * len(seqs))  # Assign the same ts_id to all sequences from this time series
+            self.ts_ids.extend([ts_id] * len(seqs))
 
         if self.sequences:
-            # Stack sequences and labels into tensors
-            self.sequences = torch.stack(self.sequences)  # Shape: [num_sequences, seq_len, num_features]
-            self.labels = torch.tensor(self.labels).int()  # Shape: [num_sequences]
-            self.ts_ids = torch.tensor(self.ts_ids).int()  # Shape: [num_sequences]
+            self.sequences = torch.stack(self.sequences)
+            self.labels = torch.tensor(self.labels).int()
+            self.ts_ids = torch.tensor(self.ts_ids).int()
         else:
-            # Handle the case where no sequences were created
             self.sequences = torch.empty((0, self.seq_len, data_list[0].shape[1]))
             self.labels = torch.empty((0,), dtype=torch.int)
             self.ts_ids = torch.empty((0,), dtype=torch.int)
 
-    def _create_sequences(self, data, labels):
-        sequences = []
-        seq_labels = []
-        num_samples = len(data)
-
-        # Create sequences within the current time series
-        for i in range(0, num_samples - self.seq_len + 1, self.stride):
-            # Extract a sequence of length seq_len
-            sequence = data[i:i + self.seq_len]  # Shape: [seq_len, num_features]
-            # Determine the label for the sequence
-            # Label is 1 if any of the targets within the sequence indicate an anomaly
+    def _create_sequences(self, data: torch.Tensor, labels: torch.Tensor) -> Tuple[List[torch.Tensor], List[int]]:
+        sequences, seq_labels = [], []
+        for i in range(0, len(data) - self.seq_len + 1, self.stride):
+            sequence = data[i:i + self.seq_len]
             label = 1 if labels[i:i + self.seq_len].sum() > 0 else 0
             sequences.append(sequence)
             seq_labels.append(label)
-
         return sequences, seq_labels
 
     def __len__(self):
-        # Return the number of sequences
         return len(self.sequences)
 
     def __getitem__(self, idx):
-        # Get the sequence, label, and ts_id at the specified index
-        signal = self.sequences[idx]  # Shape: [seq_len, num_features]
+        signal = self.sequences[idx]
+        if signal.dim() == 1:
+            signal = signal.unsqueeze(-1)
         target = self.labels[idx]
         ts_id = self.ts_ids[idx]
         return {'signal': signal, 'target': target, 'ts_id': ts_id}
 
 
-
-# Custom MSL DataLoader with separate handling of multiple time series
 class MSLDataLoader(BaseDataLoader):
     def setup(self, stage: Optional[str] = None) -> None:
-        # Load anomaly sequences from labeled_anomalies.csv
-        anomaly_file = os.path.join(self.data_path, 'labeled_anomalies.csv')
-        anomaly_info = pd.read_csv(anomaly_file)
+        train_data_list, train_labels_list, test_data_list, test_labels_list = self._load_data_files()
 
-        # Filter out rows for the specified dataset_name (spacecraft)
-        spacecraft_anomalies = anomaly_info[anomaly_info['spacecraft'] == self.dataset_name]
+        train_data_list, train_labels_list = self._normalize_and_filter(train_data_list, train_labels_list, fit=True)
+        test_data_list, test_labels_list = self._normalize_and_filter(test_data_list, test_labels_list, fit=False)
 
-        # Initialize lists to hold training data and labels
-        train_data_list = []
-        train_labels_list = []
+        self._split_train_validation(train_data_list, train_labels_list)
 
-        # Load all .npy files based on chan_id in the CSV for training data
-        for index, row in spacecraft_anomalies.iterrows():
-            file_name = row['chan_id'] + '.npy'
-            file_path = os.path.join(self.data_path, 'train', file_name)
-            if os.path.exists(file_path):
-                # Load the data file
-                data = np.load(file_path)  # Shape: [num_samples, num_features]
-
-                # Handle NaN values by replacing them with zeros
-                data = np.nan_to_num(data)
-
-                # Create anomaly labels based on anomaly_sequences
-                labels = np.zeros(len(data), dtype=int)
-                anomaly_sequences = eval(row['anomaly_sequences'])
-                for anomaly_range in anomaly_sequences:
-                    # Mark anomalies in the labels array
-                    labels[anomaly_range[0]:anomaly_range[1] + 1] = 1
-
-                train_data_list.append(data)
-                train_labels_list.append(labels)
-
-        # Initialize lists to hold test data and labels
-        test_data_list = []
-        test_labels_list = []
-
-        # Load all .npy files based on chan_id in the CSV for test data
-        for index, row in spacecraft_anomalies.iterrows():
-            file_name = row['chan_id'] + '.npy'
-            file_path = os.path.join(self.data_path, 'test', file_name)
-            if os.path.exists(file_path):
-                # Load the data file
-                data = np.load(file_path)  # Shape: [num_samples, num_features]
-
-                # Handle NaN values by replacing them with zeros
-                data = np.nan_to_num(data)
-
-                # Create anomaly labels for the test data
-                labels = np.zeros(len(data), dtype=int)
-                anomaly_sequences = eval(row['anomaly_sequences'])
-                for anomaly_range in anomaly_sequences:
-                    # Mark anomalies in the labels array
-                    labels[anomaly_range[0]:anomaly_range[1] + 1] = 1
-
-                test_data_list.append(data)
-                test_labels_list.append(labels)
-
-        # Normalize train data
-        scaler = StandardScaler()
-        if train_data_list:
-            # Concatenate all training data to fit the scaler
-            all_train_data = np.concatenate(train_data_list, axis=0)
-            scaler.fit(all_train_data)
-            # Transform each time series individually
-            for idx in range(len(train_data_list)):
-                train_data_list[idx] = scaler.transform(train_data_list[idx])
-        else:
-            Log.error("No training data found.")
-            self.train_dataset = None
-
-        # Normalize test data using the same scaler
-        if test_data_list:
-            for idx in range(len(test_data_list)):
-                test_data_list[idx] = scaler.transform(test_data_list[idx])
-        else:
-            Log.error("No test data found.")
-            self.test_dataset = None
-
-        # Create training dataset
-        if train_data_list:
-            self.train_dataset = MSLDataset(train_data_list, train_labels_list, seq_len=self.seq_len)
-            if len(self.train_dataset) == 0:
-                Log.error("No sequences created for training dataset.")
-                self.train_dataset = None
-        else:
-            self.train_dataset = None
-
-        # No validation dataset
-        self.val_dataset = None
-
-        # Create test dataset
         if test_data_list:
             self.test_dataset = MSLDataset(test_data_list, test_labels_list, seq_len=self.seq_len)
-            if len(self.test_dataset) == 0:
-                Log.error("No sequences created for test dataset.")
-                self.test_dataset = None
-        else:
-            self.test_dataset = None
-
-        # Log dataset sizes
-        if self.train_dataset:
-            Log.info(f"Total training sequences: {len(self.train_dataset)}")
-        else:
-            Log.error("Training dataset is empty.")
-        if self.val_dataset:
-            Log.info(f"Total validation sequences: {len(self.val_dataset)}")
-        else:
-            Log.warning("Validation dataset is empty.")
-        if self.test_dataset:
             Log.info(f"Total test sequences: {len(self.test_dataset)}")
         else:
-            Log.error("Test dataset is empty.")
+            self.test_dataset = None
+            Log.warning("Test dataset is empty.")
+
+    def _load_data_files(self) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
+        anomaly_file = os.path.join(self.data_path, 'labeled_anomalies.csv')
+        anomaly_info = pd.read_csv(anomaly_file)
+        spacecraft_anomalies = anomaly_info[anomaly_info['spacecraft'] == self.dataset_name]
+
+        train_data_list, train_labels_list = self._load_series_data(spacecraft_anomalies, 'train')
+        test_data_list, test_labels_list = self._load_series_data(spacecraft_anomalies, 'test')
+
+        return train_data_list, train_labels_list, test_data_list, test_labels_list
+
+    def _load_series_data(self, anomaly_info: pd.DataFrame, data_type: str) -> Tuple[
+        List[np.ndarray], List[np.ndarray]]:
+        data_list, labels_list = [], []
+        for _, row in anomaly_info.iterrows():
+            file_name = f"{row['chan_id']}.npy"
+            file_path = os.path.join(self.data_path, data_type, file_name)
+            if os.path.exists(file_path):
+                data = np.load(file_path)
+                data = np.nan_to_num(data)
+                labels = np.zeros(len(data), dtype=int)
+                for anomaly_range in eval(row['anomaly_sequences']):
+                    labels[anomaly_range[0]:anomaly_range[1] + 1] = 1
+                data_list.append(data)
+                labels_list.append(labels)
+        return data_list, labels_list
+
+    def _normalize_and_filter(self, data_list: List[np.ndarray], labels_list: List[np.ndarray], fit=True) -> Tuple[
+        List[np.ndarray], List[np.ndarray]]:
+        if not data_list:
+            return [], []
+
+        if fit:
+            self.scaler = StandardScaler()
+            all_data = np.concatenate(data_list).reshape(-1, data_list[0].shape[1])
+            self.scaler.fit(all_data)
+        else:
+            if not hasattr(self, 'scaler'):
+                raise AttributeError("Scaler not initialized. Ensure training data is normalized before test data.")
+
+        data_list = [self.scaler.transform(data) for data in data_list]
+
+        if self.data_percentage < 100:
+            num_samples = [int(len(data) * (self.data_percentage / 100)) for data in data_list]
+            data_list = [data[:n] for data, n in zip(data_list, num_samples)]
+            labels_list = [labels[:n] for labels, n in zip(labels_list, num_samples)]
+
+        return data_list, labels_list
+
+    def _split_train_validation(self, train_data_list: List[np.ndarray], train_labels_list: List[np.ndarray]) -> None:
+        if self.val_size > 0:
+            train_data_split, val_data_split, train_labels_split, val_labels_split = [], [], [], []
+            for data, labels in zip(train_data_list, train_labels_list):
+                data_train, data_val, labels_train, labels_val = train_test_split(
+                    data, labels, test_size=self.val_size / 100, random_state=42)
+                train_data_split.append(data_train)
+                val_data_split.append(data_val)
+                train_labels_split.append(labels_train)
+                val_labels_split.append(labels_val)
+
+            if train_data_split:
+                self.train_dataset = MSLDataset(train_data_split, train_labels_split, seq_len=self.seq_len)
+                Log.info(f"Total training sequences: {len(self.train_dataset)}")
+            else:
+                self.train_dataset = None
+                Log.warning("Training dataset is empty.")
+
+            if val_data_split:
+                self.val_dataset = MSLDataset(val_data_split, val_labels_split, seq_len=self.seq_len)
+                Log.info(f"Total validation sequences: {len(self.val_dataset)}")
+            else:
+                self.val_dataset = None
+                Log.warning("Validation dataset is not created.")
+        else:
+            self.train_dataset = MSLDataset(train_data_list, train_labels_list, seq_len=self.seq_len)
+            self.val_dataset = None
+            Log.warning("Validation dataset is not created as val_size is set to 0.")

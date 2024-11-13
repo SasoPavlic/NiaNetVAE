@@ -3,5 +3,5 @@
 data_params:
   dataset_name: "SWAT"
   data_path: "data/swat_dataset/"
-  seq_len: 100  # Default value since Max Seq Length is not provided
+  seq_len: 200  # Default value since Max Seq Length is not provided
   n_features: 51

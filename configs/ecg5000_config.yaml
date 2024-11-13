@@ -3,5 +3,5 @@
 data_params:
   dataset_name: "ECG5000"
   data_path: "data/ecg5000_dataset/"
-  seq_len: 140  # Max Seq Length from the table
+  seq_len: 140  # Max Seq Length for the dataset
   n_features: 1

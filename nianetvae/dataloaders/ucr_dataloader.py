@@ -1,123 +1,160 @@
+import os
+import re
+from typing import Optional, List, Tuple
+import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+
+from log import Log
+from nianetvae.dataloaders import BaseDataLoader
 
 
 class UCRDataset(Dataset):
-    def __init__(self, data, targets, seq_len=200, stride=1):
-        self.data = torch.tensor(data).float()  # Shape: [num_samples, num_features]
-        self.targets = torch.tensor(targets).float()  # Shape: [num_samples]
+    def __init__(self, data_list: List[np.ndarray], labels_list: List[np.ndarray], seq_len=200, stride=1):
         self.seq_len = seq_len
         self.stride = stride
-        self.sequences, self.labels = self._create_sequences()
+        self.sequences, self.labels, self.ts_ids = [], [], []
 
-    def _create_sequences(self):
-        if len(self.data) < self.seq_len:
-            print(f"Data length ({len(self.data)}) is less than seq_len ({self.seq_len}). No sequences will be created.")
-            return torch.empty((0, self.seq_len)), torch.empty((0,))
+        for ts_id, (data, labels) in enumerate(zip(data_list, labels_list)):
+            data = torch.tensor(data).float()
+            labels = torch.tensor(labels).float()
+            seqs, lbls = self._create_sequences(data, labels)
+            self.sequences.extend(seqs)
+            self.labels.extend(lbls)
+            self.ts_ids.extend([ts_id] * len(seqs))
 
-        sequences = []
-        seq_labels = []
-        num_samples = len(self.data)
-        for i in range(0, num_samples - self.seq_len + 1, self.stride):
-            sequence = self.data[i:i + self.seq_len]  # Shape: [seq_len]
-            label = 1 if self.targets[i:i + self.seq_len].sum() > 0 else 0
+        if self.sequences:
+            self.sequences = torch.stack(self.sequences)
+            self.labels = torch.tensor(self.labels).int()
+            self.ts_ids = torch.tensor(self.ts_ids).int()
+        else:
+            self.sequences = torch.empty((0, self.seq_len))
+            self.labels = torch.empty((0,), dtype=torch.int)
+            self.ts_ids = torch.empty((0,), dtype=torch.int)
+
+    def _create_sequences(self, data: torch.Tensor, labels: torch.Tensor) -> Tuple[List[torch.Tensor], List[int]]:
+        sequences, seq_labels = [], []
+        for i in range(0, len(data) - self.seq_len + 1, self.stride):
+            sequence = data[i:i + self.seq_len]
+            label = 1 if labels[i:i + self.seq_len].sum() > 0 else 0
             sequences.append(sequence)
             seq_labels.append(label)
-
-        if not sequences:
-            print(f"No sequences were created for data length {len(self.data)} with seq_len {self.seq_len}.")
-            return torch.empty((0, self.seq_len)), torch.empty((0,))
-
-        return torch.stack(sequences), torch.tensor(seq_labels)
+        return sequences, seq_labels
 
     def __len__(self):
         return len(self.sequences)
 
     def __getitem__(self, idx):
-        signal = self.sequences[idx]  # Shape: [seq_len]
-        target = self.labels[idx].int()
-        return {'signal': signal.unsqueeze(-1), 'target': target}  # Add feature dimension
+        signal = self.sequences[idx]
+        target = self.labels[idx]
+        ts_id = self.ts_ids[idx]
+        return {'signal': signal.unsqueeze(-1), 'target': target, 'ts_id': ts_id}
 
-import os
-import re
-from typing import Optional
-
-import numpy as np
-import torch
-from sklearn.preprocessing import StandardScaler
-from nianetvae.dataloaders import BaseDataLoader
 
 class UCRDataLoader(BaseDataLoader):
     def __init__(self, dataset_name: str, data_path: str, seq_len: int, data_percentage: float = 100.0,
-                 batch_size: int = 32, train_size=70, val_size: float = 10.0, test_size: float = 20.0,
+                 batch_size: int = 32, val_size: float = 10.0,
                  num_workers: int = 0, pin_memory: bool = False, persistent_workers: bool = False,
                  filename: str = None, **kwargs):
-        super().__init__(dataset_name=dataset_name, data_path=data_path, seq_len=seq_len, data_percentage=data_percentage,
-                         batch_size=batch_size, train_size=train_size, val_size=val_size, test_size=test_size,
-                         num_workers=num_workers, pin_memory=pin_memory, persistent_workers=persistent_workers)
+        super().__init__(dataset_name=dataset_name, data_path=data_path, seq_len=seq_len,
+                         data_percentage=data_percentage,
+                         batch_size=batch_size, val_size=val_size, num_workers=num_workers, pin_memory=pin_memory,
+                         persistent_workers=persistent_workers)
         self.filename = filename  # The specific file to use
         if self.filename is None:
             raise ValueError("Filename must be specified in the config under data_params.")
 
     def setup(self, stage: Optional[str] = None) -> None:
+        train_data_list, train_labels_list, test_data_list, test_labels_list = self._load_data_files()
+
+        train_data_list, train_labels_list = self._normalize_and_filter(train_data_list, train_labels_list, fit=True)
+        test_data_list, test_labels_list = self._normalize_and_filter(test_data_list, test_labels_list, fit=False)
+
+        self._split_train_validation(train_data_list, train_labels_list)
+
+        if test_data_list:
+            self.test_dataset = UCRDataset(test_data_list, test_labels_list, seq_len=self.seq_len)
+            Log.info(f"Total test sequences: {len(self.test_dataset)}")
+        else:
+            self.test_dataset = None
+            Log.error("Test dataset is empty.")
+
+    def _load_data_files(self) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
         file_path = os.path.join(self.data_path, self.filename)
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File {file_path} does not exist.")
 
-        # Extract information from filename
         pattern = r"^\d+_UCR_Anomaly_(.+)_(\d+)_(\d+)_(\d+)\.txt$"
         match = re.match(pattern, self.filename)
         if not match:
             raise ValueError(f"Filename {self.filename} does not match the expected pattern.")
-        mnemonic_name = match.group(1)
         train_end_idx = int(match.group(2))
         anomaly_start_idx = int(match.group(3))
         anomaly_end_idx = int(match.group(4))
 
-        # Load data
         data = np.loadtxt(file_path)
-        data = np.nan_to_num(data)  # Handle NaN values
+        data = np.nan_to_num(data)
 
-        # Create labels
         labels = np.zeros(len(data), dtype=int)
-        labels[anomaly_start_idx - 1:anomaly_end_idx] = 1  # Indices are 0-based
+        labels[anomaly_start_idx - 1:anomaly_end_idx] = 1
 
-        # Split data into train and test
         train_data = data[:train_end_idx]
-        train_labels = labels[:train_end_idx]  # Should be zeros
+        train_labels = labels[:train_end_idx]
 
         test_data = data[train_end_idx:]
         test_labels = labels[train_end_idx:]
 
-        # Normalize data using StandardScaler
-        scaler = StandardScaler()
-        if len(train_data) > 0:
-            train_data = train_data.reshape(-1, 1)
-            scaler.fit(train_data)
-            train_data = scaler.transform(train_data).flatten()
-        if len(test_data) > 0:
-            test_data = test_data.reshape(-1, 1)
-            test_data = scaler.transform(test_data).flatten()
+        return [train_data], [train_labels], [test_data], [test_labels]
 
-        # Create datasets
-        if len(train_data) >= self.seq_len:
-            self.train_dataset = UCRDataset(train_data, train_labels, seq_len=self.seq_len)
+    def _normalize_and_filter(self, data_list: List[np.ndarray], labels_list: List[np.ndarray], fit=True) -> Tuple[
+        List[np.ndarray], List[np.ndarray]]:
+        if not data_list:
+            return [], []
+
+        if fit:
+            self.scaler = StandardScaler()
+            all_data = np.concatenate(data_list).reshape(-1, 1)
+            self.scaler.fit(all_data)
         else:
-            print(
-                f"Training data is shorter than seq_len ({len(train_data)} < {self.seq_len}). Skipping training dataset.")
-            self.train_dataset = None
+            if not hasattr(self, 'scaler'):
+                raise AttributeError("Scaler not initialized. Ensure training data is normalized before test data.")
 
-        # Since we are not splitting into validation, set val_dataset to None
-        self.val_dataset = None
+        data_list = [self.scaler.transform(data.reshape(-1, 1)).flatten() for data in data_list]
 
-        if len(test_data) >= self.seq_len:
-            self.test_dataset = UCRDataset(test_data, test_labels, seq_len=self.seq_len)
+        if self.data_percentage < 100:
+            num_samples = [int(len(data) * (self.data_percentage / 100)) for data in data_list]
+            data_list = [data[:n] for data, n in zip(data_list, num_samples)]
+            labels_list = [labels[:n] for labels, n in zip(labels_list, num_samples)]
+
+        return data_list, labels_list
+
+    def _split_train_validation(self, train_data_list: List[np.ndarray], train_labels_list: List[np.ndarray]) -> None:
+        if self.val_size > 0:
+            train_data_split, val_data_split, train_labels_split, val_labels_split = [], [], [], []
+            for data, labels in zip(train_data_list, train_labels_list):
+                data_train, data_val, labels_train, labels_val = train_test_split(
+                    data, labels, test_size=self.val_size / 100, random_state=42)
+                train_data_split.append(data_train)
+                val_data_split.append(data_val)
+                train_labels_split.append(labels_train)
+                val_labels_split.append(labels_val)
+
+            if train_data_split:
+                self.train_dataset = UCRDataset(train_data_split, train_labels_split, seq_len=self.seq_len)
+                Log.info(f"Total training sequences: {len(self.train_dataset)}")
+            else:
+                self.train_dataset = None
+                Log.error("Training dataset is empty.")
+
+            if val_data_split:
+                self.val_dataset = UCRDataset(val_data_split, val_labels_split, seq_len=self.seq_len)
+                Log.info(f"Total validation sequences: {len(self.val_dataset)}")
+            else:
+                self.val_dataset = None
+                Log.warning("Validation dataset is not created.")
         else:
-            print(f"Test data is shorter than seq_len ({len(test_data)} < {self.seq_len}). Skipping test dataset.")
-            self.test_dataset = None
-
-        # Log dataset sizes
-        if self.train_dataset:
-            print(f"Total training sequences: {len(self.train_dataset)}")
-        if self.test_dataset:
-            print(f"Total test sequences: {len(self.test_dataset)}")
+            self.train_dataset = UCRDataset(train_data_list, train_labels_list, seq_len=self.seq_len)
+            self.val_dataset = None
+            Log.warning("Validation dataset is not created as val_size is set to 0.")

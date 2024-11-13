@@ -18,7 +18,7 @@ class EvaluationMetrics:
         self.DTW_metric = DynamicTimeWarping()  # Low is better
         self.R2_metric = torchmetrics.R2Score(num_outputs=num_outputs, multioutput='uniform_average')  # High is better
 
-        # Initialize metrics with worst possible values
+        # Initialize metrics with the worst possible values
         self.MAE = int(9e10)
         self.MSE = int(9e10)
         self.RMSE = int(9e10)
@@ -69,7 +69,9 @@ class EvaluationMetrics:
         # Update DTW only for univariate data
         if predictions.size(-1) == 1:
             try:
-                self.DTW_metric.update(predictions, targets)
+                self.DTW_metric = None
+                #TODO uncomment this in production
+                # self.DTW_metric.update(predictions, targets)
             except Exception as e:
                 Log.error(f"Error updating DTW_metric: {e}")
                 self.DTW_metric = None  # Mark as None to skip computation

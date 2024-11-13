@@ -3,5 +3,5 @@
 data_params:
   dataset_name: "KPI"
   data_path: "data/kpi_dataset/"
-  seq_len: 100  # Default value since Max Seq Length is not provided
+  seq_len: 200  # Default value since Max Seq Length is not provided
   n_features: 1

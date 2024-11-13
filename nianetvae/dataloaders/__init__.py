@@ -24,9 +24,7 @@ class BaseDataLoader(LightningDataModule):
             num_workers: int,
             persistent_workers: bool,
             pin_memory: bool,
-            train_size: float,
             val_size: float,
-            test_size: float,
             data_percentage: float,
             **kwargs,
     ):
@@ -38,9 +36,7 @@ class BaseDataLoader(LightningDataModule):
         self.num_workers = num_workers
         self.persistent_workers = persistent_workers
         self.pin_memory = pin_memory
-        self.train_size = train_size
         self.val_size = val_size
-        self.test_size = test_size
         self.data_percentage = data_percentage
 
     def setup(self, stage: Optional[str] = None) -> None:
