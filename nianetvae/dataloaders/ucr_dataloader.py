@@ -57,14 +57,14 @@ class UCRDataLoader(BaseDataLoader):
     def __init__(self, dataset_name: str, data_path: str, seq_len: int, data_percentage: float = 100.0,
                  batch_size: int = 32, val_size: float = 10.0,
                  num_workers: int = 0, pin_memory: bool = False, persistent_workers: bool = False,
-                 filename: str = None, **kwargs):
+                 filenames: List[str] = None, **kwargs):
         super().__init__(dataset_name=dataset_name, data_path=data_path, seq_len=seq_len,
                          data_percentage=data_percentage,
                          batch_size=batch_size, val_size=val_size, num_workers=num_workers, pin_memory=pin_memory,
                          persistent_workers=persistent_workers)
-        self.filename = filename  # The specific file to use
-        if self.filename is None:
-            raise ValueError("Filename must be specified in the config under data_params.")
+        self.filenames = filenames  # List of specific files to use
+        if not self.filenames:
+            raise ValueError("Filenames must be specified in the config under data_params.")
 
     def setup(self, stage: Optional[str] = None) -> None:
         train_data_list, train_labels_list, test_data_list, test_labels_list = self._load_data_files()
@@ -82,31 +82,64 @@ class UCRDataLoader(BaseDataLoader):
             Log.error("Test dataset is empty.")
 
     def _load_data_files(self) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
-        file_path = os.path.join(self.data_path, self.filename)
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File {file_path} does not exist.")
+        train_data_list, train_labels_list, test_data_list, test_labels_list = [], [], [], []
 
-        pattern = r"^\d+_UCR_Anomaly_(.+)_(\d+)_(\d+)_(\d+)\.txt$"
-        match = re.match(pattern, self.filename)
-        if not match:
-            raise ValueError(f"Filename {self.filename} does not match the expected pattern.")
-        train_end_idx = int(match.group(2))
-        anomaly_start_idx = int(match.group(3))
-        anomaly_end_idx = int(match.group(4))
+        for filename in self.filenames:
+            file_path = os.path.join(self.data_path, filename)
+            if not os.path.exists(file_path):
+                Log.error(f"File {file_path} does not exist.")
+                continue
 
-        data = np.loadtxt(file_path)
-        data = np.nan_to_num(data)
+            pattern = r"^\d+_UCR_Anomaly_(.+)_(\d+)_(\d+)_(\d+)\.txt$"
+            match = re.match(pattern, filename)
+            if not match:
+                Log.error(f"Filename {filename} does not match the expected pattern.")
+                continue
 
-        labels = np.zeros(len(data), dtype=int)
-        labels[anomaly_start_idx - 1:anomaly_end_idx] = 1
+            train_end_idx = int(match.group(2))
+            anomaly_start_idx = int(match.group(3))
+            anomaly_end_idx = int(match.group(4))
 
-        train_data = data[:train_end_idx]
-        train_labels = labels[:train_end_idx]
+            data = np.loadtxt(file_path)
+            data = np.nan_to_num(data)
 
-        test_data = data[train_end_idx:]
-        test_labels = labels[train_end_idx:]
+            # Apply flexible labeling for anomalies
+            labels = self._apply_flexible_labeling(len(data), anomaly_start_idx, anomaly_end_idx)
 
-        return [train_data], [train_labels], [test_data], [test_labels]
+            train_data = data[:train_end_idx]
+            train_labels = labels[:train_end_idx]
+
+            test_data = data[train_end_idx:]
+            test_labels = labels[train_end_idx:]
+
+            train_data_list.append(train_data)
+            train_labels_list.append(train_labels)
+            test_data_list.append(test_data)
+            test_labels_list.append(test_labels)
+
+        return train_data_list, train_labels_list, test_data_list, test_labels_list
+
+    def _apply_flexible_labeling(self, data_length: int, begin: int, end: int) -> np.ndarray:
+        """
+        Apply flexible labeling for anomalies based on authors' suggested principles.
+
+        Args:
+            data_length (int): Length of the time series data.
+            begin (int): Start index of the anomaly.
+            end (int): End index of the anomaly.
+
+        Returns:
+            np.ndarray: Labels array with anomalies marked.
+        """
+        labels = np.zeros(data_length, dtype=int)
+        L = end - begin + 1
+
+        # Extend the anomaly range as per the guidelines
+        anomaly_start = max(0, min(begin - L, begin - 100))
+        anomaly_end = min(data_length - 1, max(end + L, end + 100))
+
+        labels[anomaly_start:anomaly_end + 1] = 1  # Mark the extended range as anomaly
+        return labels
 
     def _normalize_and_filter(self, data_list: List[np.ndarray], labels_list: List[np.ndarray], fit=True) -> Tuple[
         List[np.ndarray], List[np.ndarray]]:

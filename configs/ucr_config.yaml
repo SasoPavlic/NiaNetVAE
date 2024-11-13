@@ -1,7 +1,14 @@
-
 data_params:
   dataset_name: "UCR"
-  data_path: "data/ucr_dataset/internal_bleeding/"
-  filename: "132_UCR_Anomaly_InternalBleeding10_3200_4526_4556.txt"
+  data_path: "data/ucr_dataset/"
+  filenames:
+    - "ecg/119_UCR_Anomaly_ECG1_10000_11800_12100.txt"
+    - "ecg/120_UCR_Anomaly_ECG2_15000_16000_16100.txt"
+    - "ecg/122_UCR_Anomaly_ECG3_8000_17000_17100.txt"
+    - "ecg/123_UCR_Anomaly_ECG4_5000_16800_17100.txt"
+    - "internal_bleeding/136_UCR_Anomaly_InternalBleeding17_1600_3198_3309.txt"
+    - "internal_bleeding/137_UCR_Anomaly_InternalBleeding18_2300_4485_4587.txt"
+    - "internal_bleeding/138_UCR_Anomaly_InternalBleeding19_3000_4187_4197.txt"
+    - "internal_bleeding/139_UCR_Anomaly_InternalBleeding20_2700_5759_5919.txt"
   seq_len: 200
   n_features: 1
