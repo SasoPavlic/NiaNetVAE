@@ -8,9 +8,8 @@ from lightning.pytorch import seed_everything
 
 import nianetvae
 from log import Log
-from nianetvae.dataloaders.ecg_dataloader import ECG5000DataLoader
 from nianetvae.dataloaders.kpi_dataloader import KPIDataLoader
-from nianetvae.dataloaders.msl_dataloader import MSLDataLoader
+from nianetvae.dataloaders.smap_and_msl_dataloader import SMABandMSDataLoader
 from nianetvae.dataloaders.smd_dataloader import SMDDataLoader
 from nianetvae.dataloaders.ucr_dataloader import UCRDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
@@ -23,10 +22,9 @@ def select_dataloader(config):
     # Define a mapping of dataset types to DataLoader classes
     dataloader_switch = {
         "YahooA1": YahooA1DataLoader,
-        "ECG5000": ECG5000DataLoader,
         "KPI": KPIDataLoader,
-        "MSL": MSLDataLoader,
-        "SMAP": MSLDataLoader,  # Use the same data loader for SMAP & MSL
+        "MSL": SMABandMSDataLoader,
+        "SMAP": SMABandMSDataLoader,  # Use the same data loader for SMAP & MSL
         "SMD": SMDDataLoader,
         "UCR": UCRDataLoader,
         # Add other datasets as needed
