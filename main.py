@@ -11,6 +11,7 @@ from log import Log
 from nianetvae.dataloaders.kpi_dataloader import KPIDataLoader
 from nianetvae.dataloaders.smap_and_msl_dataloader import SMABandMSDataLoader
 from nianetvae.dataloaders.smd_dataloader import SMDDataLoader
+from nianetvae.dataloaders.swat_dataloader import SWATDataLoader
 from nianetvae.dataloaders.ucr_dataloader import UCRDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.storage.database import SQLiteConnector
@@ -27,6 +28,7 @@ def select_dataloader(config):
         "SMAP": SMABandMSDataLoader,  # Use the same data loader for SMAP & MSL
         "SMD": SMDDataLoader,
         "UCR": UCRDataLoader,
+        "SWAT": SWATDataLoader,
         # Add other datasets as needed
     }
 

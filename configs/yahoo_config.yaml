@@ -1,4 +1,4 @@
-# yahoo_a1_config.yaml
+# yahoo_config.yaml
 
 data_params:
   dataset_name: "YahooA1"

@@ -1,5 +1,5 @@
 # wadi_config.yaml
-
+# Dataloaders taken from: https://github.com/elisejiuqizhang/USAD-on-WADI-and-SWaT?tab=readme-ov-file
 data_params:
   dataset_name: "WADI"
   data_path: "data/wadi_dataset/"
