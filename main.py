@@ -13,6 +13,7 @@ from nianetvae.dataloaders.smap_and_msl_dataloader import SMABandMSDataLoader
 from nianetvae.dataloaders.smd_dataloader import SMDDataLoader
 from nianetvae.dataloaders.swat_dataloader import SWATDataLoader
 from nianetvae.dataloaders.ucr_dataloader import UCRDataLoader
+from nianetvae.dataloaders.wadi_dataloader import WADIDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.storage.database import SQLiteConnector
 from nianetvae.rnn_vae_architecture_search import solve_architecture_problem
@@ -29,6 +30,7 @@ def select_dataloader(config):
         "SMD": SMDDataLoader,
         "UCR": UCRDataLoader,
         "SWAT": SWATDataLoader,
+        "WADI": WADIDataLoader,
         # Add other datasets as needed
     }
 
