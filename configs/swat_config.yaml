@@ -2,6 +2,6 @@
 # Dataloaders taken from: https://github.com/elisejiuqizhang/USAD-on-WADI-and-SWaT?tab=readme-ov-file
 data_params:
   dataset_name: "SWAT"
-  data_path: "data/swat_dataset/"
+  data_path: "data/swat_dataset/git"
   seq_len: 200  # Default value since Max Seq Length is not provided
   n_features: 51

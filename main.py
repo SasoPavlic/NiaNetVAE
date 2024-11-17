@@ -9,6 +9,7 @@ from lightning.pytorch import seed_everything
 import nianetvae
 from log import Log
 from nianetvae.dataloaders.kpi_dataloader import KPIDataLoader
+from nianetvae.dataloaders.nab_dataloader import NABDataLoader
 from nianetvae.dataloaders.smap_and_msl_dataloader import SMABandMSDataLoader
 from nianetvae.dataloaders.smd_dataloader import SMDDataLoader
 from nianetvae.dataloaders.swat_dataloader import SWATDataLoader
@@ -31,6 +32,7 @@ def select_dataloader(config):
         "UCR": UCRDataLoader,
         "SWAT": SWATDataLoader,
         "WADI": WADIDataLoader,
+        "NAB": NABDataLoader,
         # Add other datasets as needed
     }
 

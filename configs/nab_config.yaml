@@ -1,0 +1,7 @@
+# nab_config.yaml
+
+data_params:
+  dataset_name: "NAB"
+  data_path: "data/nab_dataset/"
+  seq_len: 200  # Default value since Max Seq Length is not provided
+  n_features: 1
