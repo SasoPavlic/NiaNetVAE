@@ -76,7 +76,7 @@ class WADIDataLoader(BaseDataLoader):
 
         # Load normal data
         normal = pd.read_csv(normal_path, sep=',', skiprows=[0, 1, 2, 3], skip_blank_lines=True)
-        print(f"Number of rows in training data: {len(normal)}")
+        Log.info(f"Number of rows in training data: {len(normal)}")
         normal = normal.drop(normal.columns[[0, 1, 2, 50, 51, 86, 87]], axis=1)
         normal = normal.astype(float).fillna(0)
         down_rate = 5
@@ -84,7 +84,7 @@ class WADIDataLoader(BaseDataLoader):
 
         # Load attack data and labels
         attack = pd.read_csv(attack_path, sep=",")
-        print(f"Number of rows in testing data: {len(attack)}")
+        Log.info(f"Number of rows in testing data: {len(attack)}")
         labels = self._generate_attack_labels(attack)
         attack = attack.drop(attack.columns[[0, 1, 2, 50, 51, 86, 87]], axis=1)
         attack = attack.astype(float).fillna(0)

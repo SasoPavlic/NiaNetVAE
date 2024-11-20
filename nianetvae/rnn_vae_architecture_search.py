@@ -23,6 +23,7 @@ RUN_UUID = None
 config = None
 conn = None
 datamodule = None
+dataset_name = None
 
 
 def calculate_fitness(model, experiment, n_features, seq_len):
@@ -68,7 +69,7 @@ def calculate_fitness(model, experiment, n_features, seq_len):
         return int(9e10), int(9e10), int(9e10)
 
 
-def upload_save_model(alg_name, iteration, solution, error, model, experiment, fitness, complexity, path, start_time,
+def upload_save_model(dataset_name, alg_name, iteration, solution, error, model, experiment, fitness, complexity, path, start_time,
                       end_time, duration):
     # Extract anomaly detection metrics if available
     anomaly_metrics = experiment.anomaly_metrics if hasattr(experiment, 'anomaly_metrics') else {}
@@ -77,8 +78,14 @@ def upload_save_model(alg_name, iteration, solution, error, model, experiment, f
     precision = anomaly_metrics.get('precision', None)
     recall = anomaly_metrics.get('recall', None)
     f1_score = anomaly_metrics.get('f1_score', None)
-    roc_auc = anomaly_metrics.get('roc_auc', None)
+
     pr_auc = anomaly_metrics.get('pr_auc', None)
+    pr_auc_mean = anomaly_metrics.get('pr_auc_mean', None)
+    pr_auc_std = anomaly_metrics.get('pr_auc_std', None)
+
+    roc_auc = anomaly_metrics.get('roc_auc', None)
+    roc_auc_mean = anomaly_metrics.get('roc_auc_mean', None)
+    roc_auc_std = anomaly_metrics.get('roc_auc_std', None)
 
     # Save entries to the database, including the anomaly metrics
     conn.post_entries(
@@ -87,6 +94,7 @@ def upload_save_model(alg_name, iteration, solution, error, model, experiment, f
         solution=solution,
         error=error,
         complexity=complexity,
+        dataset_name=dataset_name,
         alg_name=alg_name,
         iteration=iteration,
         mse=experiment.metrics.MSE,
@@ -100,8 +108,12 @@ def upload_save_model(alg_name, iteration, solution, error, model, experiment, f
         precision=precision,
         recall=recall,
         f1_score=f1_score,
+        pr_auc=pr_auc,
+        pr_auc_mean=pr_auc_mean,
+        pr_auc_std=pr_auc_std,
         roc_auc=roc_auc,
-        pr_auc=pr_auc
+        roc_auc_mean=roc_auc_mean,
+        roc_auc_std=roc_auc_std,
     )
 
     # Save the model state
@@ -137,7 +149,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 fitness = int(9e10)
                 complexity = int(9e10)
                 error = int(9e10)
-                conn.post_entries(model, fitness, solution, error, complexity, alg_name, self.iteration)
+                conn.post_entries(model, fitness, solution, error, complexity, dataset_name, alg_name, self.iteration)
             else:
                 experiment = RNNVAExperiment(model, path=path, **config)
                 tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
@@ -153,11 +165,11 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                                   # auto_select_gpus=True,
 
                                   callbacks=[
-                                      # LearningRateMonitor(),
-                                      # FineTuneLearningRateFinder(**config['fine_tune_lr_finder']),
-                                      # EarlyStopping(**config['early_stop'],
-                                      #               verbose=True,
-                                      #               check_finite=True),
+                                      LearningRateMonitor(),
+                                      FineTuneLearningRateFinder(**config['fine_tune_lr_finder']),
+                                      EarlyStopping(**config['early_stop'],
+                                                    verbose=True,
+                                                    check_finite=True),
                                       # BatchSizeFinder(
                                       #     mode="power",  # "power" or "binsearch" modes
                                       #     steps_per_trial=3,  # Number of steps to run with each batch size
@@ -189,7 +201,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
 
                 Log.debug(tabulate([[complexity, fitness]], headers=["Complexity", "Fitness"],
                                    tablefmt="pretty"))
-                upload_save_model(alg_name, self.iteration, solution, error, model, experiment, fitness, complexity,
+                upload_save_model(dataset_name, alg_name, self.iteration, solution, error, model, experiment, fitness, complexity,
                                   path, start_time, end_time, duration)
 
             if np.isnan(fitness):

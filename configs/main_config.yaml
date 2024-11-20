@@ -15,20 +15,20 @@ model_params:
   name: 'RecurrentVariationalAutoencoder'
 
 trainer_params:
-  min_epochs: 1
-  max_epochs: 1
+  min_epochs: 15
+  max_epochs: 30
 
 early_stop:
   monitor: "val_loss"
   patience: 1
-  min_delta: 0.00
+  min_delta: 0.01
   mode: "min"
 
 fine_tune_lr_finder:
-  tune_n_epochs: 5
+  tune_n_epochs: 10
   lr_finder:
     mode: "exponential"  # Options: "exponential", "linear"
-    num_training_steps: 10
+    num_training_steps: 100
     attr_name: "learning_rate"
     update_attr: True
     early_stop_threshold: null  # Set to null or a specific value
@@ -55,7 +55,7 @@ data_loader_params:
 
 # Dataset configuration
 dataset:
-  config_file: "configs/nab_config.yaml"
+  config_file: "configs/msl_config.yaml"
 
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+
 #| Benchmark  | # datasets | # dims| Train size | Test size  | Anomaly% | Path              | Set Seq Length|

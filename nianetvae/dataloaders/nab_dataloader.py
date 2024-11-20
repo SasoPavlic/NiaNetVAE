@@ -107,7 +107,7 @@ class NABDataLoader(BaseDataLoader):
 
                 # Output the number of anomalies detected for this file
                 num_anomalies = np.sum(labels)
-                print(f"File '{file}': Number of anomalies detected: {num_anomalies}")
+                Log.info(f"File '{file}': Number of anomalies detected: {num_anomalies}")
 
             if len(data) < self.seq_len:
                 Log.warning(f"File {file} is too short for sequence length {self.seq_len}. Skipping.")

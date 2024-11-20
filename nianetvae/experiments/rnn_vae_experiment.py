@@ -31,13 +31,13 @@ class FineTuneLearningRateFinder(LearningRateFinder):
                 elif loss > self.previous_loss:
                     Log.debug(f"\nLoss increased from {self.previous_loss} to {loss}")
                     self.lr_find(trainer, pl_module)
-                    print(f"Learning rate: {pl_module.learning_rate}")
+                    Log.info(f"Learning rate: {pl_module.learning_rate}")
 
                 self.previous_loss = pl_module.train_loss['loss'].item()
 
             else:
                 self.lr_find(trainer, pl_module)
-                print(f"Learning rate: {pl_module.learning_rate}")
+                Log.info(f"Learning rate: {pl_module.learning_rate}")
 
 
 class RNNVAExperiment(LightningModule):

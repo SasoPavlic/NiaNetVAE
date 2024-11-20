@@ -41,7 +41,7 @@ def plot_roc_curve(fpr, tpr, roc_auc, optimal_idx, thresholds, save_path='roc_cu
     x_values = [point1[0], point2[0]]
     y_values = [point1[1], point2[1]]
     distance = round(np.sqrt((x - point1[0]) ** 2 + (y - point1[1]) ** 2), 3)
-    print(f"Distance: {distance:.3f}")
+    #print(f"Distance: {distance:.3f}")
 
     plt.plot(fpr, tpr, color="darkorange", lw=lw, label=f"Recurrent VAE (AUC = {roc_auc:.3f})")
     plt.plot([0, 1], [0, 1], color="navy", lw=lw, linestyle="--", label='Random Classifier (AUC = 0.500)')
@@ -57,7 +57,8 @@ def plot_roc_curve(fpr, tpr, roc_auc, optimal_idx, thresholds, save_path='roc_cu
     plt.ylabel("True Positive Rate (TPR)")
     plt.legend(loc="lower right")
     plt.savefig(save_path)
-    plt.show()
+    #plt.show()
+    plt.close()
 
 
 def plot_precision_recall_curve(precision, recall, pr_auc, optimal_idx, thresholds, save_path='pr_curve.pdf'):
@@ -97,7 +98,7 @@ def plot_precision_recall_curve(precision, recall, pr_auc, optimal_idx, threshol
     x_values = [point1[0], point2[0]]
     y_values = [point1[1], point2[1]]
     distance = round(np.sqrt((x - point1[0]) ** 2 + (y - point1[1]) ** 2), 3)
-    print(f"Distance: {distance:.3f}")
+    #print(f"Distance: {distance:.3f}")
 
     plt.plot(recall, precision, color="darkorange", lw=lw, label=f"Recurrent VAE (AUC = {pr_auc:.3f})")
     plt.plot(x_values, y_values, color="red", lw=lw, linestyle=":", label=f'Distance = {distance:.3f}')
@@ -112,4 +113,5 @@ def plot_precision_recall_curve(precision, recall, pr_auc, optimal_idx, threshol
     plt.ylabel("Precision")
     plt.legend(loc="lower left")
     plt.savefig(save_path)
-    plt.show()
+    #plt.show()
+    plt.close()

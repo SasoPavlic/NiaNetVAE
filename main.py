@@ -116,6 +116,7 @@ if __name__ == '__main__':
     nianetvae.rnn_vae_architecture_search.config = config
     nianetvae.rnn_vae_architecture_search.conn = conn
     nianetvae.rnn_vae_architecture_search.datamodule = datamodule
+    nianetvae.rnn_vae_architecture_search.dataset_name = dataset_config['data_params']['dataset_name']
 
     algorithms = []
     if args.algorithms is not None:

@@ -67,7 +67,7 @@ class KPIDataLoader(BaseDataLoader):
 
         if test_data_list:
             self.test_dataset = KPIDataset(test_data_list, test_labels_list, seq_len=self.seq_len)
-            print(f"Total test sequences: {len(self.test_dataset)}")
+            Log.info(f"Total test sequences: {len(self.test_dataset)}")
         else:
             self.test_dataset = None
             Log.error("Test dataset is empty.")

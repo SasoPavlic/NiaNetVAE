@@ -65,10 +65,10 @@ class SMDDataLoader(BaseDataLoader):
 
         if test_data_list:
             self.test_dataset = SMDDataset(test_data_list, test_labels_list, seq_len=self.seq_len)
-            print(f"Total test sequences: {len(self.test_dataset)}")
+            Log.info(f"Total test sequences: {len(self.test_dataset)}")
         else:
             self.test_dataset = None
-            print("Test dataset is empty.")
+            Log.warning("Test dataset is empty.")
 
     def _load_data_files(self) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
         train_dir = os.path.join(self.data_path, 'train')

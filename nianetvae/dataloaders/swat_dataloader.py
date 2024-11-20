@@ -75,7 +75,7 @@ class SWATDataLoader(BaseDataLoader):
 
         # Load normal data
         normal = pd.read_csv(normal_path).drop(["Timestamp", "Normal/Attack"], axis=1)
-        print(f"Number of rows in training data: {len(normal)}")
+        Log.info(f"Number of rows in training data: {len(normal)}")
         for col in normal.columns:
             normal[col] = normal[col].apply(lambda x: str(x).replace(",", "."))
         normal = normal.astype(float)
@@ -84,7 +84,7 @@ class SWATDataLoader(BaseDataLoader):
 
         # Load attack data and labels
         attack = pd.read_csv(attack_path, sep=";")
-        print(f"Number of rows in testing data: {len(attack)}")
+        Log.info(f"Number of rows in testing data: {len(attack)}")
         labels = [float(label != 'Normal') for label in attack["Normal/Attack"].values]
         attack = attack.drop(["Timestamp", "Normal/Attack"], axis=1)
         for col in attack.columns:
