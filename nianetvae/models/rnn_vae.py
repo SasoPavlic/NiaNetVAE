@@ -28,8 +28,6 @@ class RNNVAE(BaseVAE, nn.Module):
         y6: optimizer algorithm.
         """
 
-        #MSL dataset
-        #solution = [0.98304425, 0.10804011, 0.15121107, 0.09719232, 0.65059224, 0.65365383]
         # Initialize validity flag
         self.is_valid = True
 

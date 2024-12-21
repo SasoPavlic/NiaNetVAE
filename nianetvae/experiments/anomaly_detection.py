@@ -223,21 +223,21 @@ class AnomalyDetectionMetrics:
                 os.makedirs(ts_save_dir, exist_ok=True)
 
                 # Plot ROC Curve
-                roc_save_path = os.path.join(ts_save_dir, f'roc_curve_ts_{ts_id}.pdf')
-                plot_roc_curve(
-                    fpr.numpy(), tpr.numpy(), roc_auc.item(),
-                    optimal_idx=torch.argmax(tpr - fpr).item(),  # Optimal index for plotting
-                    thresholds=roc_thresholds.numpy(),
-                    save_path=roc_save_path
-                )
+                # roc_save_path = os.path.join(ts_save_dir, f'roc_curve_ts_{ts_id}.pdf')
+                # plot_roc_curve(
+                #     fpr.numpy(), tpr.numpy(), roc_auc.item(),
+                #     optimal_idx=torch.argmax(tpr - fpr).item(),  # Optimal index for plotting
+                #     thresholds=roc_thresholds.numpy(),
+                #     save_path=roc_save_path
+                # )
 
                 # Plot Precision-Recall curve
-                pr_save_path = os.path.join(ts_save_dir, f'pr_curve_ts_{ts_id}.pdf')
-                plot_precision_recall_curve(
-                    precision_vals.numpy(), recall_vals.numpy(),
-                    pr_auc.item(), pr_optimal_idx, pr_thresholds_np,
-                    save_path=pr_save_path
-                )
+                # pr_save_path = os.path.join(ts_save_dir, f'pr_curve_ts_{ts_id}.pdf')
+                # plot_precision_recall_curve(
+                #     precision_vals.numpy(), recall_vals.numpy(),
+                #     pr_auc.item(), pr_optimal_idx, pr_thresholds_np,
+                #     save_path=pr_save_path
+                # )
 
             return {
                 'TP': tp,

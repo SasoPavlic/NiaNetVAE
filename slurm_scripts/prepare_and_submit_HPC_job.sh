@@ -15,6 +15,7 @@ rm -rf logs data configs
 # Create folders with permissions 777
 mkdir -m 777 logs data configs
 
+//TODO Add zip folder fol all the datasets. First get the consent of all the authors
 # Check if data.zip exists, otherwise download it from URL
 if [ ! -f data.zip ]; then
     wget https://www.timeseriesclassification.com/aeon-toolkit/ECG5000.zip -O data.zip

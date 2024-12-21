@@ -1,8 +1,7 @@
 # main_config.yaml
-
 nia_search:
   runs: 1
-  evaluations: 100
+  evaluations: 1000
   algorithms:
     - particle_swarm
     - genetic_algorithm
@@ -49,14 +48,13 @@ data_loader_params:
   data_percentage: 100
   batch_size: 32
   val_size: 10
-  num_workers: 0
-  persistent_workers: False
+  num_workers: 16
+  persistent_workers: True
   pin_memory: True
 
 # Dataset configuration
 dataset:
   config_file: "configs/msl_config.yaml"
-
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+
 #| Benchmark  | # datasets | # dims| Train size | Test size  | Anomaly% | Path              | Set Seq Length|
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+

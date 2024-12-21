@@ -7,9 +7,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --partition=gpu
-#SBATCH --mem-per-gpu=8GB  # memory per GPU
+#SBATCH --mem-per-gpu=80GB  # memory per GPU
 #SBATCH --gres=gpu:1
-#SBATCH --time=72:00:00
+#SBATCH --time=96:00:00
 
 singularity exec -e \
     --pwd /app \

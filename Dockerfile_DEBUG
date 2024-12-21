@@ -4,7 +4,7 @@
 # 1 - Build this dockerfile to make a virtual enviroment for Python Interepreter
 #     "docker build --tag debug_enviroment:venv ."
 # 2 - Add configuration to Pycharm
-#     "--name conv-ae --entrypoint -v project/path/NiaNetCAE:/opt/project --gpus all"
+#     "--name run-vae --entrypoint -v project/path/NiaNetVAE:/opt/project --gpus all"
 # 3 - Debug your source code with PyCharm
 
 ARG PYTHON_VERSION=3.10

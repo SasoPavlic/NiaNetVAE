@@ -71,7 +71,7 @@ class EvaluationMetrics:
             try:
                 self.DTW_metric = None
                 #TODO uncomment this in production
-                # self.DTW_metric.update(predictions, targets)
+                self.DTW_metric.update(predictions, targets)
             except Exception as e:
                 Log.error(f"Error updating DTW_metric: {e}")
                 self.DTW_metric = None  # Mark as None to skip computation

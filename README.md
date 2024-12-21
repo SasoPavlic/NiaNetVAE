@@ -44,9 +44,9 @@ Usage examples can be found [here](nianetcae/experiments). Currently, there is a
 
 1. Replace the dataset in [data](data) folder.
 2. Modify the parameters in [main_config.py](configs/main_config.yaml)
-2. Adjust the dataloader logic in [dataloaders](nianetcae/dataloaders) folder.
-3. Specify the search space in [rnn_vae.py](nianetcae/models/conv_ae.py) from your problem domain.
-3. Redesign the fitness function in [rnn_run.py](nianetcae/cae_run.py) based on your optimization.
+2. Adjust the dataloader logic in [dataloaders](nianetvae/dataloaders) folder.
+3. Specify the search space in [rnn_vae.py](nianetvae/models/rnn_vae.py) from your problem domain.
+3. Redesign the fitness function in [rnn_vae_architecture_search.py](nianetvae/rnn_vae_architecture_search.py) based on your optimization.
 
 ##### Changing dataset:
 
@@ -101,15 +101,15 @@ docker run \
 #!/bin/bash
 ## Running code on SLURM cluster
 ##https://pytorch-lightning.readthedocs.io/en/stable/clouds/cluster_advanced.html
-#SBATCH -J nianet-pso
-#SBATCH -o nianet-pso-%j.out
-#SBATCH -e nianet-pso-%j.err
+#SBATCH -J nianet-vae-pso
+#SBATCH -o nianet-vae-pso-%j.out
+#SBATCH -e nianet-vae-pso-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --partition=gpu
-#SBATCH --mem-per-gpu=8GB  # memory per GPU
+#SBATCH --mem-per-gpu=80GB  # memory per GPU
 #SBATCH --gres=gpu:1
-#SBATCH --time=72:00:00
+#SBATCH --time=96:00:00
 
 singularity exec -e \
     --pwd /app \
