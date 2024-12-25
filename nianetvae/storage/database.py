@@ -75,12 +75,12 @@ class SQLiteConnector:
         except Exception as e:
             Log.error(f"Error creating table: {e}")
 
-    def get_entries(self, hash_id):
-        """Retrieve entries from the database matching the given hash_id."""
+    def get_entries(self, hash_id, dataset_name):
+        """Retrieve entries from the database matching the given hash_id and dataset_name."""
         try:
             self.create_connection()
-            query = f"SELECT * FROM {self.table_name} WHERE hash_id = ?"
-            existing_entry = pd.read_sql_query(query, self.connection, params=(hash_id,))
+            query = f"SELECT * FROM {self.table_name} WHERE hash_id = ? AND dataset_name = ?"
+            existing_entry = pd.read_sql_query(query, self.connection, params=(hash_id, dataset_name))
             self.connection.close()
         except Exception as e:
             Log.error(f"Could not get existing entries: {e}")

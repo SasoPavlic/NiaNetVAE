@@ -28,41 +28,39 @@ dataset_name = None
 
 def calculate_fitness(model, experiment, n_features, seq_len):
     if experiment.metrics.are_metrics_complete():
-        # Calculate error_x
+        # Calculate error_x using metrics
         error_x = (
-                experiment.metrics.MSE +
-                experiment.metrics.RMSE +
-                experiment.metrics.MAE
+            experiment.metrics.MAE +
+            experiment.metrics.MSE +
+            experiment.metrics.RMSE
         )
 
-        # Include DTW only if it was computed
+        # Include DTW if applicable
         if n_features == 1 and experiment.metrics.DTW != int(9e10):
             error_x += experiment.metrics.DTW
-        else:
-            Log.info("DTW metric not included in error calculation.")
+        elif n_features != 1:
+            Log.error("DTW metric is not included because the dataset is not univariate.")
+        elif experiment.metrics.DTW == int(9e10):
+            Log.error("DTW metric is not included because it was not computed.")
 
+        # Use R²
         error_y = experiment.metrics.R2
 
         # Complexity calculation
-        C_LAYERS = 10000
-        C_BOTTLENECK = 1000
-
         max_layers = seq_len
-        min_layers = 0
         max_bottleneck = seq_len
-        min_bottleneck = 0
-
         normalized_num_layers = experiment.metrics.normalize(
-            len(model.encoding_layers), min_layers, max_layers
+            len(model.encoding_layers), 0, max_layers
         )
         normalized_bottleneck = experiment.metrics.normalize(
-            model.bottleneck_size, min_bottleneck, max_bottleneck
+            model.bottleneck_size, 0, max_bottleneck
         )
+        complexity = normalized_num_layers + normalized_bottleneck
 
-        complexity = (normalized_num_layers * C_LAYERS) + (normalized_bottleneck * C_BOTTLENECK)
+        # Total fitness calculation
         error = error_x - error_y
-
         fitness = error + complexity
+
         return fitness, error, complexity
     else:
         Log.error("Some metric values are still None.")
@@ -133,7 +131,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
         self.iteration += 1
 
         model = RNNVAE(solution, **config)
-        existing_entry = conn.get_entries(hash_id=model.get_hash())
+        existing_entry = conn.get_entries(hash_id=model.get_hash(), dataset_name=dataset_name)
         path = config['logging_params']['save_dir'] + str(self.iteration) + "_" + alg_name + "_" + model.hash_id
         config['logging_params']['model_path'] = path
         Path(path).mkdir(parents=True, exist_ok=True)

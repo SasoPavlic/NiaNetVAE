@@ -23,7 +23,7 @@ class EvaluationMetrics:
         self.MSE = int(9e10)
         self.RMSE = int(9e10)
         self.DTW = int(9e10)
-        self.R2 = float('-inf')
+        self.R2 = float('-inf')  # High is better, starts with the worst value
 
     def to(self, device):
         self.MAE_metric.to(device)
@@ -38,92 +38,64 @@ class EvaluationMetrics:
         reshaped_predictions = predictions.view(predictions.size(0), -1)
         reshaped_targets = targets.view(targets.size(0), -1)
 
-        # Update MAE
+        # Update metrics
         try:
             self.MAE_metric.update(reshaped_predictions, reshaped_targets)
-        except Exception as e:
-            Log.error(f"Error updating MAE_metric: {e}")
-            self.MAE_metric = None
-
-        # Update MSE
-        try:
             self.MSE_metric.update(reshaped_predictions, reshaped_targets)
-        except Exception as e:
-            Log.error(f"Error updating MSE_metric: {e}")
-            self.MSE_metric = None
-
-        # Update RMSE
-        try:
             self.RMSE_metric.update(reshaped_predictions, reshaped_targets)
-        except Exception as e:
-            Log.error(f"Error updating RMSE_metric: {e}")
-            self.RMSE_metric = None
-
-        # Update R2 Score
-        try:
             self.R2_metric.update(reshaped_predictions, reshaped_targets)
         except Exception as e:
-            Log.error(f"Error updating R2_metric: {e}")
-            self.R2_metric = None
+            Log.error(f"Error updating metrics: {e}")
 
         # Update DTW only for univariate data
         if predictions.size(-1) == 1:
             try:
-                self.DTW_metric = None
-                #TODO uncomment this in production
                 self.DTW_metric.update(predictions, targets)
             except Exception as e:
                 Log.error(f"Error updating DTW_metric: {e}")
                 self.DTW_metric = None  # Mark as None to skip computation
         else:
-            self.DTW_metric = None  # Set DTW_metric to None
+            self.DTW_metric = None
 
     def compute(self):
         # Compute MAE
         try:
-            if self.MAE_metric is not None:
-                self.MAE = round(self.MAE_metric.compute().item(), 3)
+            self.MAE = round(self.MAE_metric.compute().item(), 3)
         except Exception as e:
             Log.error(f"Error computing MAE_metric: {e}")
             self.MAE = int(9e10)
 
         # Compute MSE
         try:
-            if self.MSE_metric is not None:
-                self.MSE = round(self.MSE_metric.compute().item(), 3)
+            self.MSE = round(self.MSE_metric.compute().item(), 3)
         except Exception as e:
             Log.error(f"Error computing MSE_metric: {e}")
             self.MSE = int(9e10)
 
         # Compute RMSE
         try:
-            if self.RMSE_metric is not None:
-                self.RMSE = round(self.RMSE_metric.compute().item(), 3)
+            self.RMSE = round(self.RMSE_metric.compute().item(), 3)
         except Exception as e:
             Log.error(f"Error computing RMSE_metric: {e}")
             self.RMSE = int(9e10)
 
-        # Compute R2
+        # Compute R²
         try:
-            if self.R2_metric is not None:
-                self.R2 = round(self.R2_metric.compute().item(), 3)
+            self.R2 = round(self.R2_metric.compute().item(), 3)
         except Exception as e:
             Log.error(f"Error computing R2_metric: {e}")
             self.R2 = float('-inf')
 
-        # Compute DTW only if DTW_metric is not None
+        # Compute DTW
         if self.DTW_metric is not None:
             try:
                 dtw_value = self.DTW_metric.compute()
-                if torch.isnan(dtw_value):
-                    self.DTW = int(9e10)
-                else:
-                    self.DTW = round(dtw_value.item(), 3)
+                self.DTW = round(dtw_value.item(), 3)
             except Exception as e:
                 Log.error(f"Error computing DTW_metric: {e}")
                 self.DTW = int(9e10)
         else:
-            self.DTW = int(9e10)  # Assign default value or handle as needed
+            self.DTW = int(9e10)
 
         return {
             'MAE': self.MAE,
@@ -138,25 +110,6 @@ class EvaluationMetrics:
             metric_value is not None
             for metric_value in [self.MAE, self.MSE, self.RMSE, self.DTW, self.R2]
         )
-
-    def normalize(self, value, min_value, max_value):
-        """
-        Normalize a value to a range between 0 and 1 using min-max normalization.
-
-        Args:
-            value (float): The value to be normalized.
-            min_value (float): The minimum value observed for the variable.
-            max_value (float): The maximum value observed for the variable.
-
-        Returns:
-            float: The normalized value between 0 and 1.
-        """
-        range_value = max_value - min_value
-        if range_value == 0:
-            Log.error("Normalization range is zero.")
-            return 0.0
-        normalized_value = (value - min_value) / range_value
-        return normalized_value
 
 
 class DynamicTimeWarping(torchmetrics.Metric):
@@ -215,25 +168,3 @@ class DynamicTimeWarping(torchmetrics.Metric):
         except Exception as e:
             Log.error(f"Error in DTW computation: {e}")
             return int(9e10)  # Worst possible value for DTW
-
-
-class RMSE(torchmetrics.Metric):
-    # Note: This class is not used since torchmetrics provides RMSE directly.
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.add_state("sum_squared_error", default=tensor(0.0), dist_reduce_fx="sum")
-        self.add_state("n_observations", default=tensor(0), dist_reduce_fx="sum")
-
-    def update(self, preds: Tensor, target: Tensor) -> None:
-        """Update state with predictions and targets.
-
-        Args:
-            preds: Predictions from model
-            target: Ground truth values
-        """
-        self.sum_squared_error += torch.sum((preds - target) ** 2)
-        self.n_observations += preds.numel()
-
-    def compute(self) -> Tensor:
-        """Computes root mean squared error over state."""
-        return torch.sqrt(self.sum_squared_error / self.n_observations)
