@@ -13,7 +13,7 @@ from niapy.algorithms.modified import SelfAdaptiveDifferentialEvolution
 from niapy.task import OptimizationType
 from tabulate import tabulate
 
-import nianetvae.experiments.evaluationmetrics
+import nianetvae.experiments.metrics_evaluation
 from log import Log
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment, FineTuneLearningRateFinder
 from nianetvae.models.rnn_vae import RNNVAE
@@ -27,95 +27,67 @@ dataset_name = None
 
 
 def calculate_fitness(model, experiment, n_features, seq_len):
-    if experiment.metrics.are_metrics_complete():
-        # Calculate error_x using metrics
-        error_x = (
-            experiment.metrics.MAE +
-            experiment.metrics.MSE +
-            experiment.metrics.RMSE
-        )
+    """
+    Calculate the fitness value for the given model and experiment metrics.
 
-        # Include DTW if applicable
-        if n_features == 1 and experiment.metrics.DTW != int(9e10):
-            error_x += experiment.metrics.DTW
-        elif n_features != 1:
-            Log.error("DTW metric is not included because the dataset is not univariate.")
-        elif experiment.metrics.DTW == int(9e10):
-            Log.error("DTW metric is not included because it was not computed.")
+    Args:
+        model: The model being evaluated.
+        experiment: The experiment object containing metrics.
+        n_features: Number of features in the dataset.
 
-        # Use R²
-        error_y = experiment.metrics.R2
-
-        # Complexity calculation
-        max_layers = seq_len
-        max_bottleneck = seq_len
-        normalized_num_layers = experiment.metrics.normalize(
-            len(model.encoding_layers), 0, max_layers
-        )
-        normalized_bottleneck = experiment.metrics.normalize(
-            model.bottleneck_size, 0, max_bottleneck
-        )
-        complexity = normalized_num_layers + normalized_bottleneck
-
-        # Total fitness calculation
-        error = error_x - error_y
-        fitness = error + complexity
-
-        return fitness, error, complexity
-    else:
+    Returns:
+        fitness: The computed fitness value.
+        error: The combined error value.
+        complexity: The complexity term of the fitness function.
+    """
+    if not experiment.metrics.are_metrics_complete():
         Log.error("Some metric values are still None.")
         return int(9e10), int(9e10), int(9e10)
 
+    # Compute normalized metrics
+    normalized_metrics = experiment.metrics.get_normalized_metrics()
 
-def upload_save_model(dataset_name, alg_name, iteration, solution, error, model, experiment, fitness, complexity, path, start_time,
-                      end_time, duration):
-    # Extract anomaly detection metrics if available
-    anomaly_metrics = experiment.anomaly_metrics if hasattr(experiment, 'anomaly_metrics') else {}
-
-    # Unpack anomaly metrics with default values if they are missing
-    precision = anomaly_metrics.get('precision', None)
-    recall = anomaly_metrics.get('recall', None)
-    f1_score = anomaly_metrics.get('f1_score', None)
-
-    pr_auc = anomaly_metrics.get('pr_auc', None)
-    pr_auc_mean = anomaly_metrics.get('pr_auc_mean', None)
-    pr_auc_std = anomaly_metrics.get('pr_auc_std', None)
-
-    roc_auc = anomaly_metrics.get('roc_auc', None)
-    roc_auc_mean = anomaly_metrics.get('roc_auc_mean', None)
-    roc_auc_std = anomaly_metrics.get('roc_auc_std', None)
-
-    # Save entries to the database, including the anomaly metrics
-    conn.post_entries(
-        model=model,
-        fitness=fitness,
-        solution=solution,
-        error=error,
-        complexity=complexity,
-        dataset_name=dataset_name,
-        alg_name=alg_name,
-        iteration=iteration,
-        mse=experiment.metrics.MSE,
-        rmse=experiment.metrics.RMSE,
-        mae=experiment.metrics.MAE,
-        dtw=experiment.metrics.DTW,
-        r2=experiment.metrics.R2,
-        start_time=start_time,
-        end_time=end_time,
-        duration=duration,
-        precision=precision,
-        recall=recall,
-        f1_score=f1_score,
-        pr_auc=pr_auc,
-        pr_auc_mean=pr_auc_mean,
-        pr_auc_std=pr_auc_std,
-        roc_auc=roc_auc,
-        roc_auc_mean=roc_auc_mean,
-        roc_auc_std=roc_auc_std,
+    # Calculate error_x using normalized metrics
+    error_x = (
+            normalized_metrics["MAE"] +
+            normalized_metrics["MSE"] +
+            normalized_metrics["RMSE"]
     )
 
-    # Save the model state
-    torch.save(model.state_dict(), os.path.join(path, "model.pt"))
+    # Include DTW if applicable
+    if n_features == 1:
+        if "DTW" in normalized_metrics and normalized_metrics["DTW"] != int(9e10):
+            error_x += normalized_metrics["DTW"]
+        else:
+            Log.error("DTW metric was not computed.")
+    else:
+        Log.error("DTW metric is not included because the dataset is not univariate.")
+
+    # Use normalized R² directly
+    error_y = normalized_metrics["R2"]
+
+    # Complexity calculation
+    encoding_normalized_num_layers = experiment.metrics.normalize(
+        len(model.encoding_layers), 0, seq_len
+    )
+    decoding_normalized_num_layers = experiment.metrics.normalize(
+        len(model.decoding_layers), 0, seq_len
+    )
+    normalized_bottleneck = experiment.metrics.normalize(
+        model.bottleneck_size, 0, seq_len
+    )
+    C_SCALE = 1000
+
+    max_possible_complexity = 1.0 + 1.0 + 1.0
+    complexity = int(
+        round((encoding_normalized_num_layers + decoding_normalized_num_layers + normalized_bottleneck) / max_possible_complexity, 3) * C_SCALE)
+
+    # Total fitness calculation
+    error = int(round(error_x + error_y, 3) * C_SCALE)  # Add normalized R² to the error term
+
+    fitness = int((error + complexity))  # Combine error and complexity
+
+    return fitness, error, complexity
 
 
 class RNNVAEAEArchitecture(ExtendedProblem):
@@ -147,9 +119,19 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 fitness = int(9e10)
                 complexity = int(9e10)
                 error = int(9e10)
-                conn.post_entries(model, fitness, solution, error, complexity, dataset_name, alg_name, self.iteration)
+                conn.save_model_and_entry(
+                    dataset_name=dataset_name,
+                    alg_name=alg_name,
+                    iteration=self.iteration,
+                    model=model,
+                    fitness=fitness,
+                    solution=solution,
+                    error=error,
+                    complexity=complexity
+                )
+
             else:
-                experiment = RNNVAExperiment(model, path=path, **config)
+                experiment = RNNVAExperiment(model, path, dataset_name, alg_name, **config)
                 tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
                                               name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id)
 
@@ -194,13 +176,29 @@ class RNNVAEAEArchitecture(ExtendedProblem):
                 end_time = datetime.now()
                 duration = (end_time - start_time).total_seconds()
 
-                fitness, error, complexity = calculate_fitness(model, experiment, config['data_params']['n_features'],
-                                                               config['data_params']['seq_len'])
+                fitness, error, complexity = calculate_fitness(model,
+                                                               experiment,
+                                                               config['data_params']['n_features'],
+                                                               config['data_params']['seq_len']
+                                                               )
 
                 Log.debug(tabulate([[complexity, fitness]], headers=["Complexity", "Fitness"],
                                    tablefmt="pretty"))
-                upload_save_model(dataset_name, alg_name, self.iteration, solution, error, model, experiment, fitness, complexity,
-                                  path, start_time, end_time, duration)
+                conn.save_model_and_entry(
+                    dataset_name=dataset_name,
+                    alg_name=alg_name,
+                    iteration=self.iteration,
+                    solution=solution,
+                    error=error,
+                    model=model,
+                    experiment=experiment,
+                    fitness=fitness,
+                    complexity=complexity,
+                    path=path,
+                    start_time=start_time,
+                    end_time=end_time,
+                    duration=duration
+                )
 
             if np.isnan(fitness):
                 fitness = int(9e10)

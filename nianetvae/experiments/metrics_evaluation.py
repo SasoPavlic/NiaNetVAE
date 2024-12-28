@@ -1,17 +1,15 @@
-# evaluationmetrics.py
-
 from typing import Any
-
 import numpy as np
 import torch
 import torchmetrics
 from torch import tensor, Tensor
 from torchmetrics import R2Score, MeanAbsoluteError, MeanSquaredError
-from log import Log  # Ensure you have your custom Log module imported
+from log import Log
+from nianetvae.storage.metrics_storage import ObservedMetricsDB
 
 
 class EvaluationMetrics:
-    def __init__(self, num_outputs):
+    def __init__(self, db_file, table_name, dataset_name, algorithm_name, num_outputs):
         self.MAE_metric = torchmetrics.MeanAbsoluteError()  # Low is better
         self.MSE_metric = torchmetrics.MeanSquaredError()  # Low is better
         self.RMSE_metric = torchmetrics.MeanSquaredError(squared=False)  # Low is better
@@ -24,6 +22,12 @@ class EvaluationMetrics:
         self.RMSE = int(9e10)
         self.DTW = int(9e10)
         self.R2 = float('-inf')  # High is better, starts with the worst value
+
+        # Database for observed metric ranges
+        self.db = ObservedMetricsDB(db_file, table_name)
+        self.table_name = table_name
+        self.dataset_name = dataset_name
+        self.algorithm_name = algorithm_name
 
     def to(self, device):
         self.MAE_metric.to(device)
@@ -58,59 +62,92 @@ class EvaluationMetrics:
             self.DTW_metric = None
 
     def compute(self):
-        # Compute MAE
+        """Compute raw metrics without normalization and update min/max values in the database."""
         try:
+            # Compute MAE and update min/max
             self.MAE = round(self.MAE_metric.compute().item(), 3)
-        except Exception as e:
-            Log.error(f"Error computing MAE_metric: {e}")
-            self.MAE = int(9e10)
+            self.db.update_min_max(self.dataset_name, self.algorithm_name, "MAE", self.MAE)
 
-        # Compute MSE
-        try:
+            # Compute MSE and update min/max
             self.MSE = round(self.MSE_metric.compute().item(), 3)
-        except Exception as e:
-            Log.error(f"Error computing MSE_metric: {e}")
-            self.MSE = int(9e10)
+            self.db.update_min_max(self.dataset_name, self.algorithm_name, "MSE", self.MSE)
 
-        # Compute RMSE
-        try:
+            # Compute RMSE and update min/max
             self.RMSE = round(self.RMSE_metric.compute().item(), 3)
-        except Exception as e:
-            Log.error(f"Error computing RMSE_metric: {e}")
-            self.RMSE = int(9e10)
+            self.db.update_min_max(self.dataset_name, self.algorithm_name, "RMSE", self.RMSE)
 
-        # Compute R²
-        try:
+            # Compute R² and update min/max
             self.R2 = round(self.R2_metric.compute().item(), 3)
-        except Exception as e:
-            Log.error(f"Error computing R2_metric: {e}")
-            self.R2 = float('-inf')
+            self.db.update_min_max(self.dataset_name, self.algorithm_name, "R2", self.R2)
 
-        # Compute DTW
-        if self.DTW_metric is not None:
-            try:
+            # Compute DTW and update min/max
+            if self.DTW_metric is not None:
                 dtw_value = self.DTW_metric.compute()
                 self.DTW = round(dtw_value.item(), 3)
-            except Exception as e:
-                Log.error(f"Error computing DTW_metric: {e}")
+                self.db.update_min_max(self.dataset_name, self.algorithm_name, "DTW", self.DTW)
+            else:
                 self.DTW = int(9e10)
-        else:
-            self.DTW = int(9e10)
+
+        except Exception as e:
+            Log.error(f"Error during raw metric computation: {e}")
 
         return {
             'MAE': self.MAE,
             'MSE': self.MSE,
             'RMSE': self.RMSE,
-            'DTW': self.DTW,
             'R2': self.R2,
+            'DTW': self.DTW,
         }
+
+    def get_normalized_metrics(self):
+        """Compute normalized metrics using observed min/max values from the database."""
+        try:
+            # Normalize MAE
+            mae_min, mae_max = self.db.get_min_max(self.dataset_name, self.algorithm_name, "MAE")
+            mae_normalized = self.normalize(self.MAE, mae_min, mae_max)
+
+            # Normalize MSE
+            mse_min, mse_max = self.db.get_min_max(self.dataset_name, self.algorithm_name, "MSE")
+            mse_normalized = self.normalize(self.MSE, mse_min, mse_max)
+
+            # Normalize RMSE
+            rmse_min, rmse_max = self.db.get_min_max(self.dataset_name, self.algorithm_name, "RMSE")
+            rmse_normalized = self.normalize(self.RMSE, rmse_min, rmse_max)
+
+            # Normalize R²
+            r2_min, r2_max = self.db.get_min_max(self.dataset_name, self.algorithm_name, "R2")
+            r2_normalized = self.normalize(self.R2, r2_min, r2_max)
+
+            # Normalize DTW
+            if self.DTW != int(9e10):
+                dtw_min, dtw_max = self.db.get_min_max(self.dataset_name, self.algorithm_name, "DTW")
+                dtw_normalized = self.normalize(self.DTW, dtw_min, dtw_max)
+            else:
+                dtw_normalized = 0.0
+
+        except Exception as e:
+            Log.error(f"Error during normalized metric computation: {e}")
+            return {}
+
+        return {
+            'MAE': mae_normalized,
+            'MSE': mse_normalized,
+            'RMSE': rmse_normalized,
+            'R2': r2_normalized,
+            'DTW': dtw_normalized,
+        }
+
+    def normalize(self, value, min_value, max_value):
+        """Normalize a value to the range [0, 1] using observed min and max."""
+        if max_value == min_value:
+            return 0.0
+        return (value - min_value) / (max_value - min_value)
 
     def are_metrics_complete(self):
         return all(
             metric_value is not None
             for metric_value in [self.MAE, self.MSE, self.RMSE, self.DTW, self.R2]
         )
-
 
 class DynamicTimeWarping(torchmetrics.Metric):
     def __init__(self):
@@ -119,7 +156,6 @@ class DynamicTimeWarping(torchmetrics.Metric):
         self.add_state("num_samples", default=torch.tensor(0), dist_reduce_fx="sum")
 
     def update(self, predictions, targets):
-        # Ensure predictions and targets are on the CPU and converted to numpy arrays
         predictions = predictions.detach().cpu().numpy()
         targets = targets.detach().cpu().numpy()
 
@@ -139,22 +175,17 @@ class DynamicTimeWarping(torchmetrics.Metric):
             return torch.tensor(int(9e10))  # Worst possible value for DTW
 
     def _dtw(self, x, y):
-        # x and y have shape [seq_len, n_features]
         x = x.flatten()
         y = y.flatten()
-
         n, m = len(x), len(y)
 
-        # Early exit if sequences are empty
         if n == 0 or m == 0:
             Log.error("One of the sequences is empty in DTW computation.")
-            return int(9e10)  # Worst possible value for DTW
+            return int(9e10)
 
-        # Initialize the cost matrix
         cost = np.full((n + 1, m + 1), np.inf)
         cost[0, 0] = 0
 
-        # Populate the cost matrix
         try:
             for i in range(1, n + 1):
                 for j in range(1, m + 1):
@@ -167,4 +198,4 @@ class DynamicTimeWarping(torchmetrics.Metric):
             return cost[n, m]
         except Exception as e:
             Log.error(f"Error in DTW computation: {e}")
-            return int(9e10)  # Worst possible value for DTW
+            return int(9e10)

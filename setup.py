@@ -3,7 +3,7 @@ from setuptools import setup
 setup(
     name='NiaNetVAE',
     version="1.0.0",
-    packages=['tests', 'nianetvae', 'nianetvae.models', 'nianetvae.storage', 'nianetvae.dataloaders',
+    packages=['nianetvae', 'nianetvae.models', 'nianetvae.storage', 'nianetvae.dataloaders',
               'nianetvae.experiments', 'nianetvae.niapy_extension'],
     url='https://github.com/SasoPavlic/NiaNetVAE',
     license='MIT License',

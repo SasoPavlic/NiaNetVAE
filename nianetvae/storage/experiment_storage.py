@@ -1,36 +1,21 @@
-# database.py
-
 import json
+import os
 import sqlite3
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
+import torch
 
 from log import Log
+from nianetvae.storage import SQLiteBase
 
 infinity = int(9e10)
 
 
-class SQLiteConnector:
-    def __init__(self, db_file, table_name):
-        self.db_file = db_file
-        self.table_name = table_name
-        self.connection = None
-        self.cursor = None
-        self.create_connection()
-        self.create_table()
-
-    def create_connection(self):
-        """Create a database connection to the SQLite database specified by the db_file."""
-        try:
-            self.connection = sqlite3.connect(self.db_file)
-            self.cursor = self.connection.cursor()
-        except Exception as e:
-            Log.error(f"Error creating database connection: {e}")
-
+class SQLiteConnector(SQLiteBase):
     def create_table(self):
-        """Create the solutions table if it doesn't exist, including anomaly detection metrics."""
+        """Create the solutions table if it doesn't exist."""
         try:
             create_table_query = f'''
             CREATE TABLE IF NOT EXISTS {self.table_name} (
@@ -78,23 +63,17 @@ class SQLiteConnector:
     def get_entries(self, hash_id, dataset_name):
         """Retrieve entries from the database matching the given hash_id and dataset_name."""
         try:
-            self.create_connection()
             query = f"SELECT * FROM {self.table_name} WHERE hash_id = ? AND dataset_name = ?"
-            existing_entry = pd.read_sql_query(query, self.connection, params=(hash_id, dataset_name))
-            self.connection.close()
+            return pd.read_sql_query(query, self.connection, params=(hash_id, dataset_name))
         except Exception as e:
             Log.error(f"Could not get existing entries: {e}")
-            existing_entry = pd.DataFrame()
-        return existing_entry
+            return pd.DataFrame()
 
     def get_maximum_fitness(self):
         """Retrieve the maximum fitness value from the database."""
         try:
-            self.create_connection()
             query = f"SELECT MAX(fitness) AS max_fitness FROM {self.table_name}"
-            maximum_results = pd.read_sql_query(query, self.connection)
-            self.connection.close()
-            max_fitness = maximum_results['max_fitness'][0]
+            max_fitness = pd.read_sql_query(query, self.connection).iloc[0]['max_fitness']
             return max_fitness
         except Exception as e:
             Log.error(f"Error getting maximum fitness: {e}")
@@ -103,34 +82,102 @@ class SQLiteConnector:
     def best_results(self):
         """Retrieve the best solution (with the minimum fitness) from the database."""
         try:
-            self.create_connection()
             query = f"SELECT solution_array, algorithm_name, MIN(fitness) AS min_fitness FROM {self.table_name}"
             best_results = pd.read_sql_query(query, self.connection)
-            self.connection.close()
-
-            best_solution_json = best_results['solution_array'][0]
-            best_solution = np.array(json.loads(best_solution_json))
-            best_algorithm = best_results['algorithm_name'][0]
-
+            best_solution = np.array(json.loads(best_results.iloc[0]['solution_array']))
+            best_algorithm = best_results.iloc[0]['algorithm_name']
             return best_solution, best_algorithm
         except Exception as e:
             Log.error(f"Error getting best results: {e}")
             return None, None
 
-    def post_entries(self, model, fitness, solution, error, complexity, dataset_name, alg_name, iteration,
-                     mse=infinity, rmse=infinity, mae=infinity, dtw=infinity, r2=float('-inf'),
-                     start_time=None, end_time=None, duration=None,
-                     precision=None, recall=None, f1_score=None,
-                     pr_auc=None,
-                     pr_auc_mean=None,
-                     pr_auc_std=None,
-                     roc_auc=None,
-                     roc_auc_mean=None,
-                     roc_auc_std=None
-                     ):
-        """Insert a new entry into the database, including anomaly detection metrics."""
+    def save_model_and_entry(
+            self,
+            dataset_name,
+            alg_name,
+            iteration,
+            solution=None,
+            error=None,
+            model=None,
+            experiment=None,
+            fitness=None,
+            complexity=None,
+            path=None,
+            start_time=None,
+            end_time=None,
+            duration=None,
+    ):
+        """
+        Save a model state and/or insert a new entry into the database.
+
+        Args:
+            dataset_name (str): Name of the dataset.
+            alg_name (str): Name of the algorithm.
+            iteration (int): Iteration number.
+            solution (Optional[np.ndarray]): The solution array.
+            error (Optional[float]): The error value.
+            model (Optional[torch.nn.Module]): The model to save and log.
+            experiment (Optional[object]): The experiment containing metrics.
+            fitness (Optional[float]): The fitness value.
+            complexity (Optional[float]): The complexity value.
+            path (Optional[str]): Path to save the model state.
+            start_time (Optional[datetime]): Training start time.
+            end_time (Optional[datetime]): Training end time.
+            duration (Optional[float]): Training duration in seconds.
+        """
         try:
-            self.create_connection()
+            # Extract metrics if experiment is provided
+            anomaly_metrics = getattr(experiment, 'anomaly_metrics', {})
+            metrics = {
+                'precision': anomaly_metrics.get('precision'),
+                'recall': anomaly_metrics.get('recall'),
+                'f1_score': anomaly_metrics.get('f1_score'),
+                'pr_auc': anomaly_metrics.get('pr_auc'),
+                'pr_auc_mean': anomaly_metrics.get('pr_auc_mean'),
+                'pr_auc_std': anomaly_metrics.get('pr_auc_std'),
+                'roc_auc': anomaly_metrics.get('roc_auc'),
+                'roc_auc_mean': anomaly_metrics.get('roc_auc_mean'),
+                'roc_auc_std': anomaly_metrics.get('roc_auc_std'),
+            }
+
+            # Insert entry into the database if sufficient information is provided
+            if model and fitness is not None and solution is not None:
+                self._insert_entry(
+                    model=model,
+                    fitness=fitness,
+                    solution=solution,
+                    error=error or 0,
+                    complexity=complexity or 0,
+                    dataset_name=dataset_name,
+                    alg_name=alg_name,
+                    iteration=iteration,
+                    mse=experiment.metrics.MSE if experiment else infinity,
+                    rmse=experiment.metrics.RMSE if experiment else infinity,
+                    mae=experiment.metrics.MAE if experiment else infinity,
+                    dtw=experiment.metrics.DTW if experiment else infinity,
+                    r2=experiment.metrics.R2 if experiment else float('-inf'),
+                    start_time=start_time,
+                    end_time=end_time,
+                    duration=duration,
+                    **metrics,
+                )
+
+            # Save the model state if a path is provided
+            if model and path:
+                model_path = os.path.join(path, "model.pt")
+                torch.save(model.state_dict(), model_path)
+                Log.info(f"Model saved to {model_path}")
+
+        except Exception as e:
+            Log.error(f"Error saving model and entry: {e}")
+
+    def _insert_entry(self, model, fitness, solution, error, complexity, dataset_name, alg_name, iteration,
+                      mse, rmse, mae, dtw, r2, start_time, end_time, duration,
+                      precision=None, recall=None, f1_score=None,
+                      pr_auc=None, pr_auc_mean=None, pr_auc_std=None,
+                      roc_auc=None, roc_auc_mean=None, roc_auc_std=None):
+        """Insert a new entry into the database."""
+        try:
             json_solution = json.dumps(solution.tolist())
 
             # Convert timestamps to strings
@@ -141,7 +188,7 @@ class SQLiteConnector:
             # Prepare the data as a dictionary
             data = {
                 'hash_id': str(model.hash_id),
-                'dataset_name' : str(dataset_name),
+                'dataset_name': str(dataset_name),
                 'algorithm_name': str(alg_name),
                 'timestamp': timestamp,
                 'start_time': start_time_str,
@@ -182,6 +229,5 @@ class SQLiteConnector:
             insert_query = f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})"
             self.cursor.execute(insert_query, tuple(data.values()))
             self.connection.commit()
-            self.connection.close()
         except Exception as e:
-            Log.error(f"Error posting entries: {e}")
+            Log.error(f"Error inserting entry: {e}")

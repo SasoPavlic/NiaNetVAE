@@ -1,7 +1,7 @@
 # main_config.yaml
 nia_search:
   runs: 1
-  evaluations: 1000
+  evaluations: 100
   algorithms:
     - particle_swarm
     - genetic_algorithm
@@ -14,8 +14,8 @@ model_params:
   name: 'RecurrentVariationalAutoencoder'
 
 trainer_params:
-  min_epochs: 15
-  max_epochs: 30
+  min_epochs: 1
+  max_epochs: 1
 
 early_stop:
   monitor: "val_loss"
@@ -48,8 +48,8 @@ data_loader_params:
   data_percentage: 100
   batch_size: 32
   val_size: 10
-  num_workers: 16
-  persistent_workers: True
+  num_workers: 0
+  persistent_workers: False
   pin_memory: True
 
 # Dataset configuration

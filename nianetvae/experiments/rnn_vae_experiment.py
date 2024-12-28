@@ -6,7 +6,7 @@ from torch import Tensor
 
 from log import Log
 from nianetvae.experiments.anomaly_detection import *
-from nianetvae.experiments.evaluationmetrics import EvaluationMetrics
+from nianetvae.experiments.metrics_evaluation import EvaluationMetrics
 from nianetvae.experiments.anomaly_detection import AnomalyDetectionMetrics
 
 from nianetvae.models.base import BaseVAE
@@ -41,12 +41,14 @@ class FineTuneLearningRateFinder(LearningRateFinder):
 
 
 class RNNVAExperiment(LightningModule):
-    def __init__(self, model: BaseVAE, path, **kwargs) -> None:
+    def __init__(self, model: BaseVAE, path,dataset_name, alg_name, **kwargs) -> None:
         super(RNNVAExperiment, self).__init__()
 
         self.results = None
         self.model = model
         self.path = path
+        self.dataset_name=dataset_name
+        self.alg_name=alg_name
         self.learning_rate = 0.01
         self.params = kwargs['exp_params']
         self.seq_len = kwargs['data_params']['seq_len']
@@ -56,7 +58,11 @@ class RNNVAExperiment(LightningModule):
         self.train_loss = None
         self.val_loss = None
         self.test_loss = None
-        self.metrics = EvaluationMetrics(num_outputs=(self.seq_len * kwargs['data_params']['n_features']))
+        self.metrics = EvaluationMetrics(kwargs['logging_params']['db_storage'],
+                                         "observed_metrics",
+                                         dataset_name,
+                                         alg_name,
+            (self.seq_len * kwargs['data_params']['n_features']))
         self.anomaly_detection_metrics = AnomalyDetectionMetrics()
         try:
             self.hold_graph = self.params['retain_first_backpass']

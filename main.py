@@ -16,7 +16,7 @@ from nianetvae.dataloaders.swat_dataloader import SWATDataLoader
 from nianetvae.dataloaders.ucr_dataloader import UCRDataLoader
 from nianetvae.dataloaders.wadi_dataloader import WADIDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
-from nianetvae.storage.database import SQLiteConnector
+from nianetvae.storage.experiment_storage import SQLiteConnector
 from nianetvae.rnn_vae_architecture_search import solve_architecture_problem
 
 def select_dataloader(config):
