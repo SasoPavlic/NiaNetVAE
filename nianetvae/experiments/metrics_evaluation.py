@@ -5,11 +5,10 @@ import torchmetrics
 from torch import tensor, Tensor
 from torchmetrics import R2Score, MeanAbsoluteError, MeanSquaredError
 from log import Log
-from nianetvae.storage.metrics_storage import ObservedMetricsDB
 
 
 class EvaluationMetrics:
-    def __init__(self, db_file, table_name, dataset_name, algorithm_name, num_outputs):
+    def __init__(self, num_outputs):
         self.MAE_metric = torchmetrics.MeanAbsoluteError()  # Low is better
         self.MSE_metric = torchmetrics.MeanSquaredError()  # Low is better
         self.RMSE_metric = torchmetrics.MeanSquaredError(squared=False)  # Low is better
@@ -22,12 +21,6 @@ class EvaluationMetrics:
         self.RMSE = int(9e10)
         self.DTW = int(9e10)
         self.R2 = float('-inf')  # High is better, starts with the worst value
-
-        # Database for observed metric ranges
-        self.db = ObservedMetricsDB(db_file, table_name)
-        self.table_name = table_name
-        self.dataset_name = dataset_name
-        self.algorithm_name = algorithm_name
 
     def to(self, device):
         self.MAE_metric.to(device)
@@ -62,29 +55,16 @@ class EvaluationMetrics:
             self.DTW_metric = None
 
     def compute(self):
-        """Compute raw metrics without normalization and update min/max values in the database."""
+        """Compute raw metrics without normalization."""
         try:
-            # Compute MAE and update min/max
             self.MAE = round(self.MAE_metric.compute().item(), 3)
-            self.db.update_min_max(self.dataset_name, self.algorithm_name, "MAE", self.MAE)
-
-            # Compute MSE and update min/max
             self.MSE = round(self.MSE_metric.compute().item(), 3)
-            self.db.update_min_max(self.dataset_name, self.algorithm_name, "MSE", self.MSE)
-
-            # Compute RMSE and update min/max
             self.RMSE = round(self.RMSE_metric.compute().item(), 3)
-            self.db.update_min_max(self.dataset_name, self.algorithm_name, "RMSE", self.RMSE)
-
-            # Compute R² and update min/max
             self.R2 = round(self.R2_metric.compute().item(), 3)
-            self.db.update_min_max(self.dataset_name, self.algorithm_name, "R2", self.R2)
 
-            # Compute DTW and update min/max
             if self.DTW_metric is not None:
                 dtw_value = self.DTW_metric.compute()
                 self.DTW = round(dtw_value.item(), 3)
-                self.db.update_min_max(self.dataset_name, self.algorithm_name, "DTW", self.DTW)
             else:
                 self.DTW = int(9e10)
 
@@ -99,55 +79,12 @@ class EvaluationMetrics:
             'DTW': self.DTW,
         }
 
-    def get_normalized_metrics(self):
-        """Compute normalized metrics using observed min/max values from the database."""
-        try:
-            # Normalize MAE
-            mae_min, mae_max = self.db.get_min_max(self.dataset_name, self.algorithm_name, "MAE")
-            mae_normalized = self.normalize(self.MAE, mae_min, mae_max)
-
-            # Normalize MSE
-            mse_min, mse_max = self.db.get_min_max(self.dataset_name, self.algorithm_name, "MSE")
-            mse_normalized = self.normalize(self.MSE, mse_min, mse_max)
-
-            # Normalize RMSE
-            rmse_min, rmse_max = self.db.get_min_max(self.dataset_name, self.algorithm_name, "RMSE")
-            rmse_normalized = self.normalize(self.RMSE, rmse_min, rmse_max)
-
-            # Normalize R²
-            r2_min, r2_max = self.db.get_min_max(self.dataset_name, self.algorithm_name, "R2")
-            r2_normalized = self.normalize(self.R2, r2_min, r2_max)
-
-            # Normalize DTW
-            if self.DTW != int(9e10):
-                dtw_min, dtw_max = self.db.get_min_max(self.dataset_name, self.algorithm_name, "DTW")
-                dtw_normalized = self.normalize(self.DTW, dtw_min, dtw_max)
-            else:
-                dtw_normalized = 0.0
-
-        except Exception as e:
-            Log.error(f"Error during normalized metric computation: {e}")
-            return {}
-
-        return {
-            'MAE': mae_normalized,
-            'MSE': mse_normalized,
-            'RMSE': rmse_normalized,
-            'R2': r2_normalized,
-            'DTW': dtw_normalized,
-        }
-
-    def normalize(self, value, min_value, max_value):
-        """Normalize a value to the range [0, 1] using observed min and max."""
-        if max_value == min_value:
-            return 0.0
-        return (value - min_value) / (max_value - min_value)
-
     def are_metrics_complete(self):
         return all(
             metric_value is not None
             for metric_value in [self.MAE, self.MSE, self.RMSE, self.DTW, self.R2]
         )
+
 
 class DynamicTimeWarping(torchmetrics.Metric):
     def __init__(self):

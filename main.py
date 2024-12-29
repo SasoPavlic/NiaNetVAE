@@ -18,6 +18,8 @@ from nianetvae.dataloaders.wadi_dataloader import WADIDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.storage.experiment_storage import SQLiteConnector
 from nianetvae.rnn_vae_architecture_search import solve_architecture_problem
+import nianetvae.experiments.metrics_evaluation
+
 
 def select_dataloader(config):
     dataset_name = config["data_params"].get("dataset_name", "")
