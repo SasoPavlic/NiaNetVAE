@@ -28,8 +28,6 @@ class RNNVAE(BaseVAE, nn.Module):
         y6: optimizer algorithm.
         """
 
-        #TODO Remove on HPC
-        #solution = [0.57584263, 0.63118431, 0.34364192, 0.02515069, 0.20950322, 0.33386429]
         # Initialize validity flag
         self.is_valid = True
 

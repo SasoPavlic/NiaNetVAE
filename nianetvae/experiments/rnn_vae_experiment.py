@@ -152,6 +152,7 @@ class RNNVAExperiment(LightningModule):
             on_epoch=True, batch_size=batch['signal'].shape[0]
         )
 
+        # TODO Check if the value of metric here is the same as it is in DB
         # Update anomaly detection metrics
         self.anomaly_detection_metrics.update(
             predictions=results['reconstructed'],
@@ -170,27 +171,25 @@ class RNNVAExperiment(LightningModule):
         save_path = os.path.join(os.getcwd(), self.path)
         self.anomaly_metrics = self.anomaly_detection_metrics.compute(save_path=save_path)
 
+        # Helper function to safely format metric values
+        def safe_format(value):
+            return f"{value:.3f}" if value is not None else "N/A"
+
         # Print metrics using Tabulate
         if self.anomaly_metrics:
             metrics_list = [
-                ["Precision", f"{self.anomaly_metrics['precision']:.3f}"],
-                ["Recall", f"{self.anomaly_metrics['recall']:.3f}"],
-                ["F1-Score", f"{self.anomaly_metrics['f1_score']:.3f}"],
-                ["PR AUC",
-                 f"{self.anomaly_metrics['pr_auc']:.3f}" if self.anomaly_metrics['pr_auc'] is not None else "N/A"],
-                ["PR AUC Mean", f"{self.anomaly_metrics['pr_auc_mean']:.3f}" if self.anomaly_metrics[
-                                                                                    'pr_auc_mean'] is not None else "N/A"],
-                ["PR AUC Std", f"{self.anomaly_metrics['pr_auc_std']:.3f}" if self.anomaly_metrics[
-                                                                                  'pr_auc_std'] is not None else "N/A"],
-                ["ROC AUC",
-                 f"{self.anomaly_metrics['roc_auc']:.3f}" if self.anomaly_metrics['roc_auc'] is not None else "N/A"],
-
-                ["ROC AUC Mean", f"{self.anomaly_metrics['roc_auc_mean']:.3f}" if self.anomaly_metrics[
-                                                                                      'roc_auc_mean'] is not None else "N/A"],
-                ["ROC AUC Std", f"{self.anomaly_metrics['roc_auc_std']:.3f}" if self.anomaly_metrics[
-                                                                                    'roc_auc_std'] is not None else "N/A"],
+                ["Precision", safe_format(self.anomaly_metrics.get('precision'))],
+                ["Recall", safe_format(self.anomaly_metrics.get('recall'))],
+                ["F1-Score", safe_format(self.anomaly_metrics.get('f1_score'))],
+                ["PR AUC", safe_format(self.anomaly_metrics.get('pr_auc'))],
+                ["PR AUC Mean", safe_format(self.anomaly_metrics.get('pr_auc_mean'))],
+                ["PR AUC Std", safe_format(self.anomaly_metrics.get('pr_auc_std'))],
+                ["ROC AUC", safe_format(self.anomaly_metrics.get('roc_auc'))],
+                ["ROC AUC Mean", safe_format(self.anomaly_metrics.get('roc_auc_mean'))],
+                ["ROC AUC Std", safe_format(self.anomaly_metrics.get('roc_auc_std'))],
             ]
             Log.info("\nAnomaly Detection Metrics:")
             Log.info(tabulate(metrics_list, headers=["Metric", "Value"], tablefmt="pretty"))
         else:
             Log.error("Anomaly detection was not performed due to errors.")
+

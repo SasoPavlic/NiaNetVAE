@@ -64,6 +64,9 @@ def compute_normalized_metric(metric_name, value, is_higher_better, conn, datase
 
         # Normalize the value
         normalized = (value - min_val) / (max_val - min_val)
+        normalized = max(0.0, min(1.0, normalized))  # Clamp to [0, 1]
+
+        # Invert if higher values are better
         return 1.0 - normalized if is_higher_better else normalized
 
     except Exception as e:
@@ -145,13 +148,13 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
                + decoding_normalized_num_layers
                + normalized_bottleneck)
               / max_possible_complexity,
-              3)
-        * 1000
+              6)
+        * 1000000
     )
 
     # Total fitness calculation
     try:
-        error = int(round(error_x + error_y, 3) * 1000)  # Add normalized R² to the error term
+        error = int(round(error_x + error_y, 6) * 1000000)  # Add normalized R² to the error term
         fitness = error + complexity
 
         # Check for NaN or invalid values
@@ -184,7 +187,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
         config['logging_params']['model_path'] = path
         Path(path).mkdir(parents=True, exist_ok=True)
 
-        if existing_entry.shape[0] > 0:
+        if existing_entry.shape[0] > 0 and True==False:
             fitness = existing_entry['fitness'][0]
             Log.info(f"Model for this solution already exists")
             return fitness
