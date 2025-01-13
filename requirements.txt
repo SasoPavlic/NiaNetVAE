@@ -1,7 +1,7 @@
 setuptools
 PyYAML
-torch==2.0.0+cu118  # PyTorch compatible with CUDA 11.8
-torchvision==0.15.1+cu118  # Torchvision compatible with CUDA 11.8
+torch==2.1.1+cu121
+torchvision==0.16.1+cu121
 numpy
 torchmetrics
 tabulate
@@ -10,7 +10,7 @@ scipy
 scikit-learn
 matplotlib
 niapy
-lightning==2.0.4
+lightning==2.2.1
 Pillow
 pytest
 colorama

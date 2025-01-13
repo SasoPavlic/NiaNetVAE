@@ -5,8 +5,9 @@
 # https://github.com/Lightning-AI/lightning/tree/master/dockers
 
 ARG PYTHON_VERSION=3.10
-ARG PYTORCH_VERSION=2.0
-ARG CUDA_VERSION=11.8.0
+ARG PYTORCH_VERSION=2.1
+ARG CUDA_VERSION=12.1.1
+
 
 # Base cuda image
 #FROM pytorchlightning/pytorch_lightning:base-cuda-py${PYTHON_VERSION}-torch${PYTORCH_VERSION}-cuda${CUDA_VERSION}
@@ -25,7 +26,7 @@ WORKDIR /app
 # To copy in multiple layers:
 # Rebuilding docker image will be faster on change, but the image will be bigger
 COPY requirements.txt /app/requirements.txt
-RUN pip3 install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu118
+RUN pip3 install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121
 
 
 RUN mkdir data
