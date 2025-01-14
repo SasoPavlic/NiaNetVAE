@@ -218,9 +218,9 @@ class AnomalyDetectionMetrics:
             tn, fp, fn, tp = confusion_matrix(labels.int().numpy(), anomalies.numpy()).ravel()
 
             # Save plots if save_path is provided
-            if save_path is not None:
-                ts_save_dir = os.path.join(save_path, f"time_series_{ts_id}")
-                os.makedirs(ts_save_dir, exist_ok=True)
+            # if save_path is not None:
+                # ts_save_dir = os.path.join(save_path, f"time_series_{ts_id}")
+                # os.makedirs(ts_save_dir, exist_ok=True)
 
                 # Plot ROC Curve
                 # roc_save_path = os.path.join(ts_save_dir, f'roc_curve_ts_{ts_id}.pdf')

@@ -1,9 +1,9 @@
 #!/bin/bash
 ## Running code on SLURM cluster
 ##https://pytorch-lightning.readthedocs.io/en/stable/clouds/cluster_advanced.html
-#SBATCH --job-name=nianet-vae-pso         # Job name
-#SBATCH --output=nianet-vae-pso-%j.out   # Standard output file (%j: job ID)
-#SBATCH --error=nianet-vae-pso-%j.err    # Standard error file
+#SBATCH --job-name=pso-msl               # Job name
+#SBATCH --output=pso-msl-%j.out          # Standard output file (%j: job ID)
+#SBATCH --error=pso-msl-%j.err           # Standard error file
 #SBATCH --partition=gpu                  # GPU partition
 #SBATCH --nodes=1                        # Number of nodes
 #SBATCH --ntasks=1                       # Number of tasks

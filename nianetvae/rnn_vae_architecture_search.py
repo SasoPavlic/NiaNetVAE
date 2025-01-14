@@ -187,7 +187,7 @@ class RNNVAEAEArchitecture(ExtendedProblem):
         config['logging_params']['model_path'] = path
         Path(path).mkdir(parents=True, exist_ok=True)
 
-        if existing_entry.shape[0] > 0 and True==False:
+        if existing_entry.shape[0] > 0 and True == False:
             fitness = existing_entry['fitness'][0]
             Log.info(f"Model for this solution already exists")
             return fitness
@@ -211,24 +211,24 @@ class RNNVAEAEArchitecture(ExtendedProblem):
 
             else:
                 experiment = RNNVAExperiment(model, path, dataset_name, alg_name, **config)
-                tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
-                                              name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id)
+                # tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
+                #                               name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id)
 
-                trainer = Trainer(logger=tb_logger,
-                                  enable_progress_bar=True,
+                trainer = Trainer(enable_progress_bar=True,
                                   accelerator="cuda",
                                   devices=1,
-                                  default_root_dir=tb_logger.root_dir,
+                                  default_root_dir=path,
                                   log_every_n_steps=50,
+                                  logger=False,
                                   # profiler="simple",
                                   # auto_select_gpus=True,
 
                                   callbacks=[
-                                      LearningRateMonitor(),
                                       FineTuneLearningRateFinder(**config['fine_tune_lr_finder']),
                                       EarlyStopping(**config['early_stop'],
                                                     verbose=True,
                                                     check_finite=True),
+                                      # LearningRateMonitor(),
                                       # BatchSizeFinder(
                                       #     mode="power",  # "power" or "binsearch" modes
                                       #     steps_per_trial=3,  # Number of steps to run with each batch size
@@ -330,7 +330,7 @@ def solve_architecture_problem(selected_algorithms):
     Log.info(f"Solutions: {final_solutions}")
     best_solution, best_algorithm = conn.best_results()
     best_model = RNNVAE(best_solution, **config)
-    model_file = config['logging_params']['save_dir'] + f"{best_algorithm}_{best_model.hash_id}.pt"
+    model_file = config['logging_params']['save_dir'] + f"{dataset_name}_{best_algorithm}_{best_model.hash_id}.pt"
     # https://pytorch.org/tutorials/beginner/saving_loading_models.html#saving-loading-model-for-inference
     torch.save(best_model.state_dict(), model_file)
     Log.info(f"Best model saved to: {model_file}")

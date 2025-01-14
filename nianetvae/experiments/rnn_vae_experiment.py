@@ -168,8 +168,11 @@ class RNNVAExperiment(LightningModule):
 
     def on_test_end(self):
         # Compute anomaly detection metrics
-        save_path = os.path.join(os.getcwd(), self.path)
-        self.anomaly_metrics = self.anomaly_detection_metrics.compute(save_path=save_path)
+        if self.path is not None:
+            save_path = os.path.join(os.getcwd(), self.path)
+            self.anomaly_metrics = self.anomaly_detection_metrics.compute(save_path=save_path)
+        else:
+            self.anomaly_metrics = self.anomaly_detection_metrics.compute(save_path=self.path)
 
         # Helper function to safely format metric values
         def safe_format(value):
