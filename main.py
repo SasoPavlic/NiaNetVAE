@@ -47,6 +47,7 @@ def select_dataloader(config):
     # Initialize the DataLoader with the corresponding parameters
     return DataLoaderClass(**config["data_params"])
 
+
 if __name__ == '__main__':
 
     RUN_UUID = uuid.uuid4().hex
@@ -61,7 +62,12 @@ if __name__ == '__main__':
     parser.add_argument('--algorithms', '-alg',
                         dest="algorithms",
                         metavar='list_of_strings',
-                        help='NIA algorithms to use')
+                        help='NIA algorithms to use (comma-separated)')
+
+    parser.add_argument('--metrics', '-met',
+                        dest="metrics",
+                        metavar='list_of_strings',
+                        help='Metrics to calculate (comma-separated)')
 
     args = parser.parse_args()
 
@@ -127,5 +133,11 @@ if __name__ == '__main__':
     else:
         algorithms = config['nia_search']['algorithms']
 
+    # Update algorithms and metrics based on arguments or config
+    algorithms = args.algorithms if args.algorithms else config['nia_search']['algorithms']
+    metrics = args.metrics if args.metrics else config['nia_search']['metrics']
+
+    config['nia_search']['metrics'] = metrics
     solve_architecture_problem(algorithms)
+
     Log.info(f'\n Program end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')

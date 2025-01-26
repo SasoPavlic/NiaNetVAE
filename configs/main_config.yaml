@@ -8,14 +8,22 @@ nia_search:
     - firefly_algorithm
     - differential_evolution
     - self_adaptive_differential_evolution
+  metrics:
+    - MAE
+    - MSE
+    - RMSE
+    - MAPE
+    - RMAPE
+    - DTW
+    - R2
 
 # Global parameters
 model_params:
   name: 'RecurrentVariationalAutoencoder'
 
 trainer_params:
-  min_epochs: 1
-  max_epochs: 2
+  min_epochs: 15
+  max_epochs: 30
 
 early_stop:
   monitor: "val_loss"
@@ -41,7 +49,7 @@ logging_params:
   name: "RNNVAE"
   logger_file: "RNNAutoencoder.log"
   save_dir: "logs/"
-  db_storage: "logs/solution_mape.db"
+  db_storage: "logs/solution.db"
 
 # Shared Data Loader parameters
 data_loader_params:
