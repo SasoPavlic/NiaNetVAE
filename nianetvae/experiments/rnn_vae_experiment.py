@@ -58,7 +58,7 @@ class RNNVAExperiment(LightningModule):
         self.train_loss = None
         self.val_loss = None
         self.test_loss = None
-        self.metrics = EvaluationMetrics((self.seq_len * kwargs['data_params']['n_features']))
+        self.metrics = EvaluationMetrics()
         self.anomaly_detection_metrics = AnomalyDetectionMetrics()
         try:
             self.hold_graph = self.params['retain_first_backpass']

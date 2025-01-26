@@ -8,7 +8,7 @@
 #SBATCH --nodes=1                        # Number of nodes
 #SBATCH --ntasks=1                       # Number of tasks
 #SBATCH --gres=gpu:1                     # Request 1 GPU
-#SBATCH --mem-per-gpu=80GB               # Memory per GPU
+#SBATCH --mem-per-gpu=80GB               # RAM Memory per GPU and not VRAM
 #SBATCH --time=96:00:00                  # Maximum runtime
 
 # Log environment details

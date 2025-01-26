@@ -61,11 +61,9 @@ The following dimensions can be modified:
 
 * **Topology shape:** (symmetrical, asymmetrical)
 * **Layer type:** (RNN, LSTM, GRU)
-* **Number of neurons per layer:** (Based on dataset shape)
-* **Number of layers:** (Based on dataset shape)
+* **Layer step:** (Determined by dataset shape)
+* **Number of layers:** (Determined by dataset shape)
 * **Activation functions:** (ELU, RELU, Leaky RELU, RRELU, SELU, CELU, GELU, TANH)
-* **Number of epochs:** [100-200]
-* **Learning rate:** [0.0-1.0]
 * **Optimizer:** (Adam, Adagrad, SGD, RAdam, ASGD, RPROP)
 
 You can run the NiaNet script once your setup is complete.
@@ -145,3 +143,96 @@ at <http://www.opensource.org/licenses/MIT>.
 
 This framework is provided as-is, and there are no guarantees that it fits your purposes or that it is bug-free. Use it
 at your own risk!
+
+
+
+# Fitness Function Overview
+
+This summary explains how the code calculates a single **fitness** value, balancing **reconstruction error** and **model complexity**.
+
+---
+
+## 1. Metric Normalization
+
+For each metric (e.g., **MAE**, **MSE**, **RMSE**, **R²**, **DTW**), the code retrieves **min** and **max** values from a database and **normalizes** the current metric into the range \([0,1]\). The basic formula is:
+
+$$
+\text{normalized} \;=\; \frac{\text{value} - \text{min\_val}}{\text{max\_val} - \text{min\_val}}
+$$
+
+- If a metric is **better when higher** (e.g., **R²**), the function inverts that range with:
+  \[
+     1 - \text{normalized}
+  \]
+- If no prior data exist, the code defaults to using the current value as both min and max.
+
+---
+
+## 2. Error Calculation
+
+The code sums various normalized **reconstruction** metrics:
+
+1. **MAE**, **MSE**, and **RMSE** (all lower-is-better)  
+2. **DTW** (if valid for univariate data)  
+3. **R²** (treated inversely, so poor R² increases overall error)
+
+In simplified form:
+
+$$
+\text{Error} \;\approx\; 
+\bigl(\text{Norm(MAE)} + \text{Norm(MSE)} + \text{Norm(RMSE)}\bigr) 
+\;+\; \text{optional Norm(DTW)} 
+\;+\; \text{Norm(R²)}
+$$
+
+> Since **R²** is higher-is-better, its normalization effectively becomes \((1 - R²)\) when added to the error term.
+
+---
+
+## 3. Complexity Calculation
+
+The code **penalizes** large or deep architectures. It looks at:
+
+- Number of encoding layers  
+- Number of decoding layers  
+- Bottleneck size
+
+Each is **divided** by the time-series length \(\text{seq\_len}\) to keep values in \([0,1]\). They are summed and scaled so that:
+
+$$
+\text{Complexity} \;=\; 
+\frac{\text{EncLayers}}{\text{seq\_len}} 
+\;+\;
+\frac{\text{DecLayers}}{\text{seq\_len}}
+\;+\;
+\frac{\text{BottleneckSize}}{\text{seq\_len}}
+$$
+
+*(This result is then normalized further to a maximum of 3.0.)*
+
+---
+
+## 4. Final Fitness
+
+The final **Fitness** is simply:
+
+$$
+\text{Fitness} 
+\;=\; 
+\text{Error} 
+\;+\; 
+\text{Complexity}.
+$$
+
+- The optimization algorithm (e.g., PSO, DE) **minimizes** this value.
+- **Lower fitness** indicates better reconstruction (less error) **and** a simpler model (lower complexity).
+
+---
+
+## 5. Handling Invalid Values
+
+If any metric is missing or NaN, the code assigns a **high penalty** \((9 \times 10^{10})\) so that invalid solutions are effectively discarded.
+
+---
+
+**Overall**, this balanced approach encourages **accurate** yet **efficient** VRAE architectures.

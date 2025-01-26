@@ -156,8 +156,8 @@ class AnomalyDetectionMetrics:
             'pr_auc': round(pr_auc, 3) if pr_auc is not None else None,
             'pr_auc_mean': round(pr_auc_mean, 3) if pr_auc_mean is not None else None,
             'pr_auc_std': round(pr_auc_std, 3) if pr_auc_std is not None else None,
-            'roc_auc_mean': round(roc_auc_mean, 3) if roc_auc_mean is not None else None,  # Added
-            'roc_auc_std': round(roc_auc_std, 3) if roc_auc_std is not None else None     # Added
+            'roc_auc_mean': round(roc_auc_mean, 3) if roc_auc_mean is not None else None,
+            'roc_auc_std': round(roc_auc_std, 3) if roc_auc_std is not None else None
         }
 
     @staticmethod

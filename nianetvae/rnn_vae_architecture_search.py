@@ -100,6 +100,8 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
     conn.update_min_max(dataset_name, alg_name, "MAE", raw_metrics["MAE"])
     conn.update_min_max(dataset_name, alg_name, "MSE", raw_metrics["MSE"])
     conn.update_min_max(dataset_name, alg_name, "RMSE", raw_metrics["RMSE"])
+    conn.update_min_max(dataset_name, alg_name, "MAPE", raw_metrics["MAPE"])
+    conn.update_min_max(dataset_name, alg_name, "RMAPE", raw_metrics["RMAPE"])
     conn.update_min_max(dataset_name, alg_name, "R2", raw_metrics["R2"])
     if raw_metrics["DTW"] != int(9e10):  # Update DTW only if it's a valid value
         conn.update_min_max(dataset_name, alg_name, "DTW", raw_metrics["DTW"])
@@ -109,6 +111,8 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
         "MAE": compute_normalized_metric("MAE", raw_metrics["MAE"], False, conn, dataset_name, alg_name),
         "MSE": compute_normalized_metric("MSE", raw_metrics["MSE"], False, conn, dataset_name, alg_name),
         "RMSE": compute_normalized_metric("RMSE", raw_metrics["RMSE"], False, conn, dataset_name, alg_name),
+        "MAPE": compute_normalized_metric("MAPE", raw_metrics["MAPE"], False, conn, dataset_name, alg_name),
+        "RMAPE": compute_normalized_metric("RMAPE", raw_metrics["RMAPE"], False, conn, dataset_name, alg_name),
         "R2": compute_normalized_metric("R2", raw_metrics["R2"], True, conn, dataset_name, alg_name),
         "DTW": compute_normalized_metric("DTW", raw_metrics["DTW"], False, conn, dataset_name, alg_name) if raw_metrics[
                                                                                                                 "DTW"] != int(
@@ -119,7 +123,10 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
     error_x = (
             normalized_metrics["MAE"] +
             normalized_metrics["MSE"] +
-            normalized_metrics["RMSE"]
+            normalized_metrics["RMSE"] +
+            normalized_metrics["MAPE"] +
+            normalized_metrics["RMAPE"]
+
     )
 
     # Include DTW if applicable

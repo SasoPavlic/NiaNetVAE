@@ -4,21 +4,27 @@ import torch
 import torchmetrics
 from torch import tensor, Tensor
 from torchmetrics import R2Score, MeanAbsoluteError, MeanSquaredError
+from torchmetrics.utilities.checks import _check_same_shape
+
 from log import Log
 
 
 class EvaluationMetrics:
-    def __init__(self, num_outputs):
+    def __init__(self):
         self.MAE_metric = torchmetrics.MeanAbsoluteError()  # Low is better
         self.MSE_metric = torchmetrics.MeanSquaredError()  # Low is better
         self.RMSE_metric = torchmetrics.MeanSquaredError(squared=False)  # Low is better
+        self.MAPE_metric = torchmetrics.MeanAbsolutePercentageError() # Low is better
+        self.RMAPE_metric = RootMeanAbsolutePercentageError() # Low is better
         self.DTW_metric = DynamicTimeWarping()  # Low is better
-        self.R2_metric = torchmetrics.R2Score(num_outputs=num_outputs, multioutput='uniform_average')  # High is better
+        self.R2_metric = torchmetrics.R2Score()  # High is better
 
         # Initialize metrics with the worst possible values
         self.MAE = int(9e10)
         self.MSE = int(9e10)
         self.RMSE = int(9e10)
+        self.MAPE = int(9e10)
+        self.RMAPE = int(9e10)
         self.DTW = int(9e10)
         self.R2 = float('-inf')  # High is better, starts with the worst value
 
@@ -26,6 +32,8 @@ class EvaluationMetrics:
         self.MAE_metric.to(device)
         self.MSE_metric.to(device)
         self.RMSE_metric.to(device)
+        self.MAPE_metric.to(device)
+        self.RMAPE_metric.to(device)
         self.R2_metric.to(device)
         if self.DTW_metric is not None:
             self.DTW_metric.to(device)
@@ -40,6 +48,8 @@ class EvaluationMetrics:
             self.MAE_metric.update(reshaped_predictions, reshaped_targets)
             self.MSE_metric.update(reshaped_predictions, reshaped_targets)
             self.RMSE_metric.update(reshaped_predictions, reshaped_targets)
+            self.MAPE_metric.update(reshaped_predictions, reshaped_targets)
+            self.RMAPE_metric.update(reshaped_predictions, reshaped_targets)
             self.R2_metric.update(reshaped_predictions, reshaped_targets)
         except Exception as e:
             Log.error(f"Error updating metrics: {e}")
@@ -55,11 +65,12 @@ class EvaluationMetrics:
             self.DTW_metric = None
 
     def compute(self):
-        """Compute raw metrics without normalization."""
         try:
             self.MAE = round(self.MAE_metric.compute().item(), 3)
             self.MSE = round(self.MSE_metric.compute().item(), 3)
             self.RMSE = round(self.RMSE_metric.compute().item(), 3)
+            self.MAPE = round(self.MAPE_metric.compute().item(), 3)
+            self.RMAPE = round(self.RMAPE_metric.compute().item(), 3)
             self.R2 = round(self.R2_metric.compute().item(), 3)
 
             if self.DTW_metric is not None:
@@ -75,6 +86,8 @@ class EvaluationMetrics:
             'MAE': self.MAE,
             'MSE': self.MSE,
             'RMSE': self.RMSE,
+            'MAPE': self.MAPE,
+            'RMAPE': self.RMAPE,
             'R2': self.R2,
             'DTW': self.DTW,
         }
@@ -82,8 +95,40 @@ class EvaluationMetrics:
     def are_metrics_complete(self):
         return all(
             metric_value is not None
-            for metric_value in [self.MAE, self.MSE, self.RMSE, self.DTW, self.R2]
+            for metric_value in [self.MAE, self.MSE, self.RMSE, self.MAPE, self.RMAPE, self.DTW, self.R2]
         )
+
+
+class RootMeanAbsolutePercentageError(torchmetrics.Metric):
+    """
+    Compute Root Mean Absolute Percentage Error (RMAPE) by reusing MAPE.
+
+    .. math:: \text{RMAPE} = \sqrt{\text{MAPE}}
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.mape_metric = torchmetrics.MeanAbsolutePercentageError()
+
+    def update(self, preds: Tensor, target: Tensor) -> None:
+        """
+        Update the state by passing predictions and targets to the MAPE metric.
+
+        Args:
+            preds (Tensor): Predicted values.
+            target (Tensor): Ground truth values.
+        """
+        self.mape_metric.update(preds, target)
+
+    def compute(self) -> Tensor:
+        """
+        Compute the Root Mean Absolute Percentage Error (RMAPE) by taking the square root of MAPE.
+
+        Returns:
+            Tensor: The RMAPE score.
+        """
+        return torch.sqrt(self.mape_metric.compute())
+
 
 
 class DynamicTimeWarping(torchmetrics.Metric):
