@@ -25,4 +25,4 @@ singularity exec --nv \
     --pwd /app \
     -B $(pwd)/logs:/app/logs,$(pwd)/data:/app/data,$(pwd)/configs:/app/configs \
     docker://spartan300/nianet:vae \
-    python main.py -alg particle_swarm
+    python main.py -alg particle_swarm -met MAPE

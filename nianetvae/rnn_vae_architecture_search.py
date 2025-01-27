@@ -79,47 +79,64 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
     Calculate the fitness value for the given model and experiment metrics.
 
     Args:
-        alg_name: NIA
+        alg_name: Name of the algorithm.
         model: The model being evaluated.
         experiment: The experiment object containing metrics.
         n_features: Number of features in the dataset.
+        seq_len: Sequence length of the dataset.
 
     Returns:
         fitness: The computed fitness value.
         error: The combined error value.
         complexity: The complexity term of the fitness function.
     """
+    # Check if metrics are complete
     if not experiment.metrics.are_metrics_complete():
-        Log.error("Some metric values are still None. Fitness function waits for metrics data.")
+        Log.error("Some metric values are still None. Fitness function is waiting for metrics data.")
         return int(9e10), int(9e10), int(9e10)
 
     # Fetch raw metrics
-    raw_metrics = experiment.metrics.compute()
+    try:
+        raw_metrics = experiment.metrics.compute()
+        Log.debug(f"Raw metrics: {raw_metrics}")  # Debugging raw metrics
+    except Exception as e:
+        Log.error(f"Error computing metrics: {e}")
+        return int(9e10), int(9e10), int(9e10)
 
-    # Update database with raw metric values
-    for metric_name in raw_metrics:
-        value = raw_metrics[metric_name]
-        if value != int(9e10):  # Update only valid values
+    # Update database with raw metrics
+    for metric_name, value in raw_metrics.items():
+        Log.debug(f"Updating database for metric: {metric_name}, value: {value}")  # Debug database update
+        if value != int(9e10):  # Only update valid metrics
             conn.update_min_max(dataset_name, alg_name, metric_name, value)
 
     # Normalize all metrics
-    normalized_metrics = {
-        metric_name: compute_normalized_metric(
-            metric_name, raw_metrics[metric_name],
-            metric_name == "R2",  # Higher is better for R2, lower is better for others
-            conn, dataset_name, alg_name
-        ) for metric_name in raw_metrics
-    }
+    normalized_metrics = {}
+    for metric_name, value in raw_metrics.items():
+        try:
+            normalized_metrics[metric_name] = compute_normalized_metric(
+                metric_name, value, metric_name == "R2", conn, dataset_name, alg_name
+            )
+            Log.debug(f"Normalized metric {metric_name}: {normalized_metrics[metric_name]}")  # Debug normalized values
+        except Exception as e:
+            Log.error(f"Error normalizing metric {metric_name}: {e}")
+            normalized_metrics[metric_name] = 1.0  # Worst normalized value
 
-    # Only calculate error_x using metrics specified in the config
+    # Ensure metrics_to_calculate is always a list
     metrics_to_calculate = config['nia_search']['metrics']
-    error_x = sum(
-        normalized_metrics[metric_name]
-        for metric_name in metrics_to_calculate
-        if metric_name != "R2"  # Exclude R2 here
-    )
+    if isinstance(metrics_to_calculate, str):
+        metrics_to_calculate = [metrics_to_calculate]  # Convert a single string to a list
 
-    # Include DTW if it is in the specified metrics and the data is univariate
+    Log.debug(f"Metrics to calculate: {metrics_to_calculate}")  # Debug metrics to calculate
+
+    # Calculate error_x using metrics specified in the config
+    error_x = 0.0
+    for metric_name in metrics_to_calculate:
+        if metric_name in normalized_metrics:
+            error_x += normalized_metrics[metric_name]
+        else:
+            Log.error(f"Metric {metric_name} not found in normalized metrics. Available: {normalized_metrics.keys()}")
+
+    # Include DTW only for univariate datasets if specified
     if "DTW" in metrics_to_calculate and n_features == 1:
         error_x += normalized_metrics.get("DTW", 0.0)
     elif "DTW" in metrics_to_calculate and n_features != 1:
@@ -132,27 +149,23 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
     def normalize_complexity(value, max_bound):
         return value / max_bound
 
-    encoding_normalized_num_layers = normalize_complexity(len(model.encoding_layers), seq_len)
-    decoding_normalized_num_layers = normalize_complexity(len(model.decoding_layers), seq_len)
-    normalized_bottleneck = normalize_complexity(model.bottleneck_size, seq_len)
+    encoding_complexity = normalize_complexity(len(model.encoding_layers), seq_len)
+    decoding_complexity = normalize_complexity(len(model.decoding_layers), seq_len)
+    bottleneck_complexity = normalize_complexity(model.bottleneck_size, seq_len)
 
-    max_possible_complexity = 3.0  # Sum of all normalized complexity components
+    max_possible_complexity = 3.0  # Sum of all normalized components
     complexity = int(
-        round((encoding_normalized_num_layers
-               + decoding_normalized_num_layers
-               + normalized_bottleneck)
-              / max_possible_complexity,
-              6)
-        * 1000000
+        round((encoding_complexity + decoding_complexity + bottleneck_complexity) / max_possible_complexity, 6) * 1000000
     )
 
     # Total fitness calculation
     try:
         error = int(round(error_x + error_y, 6) * 1000000)
         fitness = error + complexity
+        Log.debug(f"Calculated fitness: {fitness}, error: {error}, complexity: {complexity}")  # Debug fitness values
 
         if math.isnan(fitness) or math.isnan(error) or math.isnan(complexity):
-            Log.error("Invalid fitness, error, or complexity value detected. Setting worst possible value.")
+            Log.error("Invalid fitness, error, or complexity value detected. Returning worst possible value.")
             return int(9e10), int(9e10), int(9e10)
 
     except Exception as e:
