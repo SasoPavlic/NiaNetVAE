@@ -14,8 +14,6 @@ nia_search:
     - RMSE
     - MAPE
     - RMAPE
-    - DTW
-    - R2
 
 # Global parameters
 model_params:

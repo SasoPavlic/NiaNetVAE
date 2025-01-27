@@ -154,7 +154,7 @@ This summary explains how the code calculates a single **fitness** value, balanc
 
 ## 1. Metric Normalization
 
-For each metric (e.g., **MAE**, **MSE**, **RMSE**, **R²**, **DTW**), the code retrieves **min** and **max** values from a database and **normalizes** the current metric into the range \([0,1]\). The basic formula is:
+For each metric (e.g., **MAE**, **MSE**, **RMSE**, **MAPE**, **RMAPE**), the code retrieves **min** and **max** values from a database and **normalizes** the current metric into the range \([0,1]\). The basic formula is:
 
 $$
 \text{normalized} \;=\; \frac{\text{value} - \text{min\_val}}{\text{max\_val} - \text{min\_val}}

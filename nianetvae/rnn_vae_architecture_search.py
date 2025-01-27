@@ -114,7 +114,7 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
     for metric_name, value in raw_metrics.items():
         try:
             normalized_metrics[metric_name] = compute_normalized_metric(
-                metric_name, value, metric_name == "R2", conn, dataset_name, alg_name
+                metric_name, value, False , conn, dataset_name, alg_name
             )
             Log.debug(f"Normalized metric {metric_name}: {normalized_metrics[metric_name]}")  # Debug normalized values
         except Exception as e:
@@ -136,15 +136,6 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
         else:
             Log.error(f"Metric {metric_name} not found in normalized metrics. Available: {normalized_metrics.keys()}")
 
-    # Include DTW only for univariate datasets if specified
-    if "DTW" in metrics_to_calculate and n_features == 1:
-        error_x += normalized_metrics.get("DTW", 0.0)
-    elif "DTW" in metrics_to_calculate and n_features != 1:
-        Log.error("DTW metric is not included because the dataset is not univariate.")
-
-    # Use R2 for error_y if specified in the config
-    error_y = normalized_metrics.get("R2", 0.0) if "R2" in metrics_to_calculate else 0.0
-
     # Complexity calculation
     def normalize_complexity(value, max_bound):
         return value / max_bound
@@ -160,7 +151,7 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
 
     # Total fitness calculation
     try:
-        error = int(round(error_x + error_y, 6) * 1000000)
+        error = int(round(error_x, 6) * 1000000)
         fitness = error + complexity
         Log.debug(f"Calculated fitness: {fitness}, error: {error}, complexity: {complexity}")  # Debug fitness values
 
