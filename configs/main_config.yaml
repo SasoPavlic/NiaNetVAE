@@ -14,14 +14,15 @@ nia_search:
     - RMSE
     - MAPE
     - RMAPE
+    - pr_auc
 
 # Global parameters
 model_params:
   name: 'RecurrentVariationalAutoencoder'
 
 trainer_params:
-  min_epochs: 1
-  max_epochs: 1
+  min_epochs: 15
+  max_epochs: 30
 
 early_stop:
   monitor: "val_loss"
@@ -47,7 +48,7 @@ logging_params:
   name: "RNNVAE"
   logger_file: "RNNAutoencoder.log"
   save_dir: "logs/"
-  db_storage: "logs/solution_mape_hpc.db"
+  db_storage: "logs/solution_pr_auc_hpc.db"
 
 # Shared Data Loader parameters
 data_loader_params:

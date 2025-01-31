@@ -109,6 +109,11 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
         if value != int(9e10):  # Only update valid metrics
             conn.update_min_max(dataset_name, alg_name, metric_name, value)
 
+    for metric_name, value in experiment.anomaly_metrics.items():
+        Log.debug(f"Updating database for metric: {metric_name}, value: {value}")  # Debug database update
+        if value != int(9e10):  # Only update valid metrics
+            conn.update_min_max(dataset_name, alg_name, metric_name, value)
+
     # Normalize all metrics
     normalized_metrics = {}
     for metric_name, value in raw_metrics.items():
@@ -120,6 +125,19 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
         except Exception as e:
             Log.error(f"Error normalizing metric {metric_name}: {e}")
             normalized_metrics[metric_name] = 1.0  # Worst normalized value
+
+
+    for metric_name, value in experiment.anomaly_metrics.items():
+        try:
+            normalized_metrics[metric_name] = compute_normalized_metric(
+                metric_name, value, False , conn, dataset_name, alg_name
+            )
+            Log.debug(f"Normalized metric {metric_name}: {normalized_metrics[metric_name]}")  # Debug normalized values
+        except Exception as e:
+            Log.error(f"Error normalizing metric {metric_name}: {e}")
+            normalized_metrics[metric_name] = 1.0  # Worst normalized value
+
+
 
     # Ensure metrics_to_calculate is always a list
     metrics_to_calculate = config['nia_search']['metrics']
@@ -152,6 +170,7 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
     # Total fitness calculation
     try:
         error = int(round(error_x, 6) * 1000000)
+        #error = int(round(experiment.anomaly_metrics.get('pr_auc'), 6) * 1000000)
         fitness = error + complexity
         Log.debug(f"Calculated fitness: {fitness}, error: {error}, complexity: {complexity}")  # Debug fitness values
 
