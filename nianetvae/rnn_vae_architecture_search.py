@@ -9,6 +9,7 @@ from lightning.pytorch import Trainer
 # from lightning.pytorch.plugins import DDPPlugin
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
+
 from niapy.algorithms.basic import ParticleSwarmAlgorithm, DifferentialEvolution, FireflyAlgorithm, GeneticAlgorithm
 from niapy.algorithms.modified import SelfAdaptiveDifferentialEvolution
 from niapy.task import OptimizationType
@@ -19,12 +20,19 @@ from log import Log
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment, FineTuneLearningRateFinder
 from nianetvae.models.rnn_vae import RNNVAE
 from nianetvae.niapy_extension.wrapper import ExtendedProblem, ExtendedRunner
+# Replace NiaPy imports with pymoo
+from pymoo.algorithms.moo.nsga2 import NSGA2
+from pymoo.core.problem import Problem
+from pymoo.optimize import minimize
+from pymoo.core.sampling import Sampling
+
 
 RUN_UUID = None
 config = None
 conn = None
 datamodule = None
 dataset_name = None
+
 
 
 def compute_normalized_metric(metric_name, value, is_higher_better, conn, dataset_name, alg_name):
@@ -184,169 +192,128 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
 
     return fitness, error, complexity
 
-
-class RNNVAEAEArchitecture(ExtendedProblem):
-
-    def __init__(self, dimension):
-        super().__init__(dimension=dimension, lower=0, upper=1)
+class VAESearchProblem(Problem):
+    def __init__(self, config, conn, datamodule, dataset_name):
+        super().__init__(n_var=6, n_obj=2, n_constr=0, xl=0.0, xu=1.0)
+        self.config = config
+        self.conn = conn
+        self.datamodule = datamodule
+        self.dataset_name = dataset_name
         self.iteration = 0
 
-    def _evaluate(self, solution, alg_name):
-        Log.debug("=================================================================================================")
+    def _evaluate(self, X, out, *args, **kwargs):
+        # X is population of solutions, shape (population_size, 6)
+        F = []
+        for solution in X:
+            fitness, error, complexity = self.evaluate_solution(solution)
+            F.append([error, complexity])  # Multi-objective: minimize both
+        out["F"] = np.array(F)
+
+    def evaluate_solution(self, solution):
+        # Existing evaluation logic from RNNVAEAEArchitecture._evaluate
         Log.debug(f"ITERATION: {self.iteration}")
         Log.debug(f"SOLUTION : {solution}")
         self.iteration += 1
 
-        model = RNNVAE(solution, **config)
-        existing_entry = conn.get_entries(hash_id=model.get_hash(), dataset_name=dataset_name)
-        path = config['logging_params']['save_dir'] + str(self.iteration) + "_" + alg_name + "_" + model.hash_id
-        config['logging_params']['model_path'] = path
+        model = RNNVAE(solution, **self.config)
+        existing_entry = self.conn.get_entries(hash_id=model.get_hash(), dataset_name=self.dataset_name)
+        path = self.config['logging_params']['save_dir'] + str(self.iteration) + "_pymoo_" + model.hash_id
+        self.config['logging_params']['model_path'] = path
         Path(path).mkdir(parents=True, exist_ok=True)
 
-        if existing_entry.shape[0] > 0 and True == False:
-            fitness = existing_entry['fitness'][0]
-            Log.info(f"Model for this solution already exists")
-            return fitness
+        if not model.is_valid:
+            fitness = int(9e10)
+            complexity = int(9e10)
+            error = int(9e10)
+            self.conn.save_model_and_entry(
+                dataset_name=self.dataset_name,
+                alg_name="pymoo",
+                iteration=self.iteration,
+                model=model,
+                fitness=fitness,
+                solution=solution,
+                error=error,
+                complexity=complexity
+            )
+            return fitness, error, complexity
 
-        else:
-            """Punishing bad decisions"""
-            if not model.is_valid:
-                fitness = int(9e10)
-                complexity = int(9e10)
-                error = int(9e10)
-                conn.save_model_and_entry(
-                    dataset_name=dataset_name,
-                    alg_name=alg_name,
-                    iteration=self.iteration,
-                    model=model,
-                    fitness=fitness,
-                    solution=solution,
-                    error=error,
-                    complexity=complexity
-                )
+        experiment = RNNVAExperiment(model, path, self.dataset_name, "pymoo", **self.config)
 
-            else:
-                experiment = RNNVAExperiment(model, path, dataset_name, alg_name, **config)
-                # tb_logger = TensorBoardLogger(save_dir=config['logging_params']['save_dir'],
-                #                               name=str(self.iteration) + "_" + alg_name + "_" + model.hash_id)
+        trainer = Trainer(
+            enable_progress_bar=True,
+            accelerator="cuda",
+            devices=1,
+            default_root_dir=path,
+            log_every_n_steps=50,
+            logger=False,
+            callbacks=[
+                FineTuneLearningRateFinder(**self.config['fine_tune_lr_finder']),
+                EarlyStopping(**self.config['early_stop'], verbose=True, check_finite=True)
+            ],
+            **self.config['trainer_params']
+        )
 
-                trainer = Trainer(enable_progress_bar=True,
-                                  accelerator="cuda",
-                                  devices=1,
-                                  default_root_dir=path,
-                                  log_every_n_steps=50,
-                                  logger=False,
-                                  # profiler="simple",
-                                  # auto_select_gpus=True,
+        try:
+            Log.info(f"======= Training {self.config['logging_params']['name']} =======")
+            start_time = datetime.now()
+            trainer.fit(experiment, datamodule=self.datamodule)
+            trainer.test(experiment, datamodule=self.datamodule)
+            end_time = datetime.now()
+        except Exception as e:
+            Log.error(f"Training failed: {e}")
+            return int(9e10), int(9e10), int(9e10)
 
-                                  callbacks=[
-                                      FineTuneLearningRateFinder(**config['fine_tune_lr_finder']),
-                                      EarlyStopping(**config['early_stop'],
-                                                    verbose=True,
-                                                    check_finite=True),
-                                      # LearningRateMonitor(),
-                                      # BatchSizeFinder(
-                                      #     mode="power",  # "power" or "binsearch" modes
-                                      #     steps_per_trial=3,  # Number of steps to run with each batch size
-                                      #     init_val=2,  # Initial batch size to start search with
-                                      #     max_trials=25,  # Max number of trials (batch size increases) to try
-                                      # ),
-                                      # ModelCheckpoint(save_top_k=1,
-                                      #                 dirpath=os.path.join(tb_logger.log_dir, "checkpoints"),
-                                      #                 monitor="loss",
-                                      #                 save_last=True)
-                                  ],
-                                  # strategy=DDPPlugin(find_unused_parameters=False),
-                                  **config['trainer_params'])
+        fitness, error, complexity = calculate_fitness("pymoo", model, experiment,
+                                                       self.config['data_params']['n_features'],
+                                                       self.config['data_params']['seq_len'])
 
-                Log.info(f"======= Training {config['logging_params']['name']} =======")
-                start_time = datetime.now()
-                Log.info(f'\nTraining start: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
-                trainer.fit(experiment, datamodule=datamodule)
-                Log.info(f'\nTraining end: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+        self.conn.save_model_and_entry(
+            dataset_name=self.dataset_name,
+            alg_name="pymoo",
+            iteration=self.iteration,
+            solution=solution,
+            error=error,
+            model=model,
+            experiment=experiment,
+            fitness=fitness,
+            complexity=complexity,
+            path=path,
+            start_time=start_time,
+            end_time=end_time,
+            duration=(end_time - start_time).total_seconds()
+        )
 
-                Log.info(f'\nTest start: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
-                trainer.test(experiment, datamodule=datamodule)
-                Log.info(f'\nTest end: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
-                end_time = datetime.now()
-                duration = (end_time - start_time).total_seconds()
-
-                fitness, error, complexity = calculate_fitness(alg_name,
-                                                               model,
-                                                               experiment,
-                                                               config['data_params']['n_features'],
-                                                               config['data_params']['seq_len']
-                                                               )
-
-                Log.debug(tabulate([[complexity, fitness]], headers=["Complexity", "Fitness"],
-                                   tablefmt="pretty"))
-                conn.save_model_and_entry(
-                    dataset_name=dataset_name,
-                    alg_name=alg_name,
-                    iteration=self.iteration,
-                    solution=solution,
-                    error=error,
-                    model=model,
-                    experiment=experiment,
-                    fitness=fitness,
-                    complexity=complexity,
-                    path=path,
-                    start_time=start_time,
-                    end_time=end_time,
-                    duration=duration
-                )
-
-            if np.isnan(fitness):
-                fitness = int(9e10)
-            return fitness
+        return fitness, error, complexity
 
 
 def solve_architecture_problem(selected_algorithms):
-    """
-    Dimensionality:
-    y1: topology shape,
-    y2: layer type
-    y3: layer step,
-    y4: number of layers,
-    y5: activation function
-    y6: optimizer algorithm.
-    """
-    DIMENSIONALITY = 6
-
-    algorithms = {
-        "particle_swarm": ParticleSwarmAlgorithm(),
-        "differential_evolution": DifferentialEvolution(),
-        "firefly_algorithm": FireflyAlgorithm(),
-        "self_adaptive_differential_evolution": SelfAdaptiveDifferentialEvolution(),
-        "genetic_algorithm": GeneticAlgorithm()
-    }
-
-    selected_algorithm_objects = [algorithms.get(algorithm_name) for algorithm_name in selected_algorithms if
-                                  algorithms.get(algorithm_name) is not None]
-
-    runner = ExtendedRunner(
-        config['logging_params']['save_dir'],
-        dimension=DIMENSIONALITY,
-        optimization_type=OptimizationType.MINIMIZATION,
-        max_evals=config['nia_search']['evaluations'],
-        runs=config['nia_search']['runs'],
-        algorithms=selected_algorithm_objects,
-        problems=[
-            RNNVAEAEArchitecture(DIMENSIONALITY)
-        ]
+    # Modified to use pymoo instead of NiaPy
+    problem = VAESearchProblem(
+        config=config,
+        conn=conn,
+        datamodule=datamodule,
+        dataset_name=dataset_name
     )
 
-    """Issue when using multiple GPUs
-        https://github.com/Lightning-AI/pytorch-lightning/issues/2807
-    """
-    Log.info("=====================================SEARCH STARTED==============================================")
-    final_solutions = runner.run(export='json', verbose=True)
-    Log.info("=====================================SEARCH COMPLETED============================================")
+    algorithm = NSGA2(pop_size=config['nia_search'].get('population_size', 100))
 
-    Log.info(f"Solutions: {final_solutions}")
-    best_solution, best_algorithm = conn.best_results()
-    best_model = RNNVAE(best_solution, **config)
-    model_file = config['logging_params']['save_dir'] + f"{dataset_name}_{best_algorithm}_{best_model.hash_id}.pt"
-    # https://pytorch.org/tutorials/beginner/saving_loading_models.html#saving-loading-model-for-inference
-    torch.save(best_model.state_dict(), model_file)
-    Log.info(f"Best model saved to: {model_file}")
+    res = minimize(
+        problem,
+        algorithm,
+        termination=('n_gen', config['nia_search']['evaluations']),
+        seed=config['exp_params']['manual_seed'],
+        verbose=True,
+        save_history=True
+    )
+
+    Log.info("=====================================SEARCH COMPLETED============================================")
+    Log.info(f"Pareto solutions: {res.X}")
+
+    # Save all non-dominated solutions
+    for solution in res.X:
+        model = RNNVAE(solution, **config)
+        model_file = config['logging_params']['save_dir'] + f"{dataset_name}_pymoo_{model.hash_id}.pt"
+        torch.save(model.state_dict(), model_file)
+        Log.info(f"Saved Pareto solution model to: {model_file}")
+
+    return res.X

@@ -1,5 +1,6 @@
 # main_config.yaml
 nia_search:
+  population_size: 100
   runs: 1
   evaluations: 100
   algorithms:
@@ -15,14 +16,16 @@ nia_search:
     - MAPE
     - RMAPE
     - pr_auc
+    - f1_score
+    - roc_auc
 
 # Global parameters
 model_params:
   name: 'RecurrentVariationalAutoencoder'
 
 trainer_params:
-  min_epochs: 15
-  max_epochs: 30
+  min_epochs: 1
+  max_epochs: 1
 
 early_stop:
   monitor: "val_loss"
@@ -48,7 +51,7 @@ logging_params:
   name: "RNNVAE"
   logger_file: "RNNAutoencoder.log"
   save_dir: "logs/"
-  db_storage: "logs/solution_pr_auc_hpc.db"
+  db_storage: "logs/solution_rmape_lp.db"
 
 # Shared Data Loader parameters
 data_loader_params:
@@ -61,7 +64,7 @@ data_loader_params:
 
 # Dataset configuration
 dataset:
-  config_file: "configs/msl_config.yaml"
+  config_file: "configs/swat_config.yaml"
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+
 #| Benchmark  | # datasets | # dims| Train size | Test size  | Anomaly% | Path              | Set Seq Length|
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+
