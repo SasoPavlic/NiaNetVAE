@@ -1,3 +1,5 @@
+# nianetvae/rnn_vae_architecture_search.py
+
 import math
 import os
 from datetime import datetime
@@ -6,33 +8,35 @@ from pathlib import Path
 import numpy as np
 import torch
 from lightning.pytorch import Trainer
-# from lightning.pytorch.plugins import DDPPlugin
-from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
+from lightning.pytorch.callbacks import EarlyStopping
+# Note: You may uncomment LearningRateMonitor or other callbacks if needed.
 from lightning.pytorch.loggers import TensorBoardLogger
 
-from niapy.algorithms.basic import ParticleSwarmAlgorithm, DifferentialEvolution, FireflyAlgorithm, GeneticAlgorithm
-from niapy.algorithms.modified import SelfAdaptiveDifferentialEvolution
-from niapy.task import OptimizationType
+# Remove Niapy imports since we are no longer using them.
+# from niapy.algorithms.basic import ParticleSwarmAlgorithm, DifferentialEvolution, FireflyAlgorithm, GeneticAlgorithm
+# from niapy.algorithms.modified import SelfAdaptiveDifferentialEvolution
+# from niapy.task import OptimizationType
+# from nianetvae.niapy_extension.wrapper import ExtendedProblem, ExtendedRunner
+
+# Import pymoo modules for multiobjective optimization
+from pymoo.core.problem import Problem
+from pymoo.optimize import minimize
+from pymoo.algorithms.moo.nsga2 import NSGA2
+from pymoo.termination import get_termination
+
 from tabulate import tabulate
 
 import nianetvae.experiments.metrics_evaluation
 from log import Log
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment, FineTuneLearningRateFinder
 from nianetvae.models.rnn_vae import RNNVAE
-from nianetvae.niapy_extension.wrapper import ExtendedProblem, ExtendedRunner
-# Replace NiaPy imports with pymoo
-from pymoo.algorithms.moo.nsga2 import NSGA2
-from pymoo.core.problem import Problem
-from pymoo.optimize import minimize
-from pymoo.core.sampling import Sampling
 
-
+# Global variables that are set by main.py before calling solve_architecture_problem
 RUN_UUID = None
 config = None
 conn = None
 datamodule = None
 dataset_name = None
-
 
 
 def compute_normalized_metric(metric_name, value, is_higher_better, conn, dataset_name, alg_name):
@@ -94,9 +98,9 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
         seq_len: Sequence length of the dataset.
 
     Returns:
-        fitness: The computed fitness value.
-        error: The combined error value.
-        complexity: The complexity term of the fitness function.
+        fitness: The computed combined fitness value (error + complexity).
+        error: The computed error term.
+        complexity: The computed complexity term.
     """
     # Check if metrics are complete
     if not experiment.metrics.are_metrics_complete():
@@ -106,20 +110,20 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
     # Fetch raw metrics
     try:
         raw_metrics = experiment.metrics.compute()
-        Log.debug(f"Raw metrics: {raw_metrics}")  # Debugging raw metrics
+        Log.debug(f"Raw metrics: {raw_metrics}")
     except Exception as e:
         Log.error(f"Error computing metrics: {e}")
         return int(9e10), int(9e10), int(9e10)
 
     # Update database with raw metrics
     for metric_name, value in raw_metrics.items():
-        Log.debug(f"Updating database for metric: {metric_name}, value: {value}")  # Debug database update
+        Log.debug(f"Updating database for metric: {metric_name}, value: {value}")
         if value != int(9e10):  # Only update valid metrics
             conn.update_min_max(dataset_name, alg_name, metric_name, value)
 
     for metric_name, value in experiment.anomaly_metrics.items():
-        Log.debug(f"Updating database for metric: {metric_name}, value: {value}")  # Debug database update
-        if value != int(9e10):  # Only update valid metrics
+        Log.debug(f"Updating database for metric: {metric_name}, value: {value}")
+        if value != int(9e10):
             conn.update_min_max(dataset_name, alg_name, metric_name, value)
 
     # Normalize all metrics
@@ -127,32 +131,29 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
     for metric_name, value in raw_metrics.items():
         try:
             normalized_metrics[metric_name] = compute_normalized_metric(
-                metric_name, value, False , conn, dataset_name, alg_name
+                metric_name, value, False, conn, dataset_name, alg_name
             )
-            Log.debug(f"Normalized metric {metric_name}: {normalized_metrics[metric_name]}")  # Debug normalized values
+            Log.debug(f"Normalized metric {metric_name}: {normalized_metrics[metric_name]}")
         except Exception as e:
             Log.error(f"Error normalizing metric {metric_name}: {e}")
-            normalized_metrics[metric_name] = 1.0  # Worst normalized value
-
+            normalized_metrics[metric_name] = 1.0
 
     for metric_name, value in experiment.anomaly_metrics.items():
         try:
             normalized_metrics[metric_name] = compute_normalized_metric(
-                metric_name, value, False , conn, dataset_name, alg_name
+                metric_name, value, False, conn, dataset_name, alg_name
             )
-            Log.debug(f"Normalized metric {metric_name}: {normalized_metrics[metric_name]}")  # Debug normalized values
+            Log.debug(f"Normalized metric {metric_name}: {normalized_metrics[metric_name]}")
         except Exception as e:
             Log.error(f"Error normalizing metric {metric_name}: {e}")
-            normalized_metrics[metric_name] = 1.0  # Worst normalized value
-
-
+            normalized_metrics[metric_name] = 1.0
 
     # Ensure metrics_to_calculate is always a list
     metrics_to_calculate = config['nia_search']['metrics']
     if isinstance(metrics_to_calculate, str):
-        metrics_to_calculate = [metrics_to_calculate]  # Convert a single string to a list
+        metrics_to_calculate = [metrics_to_calculate]
 
-    Log.debug(f"Metrics to calculate: {metrics_to_calculate}")  # Debug metrics to calculate
+    Log.debug(f"Metrics to calculate: {metrics_to_calculate}")
 
     # Calculate error_x using metrics specified in the config
     error_x = 0.0
@@ -160,7 +161,7 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
         if metric_name in normalized_metrics:
             error_x += normalized_metrics[metric_name]
         else:
-            Log.error(f"Metric {metric_name} not found in normalized metrics. Available: {normalized_metrics.keys()}")
+            Log.error(f"Metric {metric_name} not found in normalized metrics. Available: {list(normalized_metrics.keys())}")
 
     # Complexity calculation
     def normalize_complexity(value, max_bound):
@@ -178,9 +179,8 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
     # Total fitness calculation
     try:
         error = int(round(error_x, 6) * 1000000)
-        #error = int(round(experiment.anomaly_metrics.get('pr_auc'), 6) * 1000000)
         fitness = error + complexity
-        Log.debug(f"Calculated fitness: {fitness}, error: {error}, complexity: {complexity}")  # Debug fitness values
+        Log.debug(f"Calculated fitness: {fitness}, error: {error}, complexity: {complexity}")
 
         if math.isnan(fitness) or math.isnan(error) or math.isnan(complexity):
             Log.error("Invalid fitness, error, or complexity value detected. Returning worst possible value.")
@@ -192,128 +192,173 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
 
     return fitness, error, complexity
 
-class VAESearchProblem(Problem):
-    def __init__(self, config, conn, datamodule, dataset_name):
-        super().__init__(n_var=6, n_obj=2, n_constr=0, xl=0.0, xu=1.0)
+
+class RNNVAEArchitectureMultiObj(Problem):
+    """
+    This class defines the multiobjective problem for RNN-VAE architecture search.
+    The two objectives are:
+      1. The error (from validation/test metrics)
+      2. The model complexity (based on the number of layers and bottleneck size)
+    Both are to be minimized.
+    """
+
+    def __init__(self, dimension, config, conn, datamodule, dataset_name):
         self.config = config
         self.conn = conn
         self.datamodule = datamodule
         self.dataset_name = dataset_name
         self.iteration = 0
+        super().__init__(n_var=dimension, n_obj=2, n_constr=0, xl=0, xu=1)
 
     def _evaluate(self, X, out, *args, **kwargs):
-        # X is population of solutions, shape (population_size, 6)
+        # X is an array of candidate solutions, shape (n_individuals, dimension)
         F = []
         for solution in X:
-            fitness, error, complexity = self.evaluate_solution(solution)
-            F.append([error, complexity])  # Multi-objective: minimize both
+            self.iteration += 1
+            Log.debug("=================================================================================================")
+            Log.debug(f"ITERATION: {self.iteration}")
+            Log.debug(f"SOLUTION : {solution}")
+
+            model = RNNVAE(solution, **self.config)
+            existing_entry = self.conn.get_entries(hash_id=model.get_hash(), dataset_name=self.dataset_name)
+            # Create a unique path for this evaluation
+            path = self.config['logging_params']['save_dir'] + f"{self.iteration}_NSGA2_{model.hash_id}"
+            self.config['logging_params']['model_path'] = path
+            Path(path).mkdir(parents=True, exist_ok=True)
+
+            # (The condition below is never active because "True == False" is always False)
+            if existing_entry.shape[0] > 0:
+                error = existing_entry['error'][0]
+                complexity = existing_entry['complexity'][0]
+            else:
+                # If the model configuration is invalid, assign worst values.
+                if not model.is_valid:
+                    error = int(9e10)
+                    complexity = int(9e10)
+                    self.conn.save_model_and_entry(
+                        dataset_name=self.dataset_name,
+                        alg_name="NSGA2",
+                        iteration=self.iteration,
+                        model=model,
+                        fitness=int(9e10),
+                        solution=solution,
+                        error=error,
+                        complexity=complexity
+                    )
+                else:
+                    experiment = RNNVAExperiment(model, path, self.dataset_name, "NSGA2", **self.config)
+                    trainer = Trainer(
+                        enable_progress_bar=True,
+                        accelerator="cuda",
+                        devices=1,
+                        default_root_dir=path,
+                        log_every_n_steps=50,
+                        logger=False,
+                        callbacks=[
+                            FineTuneLearningRateFinder(**self.config['fine_tune_lr_finder']),
+                            EarlyStopping(**self.config['early_stop'], verbose=True, check_finite=True),
+                        ],
+                        **self.config['trainer_params']
+                    )
+
+                    Log.info(f"======= Training {self.config['logging_params']['name']} =======")
+                    start_time = datetime.now()
+                    Log.info(f'\nTraining start: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+                    trainer.fit(experiment, datamodule=self.datamodule)
+                    Log.info(f'\nTraining end: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+                    Log.info(f'\nTest start: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+                    trainer.test(experiment, datamodule=self.datamodule)
+                    Log.info(f'\nTest end: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+                    end_time = datetime.now()
+                    duration = (end_time - start_time).total_seconds()
+
+                    # Calculate fitness, error, and complexity.
+                    fitness, error, complexity = calculate_fitness(
+                        "NSGA2",
+                        model,
+                        experiment,
+                        self.config['data_params']['n_features'],
+                        self.config['data_params']['seq_len']
+                    )
+
+                    Log.debug(tabulate([[fitness, complexity, error]], headers=["Fitness, Complexity", "Error"], tablefmt="pretty"))
+                    self.conn.save_model_and_entry(
+                        dataset_name=self.dataset_name,
+                        alg_name="NSGA2",
+                        iteration=self.iteration,
+                        solution=solution,
+                        error=error,
+                        model=model,
+                        experiment=experiment,
+                        fitness=fitness,
+                        complexity=complexity,
+                        path=path,
+                        start_time=start_time,
+                        end_time=end_time,
+                        duration=duration
+                    )
+
+            # Ensure that if any value is nan, we use the worst-case penalty.
+            if np.isnan(error) or np.isnan(complexity):
+                error = int(9e10)
+                complexity = int(9e10)
+            F.append([error, complexity])
         out["F"] = np.array(F)
-
-    def evaluate_solution(self, solution):
-        # Existing evaluation logic from RNNVAEAEArchitecture._evaluate
-        Log.debug(f"ITERATION: {self.iteration}")
-        Log.debug(f"SOLUTION : {solution}")
-        self.iteration += 1
-
-        model = RNNVAE(solution, **self.config)
-        existing_entry = self.conn.get_entries(hash_id=model.get_hash(), dataset_name=self.dataset_name)
-        path = self.config['logging_params']['save_dir'] + str(self.iteration) + "_pymoo_" + model.hash_id
-        self.config['logging_params']['model_path'] = path
-        Path(path).mkdir(parents=True, exist_ok=True)
-
-        if not model.is_valid:
-            fitness = int(9e10)
-            complexity = int(9e10)
-            error = int(9e10)
-            self.conn.save_model_and_entry(
-                dataset_name=self.dataset_name,
-                alg_name="pymoo",
-                iteration=self.iteration,
-                model=model,
-                fitness=fitness,
-                solution=solution,
-                error=error,
-                complexity=complexity
-            )
-            return fitness, error, complexity
-
-        experiment = RNNVAExperiment(model, path, self.dataset_name, "pymoo", **self.config)
-
-        trainer = Trainer(
-            enable_progress_bar=True,
-            accelerator="cuda",
-            devices=1,
-            default_root_dir=path,
-            log_every_n_steps=50,
-            logger=False,
-            callbacks=[
-                FineTuneLearningRateFinder(**self.config['fine_tune_lr_finder']),
-                EarlyStopping(**self.config['early_stop'], verbose=True, check_finite=True)
-            ],
-            **self.config['trainer_params']
-        )
-
-        try:
-            Log.info(f"======= Training {self.config['logging_params']['name']} =======")
-            start_time = datetime.now()
-            trainer.fit(experiment, datamodule=self.datamodule)
-            trainer.test(experiment, datamodule=self.datamodule)
-            end_time = datetime.now()
-        except Exception as e:
-            Log.error(f"Training failed: {e}")
-            return int(9e10), int(9e10), int(9e10)
-
-        fitness, error, complexity = calculate_fitness("pymoo", model, experiment,
-                                                       self.config['data_params']['n_features'],
-                                                       self.config['data_params']['seq_len'])
-
-        self.conn.save_model_and_entry(
-            dataset_name=self.dataset_name,
-            alg_name="pymoo",
-            iteration=self.iteration,
-            solution=solution,
-            error=error,
-            model=model,
-            experiment=experiment,
-            fitness=fitness,
-            complexity=complexity,
-            path=path,
-            start_time=start_time,
-            end_time=end_time,
-            duration=(end_time - start_time).total_seconds()
-        )
-
-        return fitness, error, complexity
 
 
 def solve_architecture_problem(selected_algorithms):
-    # Modified to use pymoo instead of NiaPy
-    problem = VAESearchProblem(
+    """
+    Uses pymoo's NSGA-II to perform a multiobjective search for the optimal balance between
+    error and complexity. Optimizer settings (e.g., population size, termination criteria) are
+    taken from the configuration file.
+    """
+    DIMENSIONALITY = 6
+
+    # Create the multiobjective problem instance.
+    # RNNVAEArchitectureMultiObj is assumed to be defined elsewhere.
+    problem = RNNVAEArchitectureMultiObj(
+        dimension=DIMENSIONALITY,
         config=config,
         conn=conn,
         datamodule=datamodule,
         dataset_name=dataset_name
     )
 
-    algorithm = NSGA2(pop_size=config['nia_search'].get('population_size', 100))
+    # Determine termination criteria.
+    # Use time-based termination if a time limit is provided in the config
 
+    # Expected format: "HH:MM:SS" (e.g., "95:00:00")
+    time_str = config['nia_search']['time']
+    try:
+        hours, minutes, seconds = map(int, time_str.split(":"))
+        max_time = hours * 3600 + minutes * 60 + seconds
+    except Exception as e:
+        Log.error(f"Error parsing time limit from config: {time_str}. Ensure it is in HH:MM:SS format.")
+        raise e
+    termination = get_termination("time", max_time=max_time)
+    Log.info(f"Using time-based termination: {time_str} (={max_time} seconds)")
+
+    # Set up the NSGA-II algorithm with the population size from config.
+    algorithm = NSGA2(pop_size=config['nia_search']['population_size'])
+
+    # Determine the number of parallel jobs (using CUDA if available).
+    n_jobs = torch.cuda.device_count() if torch.cuda.is_available() else 1
+
+    Log.info("=====================================SEARCH STARTED==============================================")
     res = minimize(
         problem,
         algorithm,
-        termination=('n_gen', config['nia_search']['evaluations']),
+        termination,
         seed=config['exp_params']['manual_seed'],
         verbose=True,
-        save_history=True
+        n_jobs=n_jobs
     )
-
     Log.info("=====================================SEARCH COMPLETED============================================")
-    Log.info(f"Pareto solutions: {res.X}")
+    Log.info(f"Solutions: {res.X}")
 
-    # Save all non-dominated solutions
-    for solution in res.X:
-        model = RNNVAE(solution, **config)
-        model_file = config['logging_params']['save_dir'] + f"{dataset_name}_pymoo_{model.hash_id}.pt"
-        torch.save(model.state_dict(), model_file)
-        Log.info(f"Saved Pareto solution model to: {model_file}")
-
-    return res.X
+    # Retrieve the best solution from the database (using your existing criteria).
+    best_solution, best_algorithm = conn.best_results()
+    best_model = RNNVAE(best_solution, **config)
+    model_file = config['logging_params']['save_dir'] + f"{dataset_name}_NSGA2_{best_model.hash_id}.pt"
+    torch.save(best_model.state_dict(), model_file)
+    Log.info(f"Best model saved to: {model_file}")

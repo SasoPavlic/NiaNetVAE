@@ -1,31 +1,19 @@
 # main_config.yaml
 nia_search:
   population_size: 100
-  runs: 1
-  evaluations: 100
+  time: "95:00:00"   # Termination after 95 hours (format: HH:MM:SS)
   algorithms:
-    - particle_swarm
-    - genetic_algorithm
-    - firefly_algorithm
-    - differential_evolution
-    - self_adaptive_differential_evolution
+    - can_be_deleted
   metrics:
-    - MAE
-    - MSE
-    - RMSE
-    - MAPE
     - RMAPE
-    - pr_auc
-    - f1_score
-    - roc_auc
 
 # Global parameters
 model_params:
   name: 'RecurrentVariationalAutoencoder'
 
 trainer_params:
-  min_epochs: 1
-  max_epochs: 1
+  min_epochs: 20
+  max_epochs: 30
 
 early_stop:
   monitor: "val_loss"
