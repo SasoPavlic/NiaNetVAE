@@ -176,7 +176,7 @@ class RNNVAExperiment(LightningModule):
 
         # Helper function to safely format metric values
         def safe_format(value):
-            return f"{value:.3f}" if value is not None else "N/A"
+            return f"{value:.4f}" if value is not None else "N/A"
 
         # Print metrics using Tabulate
         if self.anomaly_metrics:

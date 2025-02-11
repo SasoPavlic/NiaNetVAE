@@ -48,11 +48,11 @@ class EvaluationMetrics:
 
     def compute(self):
         try:
-            self.MAE = round(self.MAE_metric.compute().item(), 3)
-            self.MSE = round(self.MSE_metric.compute().item(), 3)
-            self.RMSE = round(self.RMSE_metric.compute().item(), 3)
-            self.MAPE = round(self.MAPE_metric.compute().item(), 3)
-            self.RMAPE = round(self.RMAPE_metric.compute().item(), 3)
+            self.MAE = round(self.MAE_metric.compute().item(), 4)
+            self.MSE = round(self.MSE_metric.compute().item(), 4)
+            self.RMSE = round(self.RMSE_metric.compute().item(), 4)
+            self.MAPE = round(self.MAPE_metric.compute().item(), 4)
+            self.RMAPE = round(self.RMAPE_metric.compute().item(), 4)
 
         except Exception as e:
             Log.error(f"Error during raw metric computation: {e}")

@@ -21,26 +21,26 @@ def plot_roc_curve(fpr, tpr, roc_auc, optimal_idx, thresholds, save_path='roc_cu
     tpr = np.array(tpr)
     thresholds = np.array(thresholds)
 
-    # Round variables to 3 decimals
-    fpr = np.round(fpr, 3)
-    tpr = np.round(tpr, 3)
-    thresholds = np.round(thresholds, 3)
-    roc_auc = round(roc_auc, 3)
+    # Round variables to 4 decimals
+    fpr = np.round(fpr, 4)
+    tpr = np.round(tpr, 4)
+    thresholds = np.round(thresholds, 4)
+    roc_auc = round(roc_auc, 4)
 
     plt.figure()
     lw = 2
     x = fpr[optimal_idx]
     y = tpr[optimal_idx]
 
-    # Round x and y to 3 decimals
-    x = round(x, 3)
-    y = round(y, 3)
+    # Round x and y to 4 decimals
+    x = round(x, 4)
+    y = round(y, 4)
 
     point1 = [0, 1]  # Ideal point in ROC space
     point2 = [x, y]
     x_values = [point1[0], point2[0]]
     y_values = [point1[1], point2[1]]
-    distance = round(np.sqrt((x - point1[0]) ** 2 + (y - point1[1]) ** 2), 3)
+    distance = round(np.sqrt((x - point1[0]) ** 2 + (y - point1[1]) ** 2), 4)
     #print(f"Distance: {distance:.3f}")
 
     plt.plot(fpr, tpr, color="darkorange", lw=lw, label=f"Recurrent VAE (AUC = {roc_auc:.3f})")
@@ -78,34 +78,34 @@ def plot_precision_recall_curve(precision, recall, pr_auc, optimal_idx, threshol
     recall = np.array(recall)
     thresholds = np.array(thresholds)
 
-    # Round variables to 3 decimals
-    precision = np.round(precision, 3)
-    recall = np.round(recall, 3)
-    thresholds = np.round(thresholds, 3)
-    pr_auc = round(pr_auc, 3)
+    # Round variables to 4 decimals
+    precision = np.round(precision, 4)
+    recall = np.round(recall, 4)
+    thresholds = np.round(thresholds, 4)
+    pr_auc = round(pr_auc, 4)
 
     plt.figure()
     lw = 2
     x = recall[optimal_idx]
     y = precision[optimal_idx]
 
-    # Round x and y to 3 decimals
-    x = round(x, 3)
-    y = round(y, 3)
+    # Round x and y to 4 decimals
+    x = round(x, 4)
+    y = round(y, 4)
 
     point1 = [1, 1]  # Ideal point in PR space
     point2 = [x, y]
     x_values = [point1[0], point2[0]]
     y_values = [point1[1], point2[1]]
-    distance = round(np.sqrt((x - point1[0]) ** 2 + (y - point1[1]) ** 2), 3)
+    distance = round(np.sqrt((x - point1[0]) ** 2 + (y - point1[1]) ** 2), 4)
     #print(f"Distance: {distance:.3f}")
 
-    plt.plot(recall, precision, color="darkorange", lw=lw, label=f"Recurrent VAE (AUC = {pr_auc:.3f})")
-    plt.plot(x_values, y_values, color="red", lw=lw, linestyle=":", label=f'Distance = {distance:.3f}')
-    plt.plot(x, y, '-ro', label=f'Optimal Threshold (Recall={x:.3f}, Precision={y:.3f})')
+    plt.plot(recall, precision, color="darkorange", lw=lw, label=f"Recurrent VAE (AUC = {pr_auc:.4f})")
+    plt.plot(x_values, y_values, color="red", lw=lw, linestyle=":", label=f'Distance = {distance:.4f}')
+    plt.plot(x, y, '-ro', label=f'Optimal Threshold (Recall={x:.3f}, Precision={y:.4f})')
 
     # Annotate the optimal point
-    plt.annotate(f'({x:.3f}, {y:.3f})', xy=(x, y), ha='center')
+    plt.annotate(f'({x:.4f}, {y:.4f})', xy=(x, y), ha='center')
 
     plt.xlim([0.0, 1.05])
     plt.ylim([0.0, 1.05])
