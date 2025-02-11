@@ -59,6 +59,7 @@ class SQLiteConnector:
                 RMSE REAL,
                 MAPE REAL,
                 RMAPE REAL,
+                SMAPE REAL,
                 precision REAL,
                 recall REAL,
                 f1_score REAL,
@@ -185,6 +186,7 @@ class SQLiteConnector:
                     rmse=experiment.metrics.RMSE if experiment else infinity,
                     mape=experiment.metrics.MAPE if experiment else infinity,
                     rmape=experiment.metrics.RMAPE if experiment else infinity,
+                    smape=experiment.metrics.SMAPE if experiment else infinity,
                     start_time=start_time,
                     end_time=end_time,
                     duration=duration,
@@ -201,7 +203,7 @@ class SQLiteConnector:
             Log.error(f"Error saving model and entry: {e}")
 
     def _insert_entry(self, model, fitness, solution, error, complexity, dataset_name, alg_name, iteration,
-                      mae, mse, rmse, mape, rmape, start_time, end_time, duration,
+                      mae, mse, rmse, mape, rmape, smape, start_time, end_time, duration,
                       precision=None, recall=None, f1_score=None,
                       pr_auc=None, pr_auc_mean=None, pr_auc_std=None,
                       roc_auc=None, roc_auc_mean=None, roc_auc_std=None):
@@ -238,6 +240,7 @@ class SQLiteConnector:
                 'RMSE': float(rmse),
                 'MAPE': float(mape),
                 'RMAPE': float(rmape),
+                'SMAPE': float(smape),
                 'precision': float(precision) if precision is not None else None,
                 'recall': float(recall) if recall is not None else None,
                 'f1_score': float(f1_score) if f1_score is not None else None,
@@ -259,7 +262,6 @@ class SQLiteConnector:
             self.connection.close()
         except Exception as e:
             Log.error(f"Error inserting entry: {e}")
-
 
     def create_table_metrics(self):
         """Create the observed_metrics table if it doesn't exist."""

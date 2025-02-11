@@ -14,8 +14,9 @@ class EvaluationMetrics:
         self.MAE_metric = torchmetrics.MeanAbsoluteError()  # Low is better
         self.MSE_metric = torchmetrics.MeanSquaredError()  # Low is better
         self.RMSE_metric = torchmetrics.MeanSquaredError(squared=False)  # Low is better
-        self.MAPE_metric = torchmetrics.MeanAbsolutePercentageError() # Low is better
-        self.RMAPE_metric = RootMeanAbsolutePercentageError() # Low is better
+        self.MAPE_metric = torchmetrics.MeanAbsolutePercentageError()  # Low is better
+        self.RMAPE_metric = RootMeanAbsolutePercentageError()  # Low is better
+        self.SMAPE_metric = torchmetrics.SymmetricMeanAbsolutePercentageError()  # Low is better
 
         # Initialize metrics with the worst possible values
         self.MAE = int(9e10)
@@ -23,6 +24,7 @@ class EvaluationMetrics:
         self.RMSE = int(9e10)
         self.MAPE = int(9e10)
         self.RMAPE = int(9e10)
+        self.SMAPE = int(9e10)
 
     def to(self, device):
         self.MAE_metric.to(device)
@@ -30,6 +32,7 @@ class EvaluationMetrics:
         self.RMSE_metric.to(device)
         self.MAPE_metric.to(device)
         self.RMAPE_metric.to(device)
+        self.SMAPE_metric.to(device)
 
     def update(self, predictions, targets):
         # Reshape predictions and targets
@@ -43,6 +46,7 @@ class EvaluationMetrics:
             self.RMSE_metric.update(reshaped_predictions, reshaped_targets)
             self.MAPE_metric.update(reshaped_predictions, reshaped_targets)
             self.RMAPE_metric.update(reshaped_predictions, reshaped_targets)
+            self.SMAPE_metric.update(reshaped_predictions, reshaped_targets)
         except Exception as e:
             Log.error(f"Error updating metrics: {e}")
 
@@ -53,7 +57,7 @@ class EvaluationMetrics:
             self.RMSE = round(self.RMSE_metric.compute().item(), 4)
             self.MAPE = round(self.MAPE_metric.compute().item(), 4)
             self.RMAPE = round(self.RMAPE_metric.compute().item(), 4)
-
+            self.SMAPE = round(self.SMAPE_metric.compute().item(), 4)
         except Exception as e:
             Log.error(f"Error during raw metric computation: {e}")
 
@@ -63,12 +67,13 @@ class EvaluationMetrics:
             'RMSE': self.RMSE,
             'MAPE': self.MAPE,
             'RMAPE': self.RMAPE,
+            'SMAPE': self.SMAPE,
         }
 
     def are_metrics_complete(self):
         return all(
             metric_value is not None
-            for metric_value in [self.MAE, self.MSE, self.RMSE, self.MAPE, self.RMAPE]
+            for metric_value in [self.MAE, self.MSE, self.RMSE, self.MAPE, self.RMAPE, self.SMAPE]
         )
 
 

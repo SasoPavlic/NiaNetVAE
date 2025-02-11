@@ -5,15 +5,15 @@ nia_search:
   algorithms:
     - can_be_deleted
   metrics:
-    - RMAPE
+    - SMAPE
 
 # Global parameters
 model_params:
   name: 'RecurrentVariationalAutoencoder'
 
 trainer_params:
-  min_epochs: 20
-  max_epochs: 30
+  min_epochs: 1
+  max_epochs: 1
 
 early_stop:
   monitor: "val_loss"
@@ -39,7 +39,7 @@ logging_params:
   name: "RNNVAE"
   logger_file: "RNNAutoencoder.log"
   save_dir: "logs/"
-  db_storage: "logs/solution_rmape_lp.db"
+  db_storage: "logs/smape_solutions.db"
 
 # Shared Data Loader parameters
 data_loader_params:
