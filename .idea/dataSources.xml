@@ -59,11 +59,11 @@
       <jdbc-url>jdbc:sqlite:$PROJECT_DIR$/logs/smape_solutions.db</jdbc-url>
       <working-dir>$ProjectFileDir$</working-dir>
     </data-source>
-    <data-source source="LOCAL" name="HPC PR AUC" uuid="aa3cf14e-7614-44a9-ad3b-b27ee1de1abe">
+    <data-source source="LOCAL" name="Razer" uuid="aa3cf14e-7614-44a9-ad3b-b27ee1de1abe">
       <driver-ref>50062105-ea91-4eed-ad70-35e2d22d2e00</driver-ref>
       <synchronize>true</synchronize>
       <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
-      <jdbc-url>jdbc:sqlite:$PROJECT_DIR$/logs/solution_pr_auc_hpc.db</jdbc-url>
+      <jdbc-url>jdbc:sqlite:$PROJECT_DIR$/logs/solutions.db</jdbc-url>
       <working-dir>$ProjectFileDir$</working-dir>
     </data-source>
   </component>

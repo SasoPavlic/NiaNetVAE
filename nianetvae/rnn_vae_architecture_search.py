@@ -155,13 +155,21 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
 
     Log.debug(f"Metrics to calculate: {metrics_to_calculate}")
 
-    # Calculate error_x using metrics specified in the config
+    # Calculate error_x using metrics specified in the config.
+    # Also check that at least one metric was found and added.
     error_x = 0.0
+    found_any = False
     for metric_name in metrics_to_calculate:
         if metric_name in normalized_metrics:
             error_x += normalized_metrics[metric_name]
+            found_any = True
         else:
             Log.error(f"Metric {metric_name} not found in normalized metrics. Available: {list(normalized_metrics.keys())}")
+
+    # If no metrics were found or error_x remains zero, return worst possible value.
+    if not found_any or error_x == 0.0:
+        Log.error("No valid metric was added to error_x or error_x remains zero. Returning worst possible value.")
+        return int(9e10), int(9e10), int(9e10)
 
     # Complexity calculation
     def normalize_complexity(value, max_bound):
@@ -191,6 +199,7 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
         return int(9e10), int(9e10), int(9e10)
 
     return fitness, error, complexity
+
 
 
 class RNNVAEArchitectureMultiObj(Problem):

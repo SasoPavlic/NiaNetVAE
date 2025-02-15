@@ -39,7 +39,7 @@ logging_params:
   name: "RNNVAE"
   logger_file: "RNNAutoencoder.log"
   save_dir: "logs/"
-  db_storage: "logs/smape_solutions.db"
+  db_storage: "logs/solutions.db"
 
 # Shared Data Loader parameters
 data_loader_params:
