@@ -493,21 +493,23 @@ class RNNVAE(BaseVAE, nn.Module):
         # Build the decoder layers
         self.decoding_layers = nn.ModuleList()
         if symmetrical:
-            # Symmetrical decoder
+            # Symmetrical decoder: mirror the encoder hidden dimensions
             self.decoder_hidden_dims = self.encoder_hidden_dims[::-1]
         else:
-            # Asymmetrical decoder
-            # Define different hidden dimensions for decoder
-            self.decoder_hidden_dims = self.calculate_decoder_hidden_dims(
-                start_dim=self.bottleneck_size,
-                end_dim=self.n_features,
-                layer_step=layer_step,
-                num_layers=num_layers
-            )
-            if self.decoder_hidden_dims is None:
-                self.is_valid = False
-                Log.error("Invalid model configuration detected during decoder hidden dimensions calculation.")
-                return
+            # Asymmetrical decoder using geometric progression.
+            # Compute decoder_num_layers as a fraction of encoder layers (here 40%, adjustable).
+            decoder_num_layers = max(1, int(round(self.num_layers * 0.4)))
+            if decoder_num_layers == 1:
+                dims = [self.n_features]
+            else:
+                # Use geometric progression with (decoder_num_layers-1) transitions.
+                r = (self.n_features / self.bottleneck_size) ** (1.0 / (decoder_num_layers - 1))
+                dims = []
+                for i in range(decoder_num_layers):
+                    d = int(round(self.bottleneck_size * (r ** i)))
+                    dims.append(d)
+                dims[-1] = self.n_features  # Ensure the final dimension is exactly n_features
+            self.decoder_hidden_dims = dims
 
         # Define the mapping from latent space to decoder input
         decoder_input_size = self.bottleneck_size
