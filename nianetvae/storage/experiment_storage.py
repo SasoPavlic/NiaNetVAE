@@ -46,10 +46,12 @@ class SQLiteConnector:
                 iteration INTEGER,
                 activation TEXT,
                 optimizer TEXT,
-                shape TEXT,
+                encoder_layer_step INTEGER,
+                encoder_num_layers INTEGER,
+                decoder_num_layers INTEGER,
+                decoder_layer_step INTEGER,
                 encoding_layers TEXT,
                 decoding_layers TEXT,
-                num_layers INTEGER,
                 bottleneck_size INTEGER,
                 fitness REAL,
                 complexity REAL,
@@ -81,8 +83,6 @@ class SQLiteConnector:
         """Retrieve entries from the database matching the given hash_id and dataset_name."""
         try:
             self.create_connection()
-            query = f"SELECT * FROM {self.table_name} WHERE hash_id = ?"
-            existing_entry = pd.read_sql_query(query, self.connection, params=(hash_id,))
             query = f"SELECT * FROM {self.table_name} WHERE hash_id = ? AND dataset_name = ?"
             existing_entry = pd.read_sql_query(query, self.connection, params=(hash_id, dataset_name))
             self.connection.close()
@@ -156,7 +156,6 @@ class SQLiteConnector:
             duration (Optional[float]): Training duration in seconds.
         """
         try:
-            # Extract metrics if experiment is provided
             anomaly_metrics = getattr(experiment, 'anomaly_metrics', {})
             metrics = {
                 'precision': anomaly_metrics.get('precision'),
@@ -170,7 +169,6 @@ class SQLiteConnector:
                 'roc_auc_std': anomaly_metrics.get('roc_auc_std'),
             }
 
-            # Insert entry into the database
             if model and fitness is not None and solution is not None:
                 self._insert_entry(
                     model=model,
@@ -193,7 +191,6 @@ class SQLiteConnector:
                     **metrics,
                 )
 
-            # Save the model state
             if model and path:
                 model_path = os.path.join(path, "model.pt")
                 torch.save(model.state_dict(), model_path)
@@ -215,7 +212,6 @@ class SQLiteConnector:
             start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S") if start_time else None
             end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S") if end_time else None
 
-            # Prepare the data as a dictionary
             data = {
                 'hash_id': str(model.hash_id),
                 'dataset_name': str(dataset_name),
@@ -227,10 +223,12 @@ class SQLiteConnector:
                 'iteration': int(iteration),
                 'activation': str(model.activation_name),
                 'optimizer': str(model.optimizer_name),
-                'shape': str(model.shape),
+                'encoder_layer_step': int(model.encoder_layer_step),
+                'encoder_num_layers': int(model.encoder_num_layers),
+                'decoder_num_layers': int(model.decoder_num_layers),
+                'decoder_layer_step': int(model.decoder_layer_step),
                 'encoding_layers': str(model.encoding_layers) if model.encoding_layers is not None else None,
                 'decoding_layers': str(model.decoding_layers) if model.decoding_layers is not None else None,
-                'num_layers': int(model.num_layers),
                 'bottleneck_size': int(model.bottleneck_size) if model.bottleneck_size is not None else None,
                 'fitness': float(fitness),
                 'complexity': float(complexity),
@@ -253,7 +251,6 @@ class SQLiteConnector:
                 'solution_array': json_solution.strip()
             }
 
-            # Insert into the table
             columns = ', '.join(data.keys())
             placeholders = ', '.join(['?' for _ in data])
             query = f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})"
@@ -295,7 +292,6 @@ class SQLiteConnector:
             result = self.cursor.fetchone()
             self.connection.close()
 
-            # If no result found, return infinities
             if result is None:
                 Log.info(f"No existing min/max for {metric_name}. Returning defaults.")
                 return float('inf'), float('-inf')
@@ -309,14 +305,11 @@ class SQLiteConnector:
     def update_min_max(self, dataset_name, algorithm_name, metric_name, value):
         """Update min/max values dynamically."""
         try:
-            # Retrieve current min and max values
-            #TODO Which infinity goes where (min, max)
             current_min, current_max = self.get_min_max(dataset_name, algorithm_name, metric_name)
             self.create_connection()
             new_min = min(current_min, value)
             new_max = max(current_max, value)
 
-            # Insert or update the min and max values
             query = f'''
             INSERT INTO {"observed_metrics"} (dataset_name, algorithm_name, metric_name, observed_min, observed_max)
             VALUES (?, ?, ?, ?, ?)

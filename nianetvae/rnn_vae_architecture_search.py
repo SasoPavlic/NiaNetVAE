@@ -321,7 +321,7 @@ def solve_architecture_problem(selected_algorithms):
     error and complexity. Optimizer settings (e.g., population size, termination criteria) are
     taken from the configuration file.
     """
-    DIMENSIONALITY = 6
+    DIMENSIONALITY = 7
 
     # Create the multiobjective problem instance.
     # RNNVAEArchitectureMultiObj is assumed to be defined elsewhere.
