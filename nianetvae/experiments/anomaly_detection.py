@@ -61,12 +61,9 @@ class AnomalyDetectionMetrics:
             self.errors_per_ts[0].extend(batch_errors)
             self.labels_per_ts[0].extend(batch_labels)
 
-    def compute(self, save_path=None):
+    def compute(self):
         """
         Compute the anomaly detection metrics based on accumulated data.
-
-        Args:
-            save_path (str): Directory to save plots, if any.
 
         Returns:
             dict: Dictionary containing evaluation metrics.
@@ -118,7 +115,7 @@ class AnomalyDetectionMetrics:
             labels = torch.stack(self.labels_per_ts[ts_id])
 
             # Compute metrics for this time series
-            metrics = self.compute_metrics_per_ts(errors, labels, ts_id, save_path)
+            metrics = self.compute_metrics_per_ts(errors, labels, ts_id)
 
             if metrics is None:
                 continue  # Skip if metrics could not be computed
@@ -174,7 +171,7 @@ class AnomalyDetectionMetrics:
             'roc_auc_std': None
         }
 
-    def compute_metrics_per_ts(self, errors, labels, ts_id, save_path=None):
+    def compute_metrics_per_ts(self, errors, labels, ts_id):
         """
         Compute metrics for a single time series.
 
@@ -182,7 +179,6 @@ class AnomalyDetectionMetrics:
             errors (torch.Tensor): Reconstruction errors for this time series.
             labels (torch.Tensor): True labels for this time series.
             ts_id (int): Time series ID.
-            save_path (str): Directory to save plots, if any.
 
         Returns:
             dict: Metrics for this time series.

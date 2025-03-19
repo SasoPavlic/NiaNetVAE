@@ -38,7 +38,7 @@ exp_params:
 logging_params:
   name: "RNNVAE"
   logger_file: "RNNAutoencoder.log"
-  save_dir: "logs/"
+  save_dir: "logs"
   db_storage: "logs/solutions.db"
 
 # Shared Data Loader parameters
@@ -52,7 +52,7 @@ data_loader_params:
 
 # Dataset configuration
 dataset:
-  config_file: "configs/swat_config.yaml"
+  config_file: "configs/msl_config.yaml"
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+
 #| Benchmark  | # datasets | # dims| Train size | Test size  | Anomaly% | Path              | Set Seq Length|
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+

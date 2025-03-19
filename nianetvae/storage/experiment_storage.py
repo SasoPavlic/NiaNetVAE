@@ -191,10 +191,10 @@ class SQLiteConnector:
                     **metrics,
                 )
 
-            if model and path:
-                model_path = os.path.join(path, "model.pt")
-                torch.save(model.state_dict(), model_path)
-                Log.info(f"Model saved to {model_path}")
+            # if model and path:
+            #     model_path = os.path.join(path, "model.pt")
+            #     torch.save(model.state_dict(), model_path)
+            #     Log.info(f"Model saved to {model_path}")
 
         except Exception as e:
             Log.error(f"Error saving model and entry: {e}")

@@ -41,12 +41,11 @@ class FineTuneLearningRateFinder(LearningRateFinder):
 
 
 class RNNVAExperiment(LightningModule):
-    def __init__(self, model: BaseVAE, path,dataset_name, alg_name, **kwargs) -> None:
+    def __init__(self, model: BaseVAE, dataset_name, alg_name, **kwargs) -> None:
         super(RNNVAExperiment, self).__init__()
 
         self.results = None
         self.model = model
-        self.path = path
         self.dataset_name=dataset_name
         self.alg_name=alg_name
         self.learning_rate = 0.01
@@ -168,11 +167,8 @@ class RNNVAExperiment(LightningModule):
 
     def on_test_end(self):
         # Compute anomaly detection metrics
-        if self.path is not None:
-            save_path = os.path.join(os.getcwd(), self.path)
-            self.anomaly_metrics = self.anomaly_detection_metrics.compute(save_path=save_path)
-        else:
-            self.anomaly_metrics = self.anomaly_detection_metrics.compute(save_path=self.path)
+
+        self.anomaly_metrics = self.anomaly_detection_metrics.compute()
 
         # Helper function to safely format metric values
         def safe_format(value):

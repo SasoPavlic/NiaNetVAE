@@ -45,7 +45,6 @@ COPY configs /app/configs
 COPY data /app/data
 
 # The code to run when container is started:
-COPY nianetvae/niapy_extension /app/nianetvae/niapy_extension
 COPY nianetvae/storage /app/nianetvae/storage
 COPY nianetvae/dataloaders /app/nianetvae/dataloaders
 COPY nianetvae/experiments /app/nianetvae/experiments

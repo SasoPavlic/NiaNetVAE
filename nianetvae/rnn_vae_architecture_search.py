@@ -1,7 +1,6 @@
 # nianetvae/rnn_vae_architecture_search.py
 
 import math
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -9,24 +8,12 @@ import numpy as np
 import torch
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import EarlyStopping
-# Note: You may uncomment LearningRateMonitor or other callbacks if needed.
-from lightning.pytorch.loggers import TensorBoardLogger
-
-# Remove Niapy imports since we are no longer using them.
-# from niapy.algorithms.basic import ParticleSwarmAlgorithm, DifferentialEvolution, FireflyAlgorithm, GeneticAlgorithm
-# from niapy.algorithms.modified import SelfAdaptiveDifferentialEvolution
-# from niapy.task import OptimizationType
-# from nianetvae.niapy_extension.wrapper import ExtendedProblem, ExtendedRunner
-
-# Import pymoo modules for multiobjective optimization
+from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.problem import Problem
 from pymoo.optimize import minimize
-from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.termination import get_termination
-
 from tabulate import tabulate
 
-import nianetvae.experiments.metrics_evaluation
 from log import Log
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment, FineTuneLearningRateFinder
 from nianetvae.models.rnn_vae import RNNVAE
@@ -164,7 +151,8 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
             error_x += normalized_metrics[metric_name]
             found_any = True
         else:
-            Log.error(f"Metric {metric_name} not found in normalized metrics. Available: {list(normalized_metrics.keys())}")
+            Log.error(
+                f"Metric {metric_name} not found in normalized metrics. Available: {list(normalized_metrics.keys())}")
 
     # If no metrics were found or error_x remains zero, return worst possible value.
     if not found_any or error_x == 0.0:
@@ -181,7 +169,8 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
 
     max_possible_complexity = 3.0  # Sum of all normalized components
     complexity = int(
-        round((encoding_complexity + decoding_complexity + bottleneck_complexity) / max_possible_complexity, 6) * 1000000
+        round((encoding_complexity + decoding_complexity + bottleneck_complexity) / max_possible_complexity,
+              6) * 1000000
     )
 
     # Total fitness calculation
@@ -199,7 +188,6 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
         return int(9e10), int(9e10), int(9e10)
 
     return fitness, error, complexity
-
 
 
 class RNNVAEArchitectureMultiObj(Problem):
@@ -224,15 +212,15 @@ class RNNVAEArchitectureMultiObj(Problem):
         F = []
         for solution in X:
             self.iteration += 1
-            Log.debug("=================================================================================================")
+            Log.debug(
+                "=================================================================================================")
             Log.debug(f"ITERATION: {self.iteration}")
             Log.debug(f"SOLUTION : {solution}")
 
             model = RNNVAE(solution, **self.config)
             existing_entry = self.conn.get_entries(hash_id=model.get_hash(), dataset_name=self.dataset_name)
-            # Create a unique path for this evaluation
-            path = self.config['logging_params']['save_dir'] + f"{self.iteration}_NSGA2_{model.hash_id}"
-            self.config['logging_params']['model_path'] = path
+
+            path = self.config['logging_params']['save_dir']
             Path(path).mkdir(parents=True, exist_ok=True)
 
             # (The condition below is never active because "True == False" is always False)
@@ -255,7 +243,7 @@ class RNNVAEArchitectureMultiObj(Problem):
                         complexity=complexity
                     )
                 else:
-                    experiment = RNNVAExperiment(model, path, self.dataset_name, "NSGA2", **self.config)
+                    experiment = RNNVAExperiment(model, self.dataset_name, "NSGA2", **self.config)
                     trainer = Trainer(
                         enable_progress_bar=True,
                         accelerator="cuda",
@@ -263,6 +251,7 @@ class RNNVAEArchitectureMultiObj(Problem):
                         default_root_dir=path,
                         log_every_n_steps=50,
                         logger=False,
+                        enable_checkpointing=False,  # Disable automatic checkpointing
                         callbacks=[
                             FineTuneLearningRateFinder(**self.config['fine_tune_lr_finder']),
                             EarlyStopping(**self.config['early_stop'], verbose=True, check_finite=True),
@@ -290,7 +279,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                         self.config['data_params']['seq_len']
                     )
 
-                    Log.debug(tabulate([[fitness, complexity, error]], headers=["Fitness, Complexity", "Error"], tablefmt="pretty"))
+                    Log.debug(tabulate([[fitness, complexity, error]], headers=["Fitness, Complexity", "Error"],
+                                       tablefmt="pretty"))
                     self.conn.save_model_and_entry(
                         dataset_name=self.dataset_name,
                         alg_name="NSGA2",
@@ -301,7 +291,6 @@ class RNNVAEArchitectureMultiObj(Problem):
                         experiment=experiment,
                         fitness=fitness,
                         complexity=complexity,
-                        path=path,
                         start_time=start_time,
                         end_time=end_time,
                         duration=duration
