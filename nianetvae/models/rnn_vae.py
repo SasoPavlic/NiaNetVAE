@@ -37,6 +37,7 @@ class RNNVAE(BaseVAE, nn.Module):
         batch_size = kwargs['data_params']['batch_size']
         data_shape = kwargs['data_params'].get('data_shape', None)
 
+        # Determine if univariate or multivariate
         if data_shape is not None:
             if len(data_shape) == 3:
                 n_features = data_shape[2]
@@ -49,7 +50,7 @@ class RNNVAE(BaseVAE, nn.Module):
             else:
                 raise ValueError(f"Unsupported data shape: {data_shape}")
         else:
-            is_univariate = n_features == 1
+            is_univariate = (n_features == 1)
 
         self.is_univariate = is_univariate
         self.id = str(int(time.time())).strip()
@@ -62,32 +63,37 @@ class RNNVAE(BaseVAE, nn.Module):
         self.batch_size = batch_size
 
         # Map solution vector (length 7)
-        # y1: encoder layer type,
-        # y2: encoder layer step,
-        # y3: decoder number of layers,
-        # y4: decoder layer step,
-        # y5: encoder number of layers,
-        # y6: activation function,
-        # y7: optimizer algorithm.
-        y1 = solution[0]
-        y2 = solution[1]
-        y3 = solution[2]
-        y4 = solution[3]
-        y5 = solution[4]
-        y6 = solution[5]
-        y7 = solution[6]
+        y1, y2, y3, y4, y5, y6, y7 = solution
 
         self.layer_type = self.map_layer_type(y1)  # Shared for encoder & decoder
-        self.encoder_layer_step = self.map_layer_step(y2, self.n_features)
-        self.decoder_num_layers = self.map_num_layers(y3, self.n_features)
-        self.decoder_layer_step = self.map_layer_step(y4, self.n_features)
-        self.encoder_num_layers = self.map_num_layers(y5, self.n_features)
+
+        # === unify uni‐ and multivariate mapping ===
+        # choose the reference dimension: sequence length for univariate, feature count for multivariate
+        ref_dim = self.seq_len if self.is_univariate else self.n_features
+
+        # map raw genes into valid step sizes in [1…ref_dim]
+        self.encoder_layer_step = self.map_layer_step(y2, ref_dim)
+        self.decoder_layer_step = self.map_layer_step(y4, ref_dim)
+
+        # now cap the layer counts so that step * num_layers ≤ ref_dim
+        max_enc = max(1, ref_dim // self.encoder_layer_step)
+        max_dec = max(1, ref_dim // self.decoder_layer_step)
+
+        # finally map into those smaller ranges
+        self.encoder_num_layers = self.map_num_layers(y5, max_enc)
+        self.decoder_num_layers = self.map_num_layers(y3, max_dec)
+        # ============================================
+
         self.activation = self.map_activation(y6)
         self.optimizer_name = self.map_optimizer(y7, self)
 
         # Build encoder hidden dimensions using encoder parameters.
         if self.is_univariate:
-            encoder_hidden_dims = self.calculate_univariate_hidden_dims(seq_len, self.encoder_layer_step, self.encoder_num_layers)
+            encoder_hidden_dims = self.calculate_univariate_hidden_dims(
+                self.seq_len,
+                self.encoder_layer_step,
+                self.encoder_num_layers
+            )
             if encoder_hidden_dims is None:
                 self.is_valid = False
                 Log.error("Invalid encoder configuration (univariate).")
@@ -100,7 +106,11 @@ class RNNVAE(BaseVAE, nn.Module):
             self.hidden_dims = encoder_hidden_dims
             self.bottleneck_size = encoder_hidden_dims[-1]
         else:
-            encoder_hidden_dims = self.calculate_hidden_dims(self.n_features, self.encoder_layer_step, self.encoder_num_layers)
+            encoder_hidden_dims = self.calculate_hidden_dims(
+                self.n_features,
+                self.encoder_layer_step,
+                self.encoder_num_layers
+            )
             if encoder_hidden_dims is None:
                 self.is_valid = False
                 Log.error("Invalid encoder configuration (multivariate).")
@@ -122,43 +132,55 @@ class RNNVAE(BaseVAE, nn.Module):
             self.layer_type,
             self.dataset_shape,
             self.hidden_dims,
-            symmetrical=(self.encoder_layer_step == self.decoder_layer_step and self.encoder_num_layers == self.decoder_num_layers)
+            symmetrical=(
+                self.encoder_layer_step == self.decoder_layer_step and
+                self.encoder_num_layers == self.decoder_num_layers
+            )
         )
 
         self.get_hash()
-        outputs = []
-        outputs.append([self.hash_id,
-                        self.layer_type,
-                        self.encoder_layer_step,
-                        self.encoder_num_layers,
-                        self.decoder_num_layers,
-                        self.decoder_layer_step,
-                        self.activation_name,
-                        self.optimizer_name,
-                        self.bottleneck_size,
-                        self.encoding_layers,
-                        self.decoding_layers])
-        Log.info(tabulate(outputs, headers=["ID",
-                                            "Layer type (y1)",
-                                            "Encoder step (y2)",
-                                            "Encoder layers (y5)",
-                                            "Decoder layers (y3)",
-                                            "Decoder step (y4)",
-                                            "Activation (y6)",
-                                            "Optimizer (y7)",
-                                            "Bottleneck size",
-                                            "Encoder",
-                                            "Decoder"], tablefmt="pretty"))
+        outputs = [[
+            self.hash_id,
+            self.layer_type,
+            self.encoder_layer_step,
+            self.encoder_num_layers,
+            self.decoder_num_layers,
+            self.decoder_layer_step,
+            self.activation_name,
+            self.optimizer_name,
+            self.bottleneck_size,
+            self.encoding_layers,
+            self.decoding_layers
+        ]]
+        Log.info(tabulate(
+            outputs,
+            headers=[
+                "ID", "Layer type (y1)",
+                "Encoder step (y2)",
+                "Encoder layers (y5)",
+                "Decoder layers (y3)",
+                "Decoder step (y4)",
+                "Activation (y6)",
+                "Optimizer (y7)",
+                "Bottleneck size",
+                "Encoder", "Decoder"
+            ],
+            tablefmt="pretty"
+        ))
 
     def get_hash(self):
-        self.hash_id = hashlib.sha1(str(self.layer_type +
-                                        str(self.encoder_layer_step) +
-                                        str(self.encoder_num_layers) +
-                                        str(self.decoder_num_layers) +
-                                        str(self.decoder_layer_step) +
-                                        str(self.activation_name) +
-                                        str(self.optimizer_name) +
-                                        str(self.bottleneck_size)).encode('utf-8')).hexdigest()
+        self.hash_id = hashlib.sha1(
+            str(
+                self.layer_type +
+                str(self.encoder_layer_step) +
+                str(self.encoder_num_layers) +
+                str(self.decoder_num_layers) +
+                str(self.decoder_layer_step) +
+                str(self.activation_name) +
+                str(self.optimizer_name) +
+                str(self.bottleneck_size)
+            ).encode('utf-8')
+        ).hexdigest()
         return self.hash_id
 
     def encode(self, x: Tensor) -> list:
