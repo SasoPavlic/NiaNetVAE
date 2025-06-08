@@ -59,6 +59,7 @@ if __name__ == '__main__':
                         help='path to the config file',
                         default='configs/main_config.yaml')
 
+    # TODO Can be deleted after double checking
     parser.add_argument('--algorithms', '-alg',
                         dest="algorithms",
                         metavar='list_of_strings',
@@ -126,6 +127,7 @@ if __name__ == '__main__':
     nianetvae.rnn_vae_architecture_search.datamodule = datamodule
     nianetvae.rnn_vae_architecture_search.dataset_name = dataset_config['data_params']['dataset_name']
 
+    # TODO Can be deleted after double checking
     algorithms = []
     if args.algorithms is not None:
         args.algorithms = args.algorithms.split(',')

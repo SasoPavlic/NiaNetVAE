@@ -1,5 +1,3 @@
-# nianetvae/rnn_vae_architecture_search.py
-
 import math
 from datetime import datetime
 from pathlib import Path
@@ -102,16 +100,21 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
         Log.error(f"Error computing metrics: {e}")
         return int(9e10), int(9e10), int(9e10)
 
-    # Update database with raw metrics
+    # Update database with raw metrics (skip None, NaN or infinity‐sentinel)
     for metric_name, value in raw_metrics.items():
         Log.debug(f"Updating database for metric: {metric_name}, value: {value}")
-        if value != int(9e10):  # Only update valid metrics
-            conn.update_min_max(dataset_name, alg_name, metric_name, value)
+        if value is None or (isinstance(value, float) and math.isnan(value)) or value == int(9e10):
+            Log.warning(f"Skipping observed‐min/max update for raw metric '{metric_name}': invalid value {value}")
+            continue
+        conn.update_min_max(dataset_name, alg_name, metric_name, value)
 
+    # Update database with anomaly metrics (skip None or infinity‐sentinel)
     for metric_name, value in experiment.anomaly_metrics.items():
-        Log.debug(f"Updating database for metric: {metric_name}, value: {value}")
-        if value != int(9e10):
-            conn.update_min_max(dataset_name, alg_name, metric_name, value)
+        Log.debug(f"Updating database for anomaly metric: {metric_name}, value: {value}")
+        if value is None or (isinstance(value, float) and math.isnan(value)) or value == int(9e10):
+            Log.warning(f"Skipping observed‐min/max update for anomaly metric '{metric_name}': invalid value {value}")
+            continue
+        conn.update_min_max(dataset_name, alg_name, metric_name, value)
 
     # Normalize all metrics
     normalized_metrics = {}
@@ -152,7 +155,8 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
             found_any = True
         else:
             Log.error(
-                f"Metric {metric_name} not found in normalized metrics. Available: {list(normalized_metrics.keys())}")
+                f"Metric {metric_name} not found in normalized metrics. Available: {list(normalized_metrics.keys())}"
+            )
 
     # If no metrics were found or error_x remains zero, return worst possible value.
     if not found_any or error_x == 0.0:
@@ -169,8 +173,8 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
 
     max_possible_complexity = 3.0  # Sum of all normalized components
     complexity = int(
-        round((encoding_complexity + decoding_complexity + bottleneck_complexity) / max_possible_complexity,
-              6) * 1000000
+        round((encoding_complexity + decoding_complexity + bottleneck_complexity) / max_possible_complexity, 6)
+        * 1000000
     )
 
     # Total fitness calculation
@@ -212,8 +216,7 @@ class RNNVAEArchitectureMultiObj(Problem):
         F = []
         for solution in X:
             self.iteration += 1
-            Log.debug(
-                "=================================================================================================")
+            Log.debug("=" * 100)
             Log.debug(f"ITERATION: {self.iteration}")
             Log.debug(f"SOLUTION : {solution}")
 
@@ -223,7 +226,6 @@ class RNNVAEArchitectureMultiObj(Problem):
             path = self.config['logging_params']['save_dir']
             Path(path).mkdir(parents=True, exist_ok=True)
 
-            # (The condition below is never active because "True == False" is always False)
             if existing_entry.shape[0] > 0:
                 error = existing_entry['error'][0]
                 complexity = existing_entry['complexity'][0]
@@ -251,7 +253,7 @@ class RNNVAEArchitectureMultiObj(Problem):
                         default_root_dir=path,
                         log_every_n_steps=50,
                         logger=False,
-                        enable_checkpointing=False,  # Disable automatic checkpointing
+                        enable_checkpointing=False,
                         callbacks=[
                             FineTuneLearningRateFinder(**self.config['fine_tune_lr_finder']),
                             EarlyStopping(**self.config['early_stop'], verbose=True, check_finite=True),
@@ -270,7 +272,6 @@ class RNNVAEArchitectureMultiObj(Problem):
                     end_time = datetime.now()
                     duration = (end_time - start_time).total_seconds()
 
-                    # Calculate fitness, error, and complexity.
                     fitness, error, complexity = calculate_fitness(
                         "NSGA2",
                         model,
