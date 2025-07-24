@@ -15,3 +15,5 @@ Pillow
 pytest
 colorama
 kaleido
+pymoo
+tables

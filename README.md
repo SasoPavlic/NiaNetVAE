@@ -154,7 +154,7 @@ This summary explains how the code calculates a single **fitness** value, balanc
 
 ## 1. Metric Normalization
 
-For each metric (e.g., **MAE**, **MSE**, **RMSE**, **MAPE**, **RMAPE**), the code retrieves **min** and **max** values from a database and **normalizes** the current metric into the range \([0,1]\). The basic formula is:
+For each metric (e.g., **MAE**, **MSE**, **RMSE**, **MAPE**, **RMAPE**, **RMAPE**), the code retrieves **min** and **max** values from a database and **normalizes** the current metric into the range \([0,1]\). The basic formula is:
 
 $$
 \text{normalized} \;=\; \frac{\text{value} - \text{min\_val}}{\text{max\_val} - \text{min\_val}}
@@ -172,20 +172,14 @@ $$
 
 The code sums various normalized **reconstruction** metrics:
 
-1. **MAE**, **MSE**, and **RMSE** (all lower-is-better)  
-2. **DTW** (if valid for univariate data)  
-3. **R²** (treated inversely, so poor R² increases overall error)
+1. **MAE**, **MSE**, and **RMSE** (all lower-is-better)
 
 In simplified form:
 
 $$
 \text{Error} \;\approx\; 
-\bigl(\text{Norm(MAE)} + \text{Norm(MSE)} + \text{Norm(RMSE)}\bigr) 
-\;+\; \text{optional Norm(DTW)} 
-\;+\; \text{Norm(R²)}
+\bigl(\text{Norm(MAE)} + \text{Norm(MSE)} + \text{Norm(RMSE)}\bigr)
 $$
-
-> Since **R²** is higher-is-better, its normalization effectively becomes \((1 - R²)\) when added to the error term.
 
 ---
 

@@ -59,6 +59,7 @@ if __name__ == '__main__':
                         help='path to the config file',
                         default='configs/main_config.yaml')
 
+    # TODO Can be deleted after double checking
     parser.add_argument('--algorithms', '-alg',
                         dest="algorithms",
                         metavar='list_of_strings',
@@ -100,7 +101,7 @@ if __name__ == '__main__':
     config['data_params'].update(shared_data_loader_params)
 
     # Continue with the rest of the code
-    config['logging_params']['save_dir'] += RUN_UUID + '/'
+    config['logging_params']['save_dir'] += '/' + RUN_UUID + '/'
     Path(config['logging_params']['save_dir']).mkdir(parents=True, exist_ok=True)
 
     Log.enable(config['logging_params'])
@@ -126,6 +127,7 @@ if __name__ == '__main__':
     nianetvae.rnn_vae_architecture_search.datamodule = datamodule
     nianetvae.rnn_vae_architecture_search.dataset_name = dataset_config['data_params']['dataset_name']
 
+    # TODO Can be deleted after double checking
     algorithms = []
     if args.algorithms is not None:
         args.algorithms = args.algorithms.split(',')

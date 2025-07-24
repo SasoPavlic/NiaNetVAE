@@ -61,12 +61,9 @@ class AnomalyDetectionMetrics:
             self.errors_per_ts[0].extend(batch_errors)
             self.labels_per_ts[0].extend(batch_labels)
 
-    def compute(self, save_path=None):
+    def compute(self):
         """
         Compute the anomaly detection metrics based on accumulated data.
-
-        Args:
-            save_path (str): Directory to save plots, if any.
 
         Returns:
             dict: Dictionary containing evaluation metrics.
@@ -118,7 +115,7 @@ class AnomalyDetectionMetrics:
             labels = torch.stack(self.labels_per_ts[ts_id])
 
             # Compute metrics for this time series
-            metrics = self.compute_metrics_per_ts(errors, labels, ts_id, save_path)
+            metrics = self.compute_metrics_per_ts(errors, labels, ts_id)
 
             if metrics is None:
                 continue  # Skip if metrics could not be computed
@@ -149,15 +146,15 @@ class AnomalyDetectionMetrics:
 
         # Return aggregated metrics
         return {
-            'precision': round(precision, 3),
-            'recall': round(recall, 3),
-            'f1_score': round(f1_score, 3),
-            'roc_auc': round(roc_auc, 3) if roc_auc is not None else None,
-            'pr_auc': round(pr_auc, 3) if pr_auc is not None else None,
-            'pr_auc_mean': round(pr_auc_mean, 3) if pr_auc_mean is not None else None,
-            'pr_auc_std': round(pr_auc_std, 3) if pr_auc_std is not None else None,
-            'roc_auc_mean': round(roc_auc_mean, 3) if roc_auc_mean is not None else None,
-            'roc_auc_std': round(roc_auc_std, 3) if roc_auc_std is not None else None
+            'precision': round(precision, 4),
+            'recall': round(recall, 4),
+            'f1_score': round(f1_score, 4),
+            'roc_auc': round(roc_auc, 4) if roc_auc is not None else None,
+            'pr_auc': round(pr_auc, 4) if pr_auc is not None else None,
+            'pr_auc_mean': round(pr_auc_mean, 4) if pr_auc_mean is not None else None,
+            'pr_auc_std': round(pr_auc_std, 4) if pr_auc_std is not None else None,
+            'roc_auc_mean': round(roc_auc_mean, 4) if roc_auc_mean is not None else None,
+            'roc_auc_std': round(roc_auc_std, 4) if roc_auc_std is not None else None
         }
 
     @staticmethod
@@ -174,7 +171,7 @@ class AnomalyDetectionMetrics:
             'roc_auc_std': None
         }
 
-    def compute_metrics_per_ts(self, errors, labels, ts_id, save_path=None):
+    def compute_metrics_per_ts(self, errors, labels, ts_id):
         """
         Compute metrics for a single time series.
 
@@ -182,7 +179,6 @@ class AnomalyDetectionMetrics:
             errors (torch.Tensor): Reconstruction errors for this time series.
             labels (torch.Tensor): True labels for this time series.
             ts_id (int): Time series ID.
-            save_path (str): Directory to save plots, if any.
 
         Returns:
             dict: Metrics for this time series.
