@@ -1093,17 +1093,6 @@ files = [
 tests = ["asttokens (>=2.1.0)", "coverage", "coverage-enable-subprocess", "ipython", "littleutils", "pytest", "rich"]
 
 [[package]]
-name = "factory"
-version = "1.2"
-description = "Object Oriented Currying"
-category = "main"
-optional = false
-python-versions = "*"
-files = [
-    {file = "Factory-1.2.tar.gz", hash = "sha256:c0af96e123ac9164ca7d1b9905de749f94e819c8e85341c8fb9f1dd2e349c8cc"},
-]
-
-[[package]]
 name = "fastjsonschema"
 version = "2.21.1"
 description = "Fastest Python implementation of JSON schema"
@@ -5821,4 +5810,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<3.12"
-content-hash = "a5b71f04c144652d1818b0c349438a549818ecd7d468cacdb079d2a123b1888f"
+content-hash = "d864ed38fe084fb807ca0c4b11a5436434406bbc52667ece0408fce838c0cdad"
