@@ -72,6 +72,22 @@ class UCRDataLoader(BaseDataLoader):
         train_data_list, train_labels_list = self._normalize_and_filter(train_data_list, train_labels_list, fit=True)
         test_data_list, test_labels_list = self._normalize_and_filter(test_data_list, test_labels_list, fit=False)
 
+        # Drop any series shorter than seq_len to avoid empty sequence sets
+        def _filter_short(dl, ll):
+            keep_d, keep_l = [], []
+            dropped = 0
+            for d, l in zip(dl, ll):
+                if len(d) >= self.seq_len:
+                    keep_d.append(d); keep_l.append(l)
+                else:
+                    dropped += 1
+            if dropped:
+                Log.warning(f"Dropped {dropped} time series shorter than seq_len={self.seq_len}.")
+            return keep_d, keep_l
+
+        train_data_list, train_labels_list = _filter_short(train_data_list, train_labels_list)
+        test_data_list,  test_labels_list  = _filter_short(test_data_list,  test_labels_list)
+
         self._split_train_validation(train_data_list, train_labels_list)
 
         if test_data_list:
@@ -90,21 +106,30 @@ class UCRDataLoader(BaseDataLoader):
                 Log.error(f"File {file_path} does not exist.")
                 continue
 
+            # FIX: match on basename, not the relative path
+            basename = os.path.basename(filename)
             pattern = r"^\d+_UCR_Anomaly_(.+)_(\d+)_(\d+)_(\d+)\.txt$"
-            match = re.match(pattern, filename)
+            match = re.match(pattern, basename)
             if not match:
-                Log.error(f"Filename {filename} does not match the expected pattern.")
+                Log.error(f"Filename {basename} does not match the expected pattern.")
                 continue
 
             train_end_idx = int(match.group(2))
             anomaly_start_idx = int(match.group(3))
             anomaly_end_idx = int(match.group(4))
 
+            # Load and sanitize
             data = np.loadtxt(file_path)
             data = np.nan_to_num(data)
 
             # Apply flexible labeling for anomalies
             labels = self._apply_flexible_labeling(len(data), anomaly_start_idx, anomaly_end_idx)
+
+            # Basic sanity guards
+            train_end_idx = max(0, min(train_end_idx, len(data)))
+            if anomaly_start_idx > anomaly_end_idx:
+                Log.warning(f"{basename}: anomaly_start ({anomaly_start_idx}) > anomaly_end ({anomaly_end_idx}); swapping.")
+                anomaly_start_idx, anomaly_end_idx = anomaly_end_idx, anomaly_start_idx
 
             train_data = data[:train_end_idx]
             train_labels = labels[:train_end_idx]
@@ -117,6 +142,7 @@ class UCRDataLoader(BaseDataLoader):
             test_data_list.append(test_data)
             test_labels_list.append(test_labels)
 
+        Log.info(f"Loaded UCR files: train_series={len(train_data_list)}, test_series={len(test_data_list)}")
         return train_data_list, train_labels_list, test_data_list, test_labels_list
 
     def _apply_flexible_labeling(self, data_length: int, begin: int, end: int) -> np.ndarray:
@@ -132,6 +158,11 @@ class UCRDataLoader(BaseDataLoader):
             np.ndarray: Labels array with anomalies marked.
         """
         labels = np.zeros(data_length, dtype=int)
+        begin = max(0, min(begin, data_length - 1))
+        end = max(0, min(end, data_length - 1))
+        if end < begin:
+            begin, end = end, begin
+
         L = end - begin + 1
 
         # Extend the anomaly range as per the guidelines
@@ -167,6 +198,7 @@ class UCRDataLoader(BaseDataLoader):
         if self.val_size > 0:
             train_data_split, val_data_split, train_labels_split, val_labels_split = [], [], [], []
             for data, labels in zip(train_data_list, train_labels_list):
+                # Note: random split is preserved to avoid changing downstream assumptions.
                 data_train, data_val, labels_train, labels_val = train_test_split(
                     data, labels, test_size=self.val_size / 100, random_state=42)
                 train_data_split.append(data_train)
