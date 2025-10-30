@@ -5,9 +5,9 @@ from tabulate import tabulate
 from torch import Tensor
 
 from log import Log
-from nianetvae.experiments.anomaly_detection import *
+from nianetvae.experiments.anomaly_evaluation import *
 from nianetvae.experiments.metrics_evaluation import EvaluationMetrics
-from nianetvae.experiments.anomaly_detection import AnomalyDetectionMetrics
+from nianetvae.experiments.anomaly_evaluation import AnomalyDetectionMetrics
 
 from nianetvae.models.base import BaseVAE
 
@@ -180,10 +180,8 @@ class RNNVAExperiment(LightningModule):
                 ["Precision", safe_format(self.anomaly_metrics.get('precision'))],
                 ["Recall", safe_format(self.anomaly_metrics.get('recall'))],
                 ["F1-Score", safe_format(self.anomaly_metrics.get('f1_score'))],
-                ["PR AUC", safe_format(self.anomaly_metrics.get('pr_auc'))],
                 ["PR AUC Mean", safe_format(self.anomaly_metrics.get('pr_auc_mean'))],
                 ["PR AUC Std", safe_format(self.anomaly_metrics.get('pr_auc_std'))],
-                ["ROC AUC", safe_format(self.anomaly_metrics.get('roc_auc'))],
                 ["ROC AUC Mean", safe_format(self.anomaly_metrics.get('roc_auc_mean'))],
                 ["ROC AUC Std", safe_format(self.anomaly_metrics.get('roc_auc_std'))],
             ]

@@ -90,8 +90,8 @@ class SQLiteConnector:
                     MAE REAL, MSE REAL, RMSE REAL, MAPE REAL,
                     RMAPE REAL, SMAPE REAL,
                     precision REAL, recall REAL, f1_score REAL,
-                    pr_auc REAL, pr_auc_mean REAL, pr_auc_std REAL,
-                    roc_auc REAL, roc_auc_mean REAL, roc_auc_std REAL,
+                    pr_auc_mean REAL, pr_auc_std REAL,
+                    roc_auc_mean REAL, roc_auc_std REAL,
                     solution_array TEXT
                 );
             ''')
@@ -281,10 +281,8 @@ class SQLiteConnector:
                 precision=anomaly.get('precision'),
                 recall=anomaly.get('recall'),
                 f1_score=anomaly.get('f1_score'),
-                pr_auc=anomaly.get('pr_auc'),
                 pr_auc_mean=anomaly.get('pr_auc_mean'),
                 pr_auc_std=anomaly.get('pr_auc_std'),
-                roc_auc=anomaly.get('roc_auc'),
                 roc_auc_mean=anomaly.get('roc_auc_mean'),
                 roc_auc_std=anomaly.get('roc_auc_std'),
             )
@@ -306,8 +304,8 @@ class SQLiteConnector:
             mae, mse, rmse, mape, rmape, smape,
             start_time, end_time, duration,
             precision=None, recall=None, f1_score=None,
-            pr_auc=None, pr_auc_mean=None, pr_auc_std=None,
-            roc_auc=None, roc_auc_mean=None, roc_auc_std=None
+            pr_auc_mean=None, pr_auc_std=None,
+            roc_auc_mean=None, roc_auc_std=None
     ):
         """
         Core insertion logic, retried on SQLITE_BUSY, but will log and continue on errors.
@@ -346,10 +344,8 @@ class SQLiteConnector:
                 'precision': float(precision) if precision is not None else None,
                 'recall': float(recall) if recall is not None else None,
                 'f1_score': float(f1_score) if f1_score is not None else None,
-                'pr_auc': float(pr_auc) if pr_auc is not None else None,
                 'pr_auc_mean': float(pr_auc_mean) if pr_auc_mean is not None else None,
                 'pr_auc_std': float(pr_auc_std) if pr_auc_std is not None else None,
-                'roc_auc': float(roc_auc) if roc_auc is not None else None,
                 'roc_auc_mean': float(roc_auc_mean) if roc_auc_mean is not None else None,
                 'roc_auc_std': float(roc_auc_std) if roc_auc_std is not None else None,
                 'solution_array': json.dumps(solution.tolist())
