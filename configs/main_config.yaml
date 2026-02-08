@@ -13,7 +13,7 @@ model_params:
 
 trainer_params:
   min_epochs: 1
-  max_epochs: 1
+  max_epochs: 5
 
 early_stop:
   monitor: "val_loss"
@@ -52,7 +52,7 @@ data_loader_params:
 
 # Dataset configuration
 dataset:
-  config_file: "configs/smap_config.yaml"
+  config_file: "configs/metropt_config.yaml"
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+
 #| Benchmark  | # datasets | # dims| Train size | Test size  | Anomaly% | Path              | Set Seq Length|
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+

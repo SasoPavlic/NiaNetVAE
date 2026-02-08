@@ -16,33 +16,57 @@ from nianetvae.dataloaders.swat_dataloader import SWATDataLoader
 from nianetvae.dataloaders.ucr_dataloader import UCRDataLoader
 from nianetvae.dataloaders.wadi_dataloader import WADIDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
+from nianetvae.dataloaders.metropt_dataloader import MetroPTDataLoader
 from nianetvae.storage.experiment_storage import SQLiteConnector
 from nianetvae.rnn_vae_architecture_search import solve_architecture_problem
 import nianetvae.experiments.metrics_evaluation
 
 
+def _load_yaml_file(path: str) -> dict:
+    with open(path, "r") as file:
+        try:
+            data = yaml.load(file, Loader=yaml.Loader)
+        except yaml.YAMLError as exc:
+            # main.py loads configs before Log.enable(); do not call Log here.
+            raise ValueError(f"Error while loading config file: {path}: {exc}") from exc
+    return data or {}
+
+
+def _err(msg: str) -> None:
+    # main.py can error before Log.enable(); keep this stderr-only and dependency-free.
+    import sys
+
+    sys.stderr.write(str(msg).rstrip() + "\n")
+
+
 def select_dataloader(config):
     dataset_name = config["data_params"].get("dataset_name", "")
+    dataset_key = str(dataset_name).strip()
+    dataset_key_l = dataset_key.lower()
 
     # Define a mapping of dataset types to DataLoader classes
     dataloader_switch = {
-        "YahooA1": YahooA1DataLoader,
-        "KPI": KPIDataLoader,
-        "MSL": SMABandMSDataLoader,
-        "SMAP": SMABandMSDataLoader,  # Use the same data loader for SMAP & MSL
-        "SMD": SMDDataLoader,
-        "UCR": UCRDataLoader,
-        "SWAT": SWATDataLoader,
-        "WADI": WADIDataLoader,
-        "NAB": NABDataLoader,
+        "yahooa1": YahooA1DataLoader,
+        "kpi": KPIDataLoader,
+        "msl": SMABandMSDataLoader,
+        "smap": SMABandMSDataLoader,  # Use the same data loader for SMAP & MSL
+        "smd": SMDDataLoader,
+        "ucr": UCRDataLoader,
+        "swat": SWATDataLoader,
+        "wadi": WADIDataLoader,
+        "nab": NABDataLoader,
+        "metropt": MetroPTDataLoader,
         # Add other datasets as needed
     }
 
     # Get the appropriate DataLoader class based on the dataset_name
-    DataLoaderClass = dataloader_switch.get(dataset_name)
+    DataLoaderClass = dataloader_switch.get(dataset_key_l)
 
     if DataLoaderClass is None:
-        raise ValueError(f"Unsupported dataset name: {dataset_name}")
+        raise ValueError(
+            f"Unsupported dataset name: {dataset_name!r}. "
+            f"Expected one of: {sorted(dataloader_switch.keys())}"
+        )
 
     # Initialize the DataLoader with the corresponding parameters
     return DataLoaderClass(**config["data_params"])
@@ -73,32 +97,65 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Load main configuration
-    with open(args.filename, 'r') as file:
-        try:
-            config = yaml.load(file, Loader=yaml.Loader)  # yaml.safe_load(file)
-        except yaml.YAMLError as exc:
-            Log.error("Error while loading config file")
-            Log.error(exc)
-            exit(1)
+    try:
+        config = _load_yaml_file(args.filename)
+    except Exception:
+        _err(f"Failed to load config: {args.filename}")
+        exit(1)
 
-    # Load dataset-specific configuration
-    dataset_config_file = config['dataset']['config_file']
-    with open(dataset_config_file, 'r') as file:
-        try:
-            dataset_config = yaml.load(file, Loader=yaml.Loader)
-        except yaml.YAMLError as exc:
-            Log.error(f"Error while loading dataset config file: {dataset_config_file}")
-            Log.error(exc)
-            exit(1)
+    # Load dataset-specific configuration. Support chained configs where the loaded dataset config
+    # points to another dataset.config_file (common "entrypoint wrapper" pattern).
+    seen = set()
+    for _ in range(5):  # prevent infinite loops
+        dataset_cfg_path = (config.get("dataset") or {}).get("config_file")
+        if not dataset_cfg_path:
+            break
 
-    # Merge dataset_config into config
-    config.update(dataset_config)
+        import os
+
+        norm_path = os.path.normpath(str(dataset_cfg_path))
+        if norm_path in seen:
+            _err(f"Detected recursive dataset config_file reference: {dataset_cfg_path}")
+            exit(1)
+        seen.add(norm_path)
+        try:
+            dataset_config = _load_yaml_file(dataset_cfg_path)
+        except Exception:
+            _err(f"Failed to load dataset config: {dataset_cfg_path}")
+            exit(1)
+        config.update(dataset_config)
+
+        # Only continue chaining if the loaded dataset config itself points to another config_file.
+        next_cfg = (dataset_config.get("dataset") or {}).get("config_file")
+        if not next_cfg:
+            # Prevent re-loading the same dataset config on the next loop iteration.
+            if isinstance(config.get("dataset"), dict):
+                config["dataset"].pop("config_file", None)
+            break
 
     # Merge shared data loader parameters into data_params
     shared_data_loader_params = config.get('data_loader_params', {})
     if 'data_params' not in config:
         config['data_params'] = {}
     config['data_params'].update(shared_data_loader_params)
+
+    # Optional: allow dataset configs to control anomaly-metrics computation without overriding exp_params.
+    # This keeps dataset configs "data_params-only" while still enabling MetroPT-style runs that do not
+    # have ground-truth anomaly labels.
+    if "compute_anomaly_metrics" in config.get("data_params", {}):
+        config.setdefault("exp_params", {})
+        compute_flag = config["data_params"].get("compute_anomaly_metrics")
+        config["exp_params"]["compute_anomaly_metrics"] = bool(compute_flag)
+        # Avoid passing this key into dataloaders (even though most accept **kwargs).
+        config["data_params"].pop("compute_anomaly_metrics", None)
+
+    # Validate that the dataset config provided the required keys before running anything expensive.
+    if not config.get("data_params", {}).get("dataset_name"):
+        _err(
+            "Missing required config key: data_params.dataset_name. "
+            "Ensure your dataset config file defines data_params.dataset_name (e.g., 'MetroPT')."
+        )
+        exit(1)
 
     # Continue with the rest of the code
     config['logging_params']['save_dir'] += '/' + RUN_UUID + '/'
@@ -121,11 +178,15 @@ if __name__ == '__main__':
     datamodule = select_dataloader(config)
     datamodule.setup()
 
+    # Allow dataloaders to override inferred feature dimensionality (e.g., rolling-feature datasets).
+    if hasattr(datamodule, "n_features") and getattr(datamodule, "n_features"):
+        config["data_params"]["n_features"] = int(getattr(datamodule, "n_features"))
+
     nianetvae.rnn_vae_architecture_search.RUN_UUID = RUN_UUID
     nianetvae.rnn_vae_architecture_search.config = config
     nianetvae.rnn_vae_architecture_search.conn = conn
     nianetvae.rnn_vae_architecture_search.datamodule = datamodule
-    nianetvae.rnn_vae_architecture_search.dataset_name = dataset_config['data_params']['dataset_name']
+    nianetvae.rnn_vae_architecture_search.dataset_name = config["data_params"]["dataset_name"]
 
     # TODO Can be deleted after double checking
     algorithms = []

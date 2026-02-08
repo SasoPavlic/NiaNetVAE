@@ -108,13 +108,17 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
             continue
         conn.update_min_max(dataset_name, alg_name, metric_name, value)
 
-    # Update database with anomaly metrics (skip None or infinity‐sentinel)
-    for metric_name, value in experiment.anomaly_metrics.items():
-        Log.debug(f"Updating database for anomaly metric: {metric_name}, value: {value}")
-        if value is None or (isinstance(value, float) and math.isnan(value)) or value == int(9e10):
-            Log.warning(f"Skipping observed‐min/max update for anomaly metric '{metric_name}': invalid value {value}")
-            continue
-        conn.update_min_max(dataset_name, alg_name, metric_name, value)
+    anomaly_metrics = getattr(experiment, "anomaly_metrics", None)
+    if isinstance(anomaly_metrics, dict) and anomaly_metrics:
+        # Update database with anomaly metrics (skip None, NaN or infinity‐sentinel)
+        for metric_name, value in anomaly_metrics.items():
+            Log.debug(f"Updating database for anomaly metric: {metric_name}, value: {value}")
+            if value is None or (isinstance(value, float) and math.isnan(value)) or value == int(9e10):
+                Log.warning(
+                    f"Skipping observed‐min/max update for anomaly metric '{metric_name}': invalid value {value}"
+                )
+                continue
+            conn.update_min_max(dataset_name, alg_name, metric_name, value)
 
     # Normalize all metrics
     normalized_metrics = {}
@@ -128,15 +132,16 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
             Log.error(f"Error normalizing metric {metric_name}: {e}")
             normalized_metrics[metric_name] = 1.0
 
-    for metric_name, value in experiment.anomaly_metrics.items():
-        try:
-            normalized_metrics[metric_name] = compute_normalized_metric(
-                metric_name, value, False, conn, dataset_name, alg_name
-            )
-            Log.debug(f"Normalized metric {metric_name}: {normalized_metrics[metric_name]}")
-        except Exception as e:
-            Log.error(f"Error normalizing metric {metric_name}: {e}")
-            normalized_metrics[metric_name] = 1.0
+    if isinstance(anomaly_metrics, dict) and anomaly_metrics:
+        for metric_name, value in anomaly_metrics.items():
+            try:
+                normalized_metrics[metric_name] = compute_normalized_metric(
+                    metric_name, value, False, conn, dataset_name, alg_name
+                )
+                Log.debug(f"Normalized metric {metric_name}: {normalized_metrics[metric_name]}")
+            except Exception as e:
+                Log.error(f"Error normalizing metric {metric_name}: {e}")
+                normalized_metrics[metric_name] = 1.0
 
     # Ensure metrics_to_calculate is always a list
     metrics_to_calculate = config['nia_search']['metrics']

@@ -54,6 +54,7 @@ from nianetvae.dataloaders.swat_dataloader import SWATDataLoader
 from nianetvae.dataloaders.ucr_dataloader import UCRDataLoader
 from nianetvae.dataloaders.wadi_dataloader import WADIDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
+from nianetvae.dataloaders.metropt_dataloader import MetroPTDataLoader
 
 
 # ============================================================
@@ -91,20 +92,25 @@ def dataset_config_path_from_name(name: str) -> str:
 def select_dataloader(config: dict):
     """Same mapping logic as in main.py."""
     dataset_name = config["data_params"].get("dataset_name", "")
+    dataset_key = str(dataset_name).strip().lower()
     dataloader_switch = {
-        "YahooA1": YahooA1DataLoader,
-        "KPI": KPIDataLoader,
-        "MSL": SMABandMSDataLoader,
-        "SMAP": SMABandMSDataLoader,
-        "SMD": SMDDataLoader,
-        "UCR": UCRDataLoader,
-        "SWAT": SWATDataLoader,
-        "WADI": WADIDataLoader,
-        "NAB": NABDataLoader,
+        "yahooa1": YahooA1DataLoader,
+        "kpi": KPIDataLoader,
+        "msl": SMABandMSDataLoader,
+        "smap": SMABandMSDataLoader,
+        "smd": SMDDataLoader,
+        "ucr": UCRDataLoader,
+        "swat": SWATDataLoader,
+        "wadi": WADIDataLoader,
+        "nab": NABDataLoader,
+        "metropt": MetroPTDataLoader,
     }
-    DataLoaderClass = dataloader_switch.get(dataset_name)
+    DataLoaderClass = dataloader_switch.get(dataset_key)
     if DataLoaderClass is None:
-        raise ValueError(f"Unsupported dataset name: {dataset_name}")
+        raise ValueError(
+            f"Unsupported dataset name: {dataset_name!r}. "
+            f"Expected one of: {sorted(dataloader_switch.keys())}"
+        )
     return DataLoaderClass(**config["data_params"])
 
 
@@ -334,6 +340,13 @@ def main():
     shared_data_loader_params = config.get("data_loader_params", {})
     config.setdefault("data_params", {})
     config["data_params"].update(shared_data_loader_params)
+
+    # Allow dataset configs to control anomaly-metrics computation without overriding exp_params.
+    if "compute_anomaly_metrics" in config.get("data_params", {}):
+        config.setdefault("exp_params", {})
+        compute_flag = config["data_params"].get("compute_anomaly_metrics")
+        config["exp_params"]["compute_anomaly_metrics"] = bool(compute_flag)
+        config["data_params"].pop("compute_anomaly_metrics", None)
 
     # ---------- Validate/echo key paths ----------
     data_path = config["data_params"].get("data_path")

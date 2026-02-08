@@ -1,0 +1,45 @@
+# MetroPT dataset configuration for NiaNetVAE.
+#
+# This follows the same pattern as other dataset configs in this repo: it only defines `data_params`.
+# All other settings (trainer/search/logging/exp_params) should come from `configs/main_config.yaml`.
+#
+# Per-maint cycle semantics (cycle_id = j, 1-based by Davari order #1..#21):
+#   post_train  = [end_j, min(end_j + post_train_minutes, start_{j+1}))
+#   after_maint = [end(post_train), start_{j+1})  (or until end of data if j is the last window)
+#   Train phases: {0,1}; Test phases: {0}; phase 2 is excluded everywhere.
+
+data_params:
+  dataset_name: "MetroPT"
+  # Path to MetroPT3.csv (works when running from the NiaNetVAE/ directory).
+  data_path: "data/metropt_dataset/MetroPT3.csv"
+  seq_len: 200
+  # Placeholder; this will be overwritten at runtime based on engineered rolling features.
+  n_features: 96
+
+  # Disable anomaly metrics for MetroPT runs (no ground-truth labels in this integration).
+  # This value is mapped into `exp_params.compute_anomaly_metrics` by main.py.
+  compute_anomaly_metrics: false
+
+  # Feature engineering (must match metropt-pdm-framework).
+  rolling_window: "60s"
+
+  # Split semantics
+  train_minutes: 1440
+  post_train_minutes: 1440
+  pre_maint_minutes: 120
+
+  # Regime: "single" or "per_maint"
+  regime: "single"
+  # Used only when regime="per_maint"
+  cycle_id: 1
+
+  # Sliding window stride to reduce window explosion.
+  stride: 10
+
+  # Optional CSV parsing controls
+  timestamp_col: null
+  drop_unnamed_index: true
+
+  # Phase filters (0=normal,1=pre-maint,2=maintenance)
+  train_phases: [0, 1]
+  test_phases: [0]
