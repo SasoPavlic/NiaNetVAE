@@ -17,7 +17,7 @@ from nianetvae.dataloaders.ucr_dataloader import UCRDataLoader
 from nianetvae.dataloaders.wadi_dataloader import WADIDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.dataloaders.metropt_dataloader import MetroPTDataLoader
-from nianetvae.storage.experiment_storage import SQLiteConnector
+from nianetvae.storage.experiment_storage import get_db_connector
 from nianetvae.rnn_vae_architecture_search import solve_architecture_problem
 import nianetvae.experiments.metrics_evaluation
 
@@ -195,7 +195,7 @@ if __name__ == '__main__':
     if db_dataset_name != base_dataset_name:
         Log.info(f"DB dataset name: {db_dataset_name} (base dataset: {base_dataset_name})")
 
-    conn = SQLiteConnector(config['logging_params']['db_storage'], f"solutions")  # _{RUN_UUID}")
+    conn = get_db_connector(config, "solutions")
     seed_everything(config['exp_params']['manual_seed'], True)
 
     datamodule = select_dataloader(config)

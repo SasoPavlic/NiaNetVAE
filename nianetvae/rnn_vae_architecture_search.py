@@ -253,7 +253,7 @@ class RNNVAEArchitectureMultiObj(Problem):
                     experiment = RNNVAExperiment(model, self.dataset_name, "NSGA2", **self.config)
                     trainer = Trainer(
                         enable_progress_bar=True,
-                        accelerator="cuda",
+                        accelerator="gpu" if torch.cuda.is_available() else "cpu",
                         devices=1,
                         default_root_dir=path,
                         log_every_n_steps=50,

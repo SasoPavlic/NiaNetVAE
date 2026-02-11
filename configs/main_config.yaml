@@ -13,7 +13,7 @@ model_params:
 
 trainer_params:
   min_epochs: 1
-  max_epochs: 5
+  max_epochs: 1
 
 early_stop:
   monitor: "val_loss"
@@ -40,6 +40,14 @@ logging_params:
   logger_file: "RNNAutoencoder.log"
   save_dir: "logs"
   db_storage: "logs/solutions.db"
+  db_backend: "postgres"
+  db_params:
+    host: "host.domain"
+    port: 1111
+    dbname: "nianetvae"
+    user: "nianetvae"
+    password: "passwordstrong"
+    sslmode: "disable"
 
 # Shared Data Loader parameters
 data_loader_params:

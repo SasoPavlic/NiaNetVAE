@@ -2,7 +2,8 @@ setuptools
 PyYAML
 torch==2.1.1+cu121
 torchvision==0.16.1+cu121
-numpy
+numpy<2
+psycopg2-binary
 torchmetrics
 tabulate
 pandas
