@@ -93,6 +93,10 @@ if __name__ == '__main__':
                         dest="metrics",
                         metavar='list_of_strings',
                         help='Metrics to calculate (comma-separated)')
+    parser.add_argument('--cycle-id',
+                        dest="cycle_id",
+                        type=int,
+                        help='MetroPT cycle id (1-based). When set, regime is forced to per_maint.')
 
     args = parser.parse_args()
 
@@ -139,6 +143,11 @@ if __name__ == '__main__':
         config['data_params'] = {}
     config['data_params'].update(shared_data_loader_params)
 
+    # CLI override for MetroPT cycle: force per_maint and set cycle_id.
+    if args.cycle_id is not None:
+        config['data_params']['cycle_id'] = int(args.cycle_id)
+        config['data_params']['regime'] = "per_maint"
+
     # Optional: allow dataset configs to control anomaly-metrics computation without overriding exp_params.
     # This keeps dataset configs "data_params-only" while still enabling MetroPT-style runs that do not
     # have ground-truth anomaly labels.
@@ -157,6 +166,18 @@ if __name__ == '__main__':
         )
         exit(1)
 
+    # DB dataset naming for per-cycle isolation (single shared SQLite).
+    base_dataset_name = str(config["data_params"]["dataset_name"])
+    regime = str(config["data_params"].get("regime", "")).strip().lower()
+    cycle_id = config["data_params"].get("cycle_id")
+    db_dataset_name = base_dataset_name
+    if regime == "per_maint" and cycle_id is not None:
+        try:
+            cid = int(cycle_id)
+            db_dataset_name = f"{base_dataset_name}_cycle{cid:02d}"
+        except Exception:
+            db_dataset_name = base_dataset_name
+
     # Continue with the rest of the code
     config['logging_params']['save_dir'] += '/' + RUN_UUID + '/'
     Path(config['logging_params']['save_dir']).mkdir(parents=True, exist_ok=True)
@@ -171,6 +192,8 @@ if __name__ == '__main__':
 
     Log.header("NiaNetVAE settings")
     Log.info(config)
+    if db_dataset_name != base_dataset_name:
+        Log.info(f"DB dataset name: {db_dataset_name} (base dataset: {base_dataset_name})")
 
     conn = SQLiteConnector(config['logging_params']['db_storage'], f"solutions")  # _{RUN_UUID}")
     seed_everything(config['exp_params']['manual_seed'], True)
@@ -186,7 +209,7 @@ if __name__ == '__main__':
     nianetvae.rnn_vae_architecture_search.config = config
     nianetvae.rnn_vae_architecture_search.conn = conn
     nianetvae.rnn_vae_architecture_search.datamodule = datamodule
-    nianetvae.rnn_vae_architecture_search.dataset_name = config["data_params"]["dataset_name"]
+    nianetvae.rnn_vae_architecture_search.dataset_name = db_dataset_name
 
     # TODO Can be deleted after double checking
     algorithms = []

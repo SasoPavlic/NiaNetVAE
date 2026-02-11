@@ -32,7 +32,8 @@ RUN pip3 install -r requirements.txt --extra-index-url https://download.pytorch.
 RUN mkdir data
 RUN mkdir configs
 COPY configs /app/configs
-COPY data /app/data
+# Data is expected to be mounted at runtime (e.g., -B /host/data:/app/data).
+# Keeping the directory for convenience, but do not COPY large datasets into the image.
 
 # The code to run when container is started:
 COPY nianetvae/storage /app/nianetvae/storage

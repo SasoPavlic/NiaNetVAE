@@ -361,7 +361,7 @@ def solve_architecture_problem(selected_algorithms):
     Log.info(f"Solutions: {res.X}")
 
     # Retrieve the best solution from the database (using your existing criteria).
-    best_solution, best_algorithm = conn.best_results()
+    best_solution, best_algorithm = conn.best_results(dataset_name)
     best_model = RNNVAE(best_solution, **config)
     model_file = config['logging_params']['save_dir'] + f"{dataset_name}_NSGA2_{best_model.hash_id}.pt"
     torch.save(best_model.state_dict(), model_file)

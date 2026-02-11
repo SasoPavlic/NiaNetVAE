@@ -159,14 +159,19 @@ class SQLiteConnector:
                 conn.close()
 
     @_retry_db()
-    def best_results(self):
+    def best_results(self, dataset_name: str):
         conn = None
         try:
             conn = self._get_connection()
             df = pd.read_sql_query(
-                f"SELECT solution_array, algorithm_name, MIN(fitness) AS min_fitness FROM {self.table_name}",
-                conn
+                f"SELECT solution_array, algorithm_name, fitness "
+                f"FROM {self.table_name} WHERE dataset_name = ? "
+                f"ORDER BY fitness ASC LIMIT 1",
+                conn,
+                params=(dataset_name,)
             )
+            if df.empty:
+                return None, None
             sol = np.array(json.loads(df['solution_array'][0]))
             return sol, df['algorithm_name'][0]
         except Exception as e:
