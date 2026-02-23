@@ -72,6 +72,45 @@ def select_dataloader(config):
     return DataLoaderClass(**config["data_params"])
 
 
+def _as_csv(values) -> str:
+    if values is None:
+        return ""
+    if isinstance(values, str):
+        return values
+    try:
+        return ",".join(str(v) for v in values)
+    except Exception:
+        return str(values)
+
+
+def _value_or_na(value):
+    if value is None:
+        return "n/a"
+    if isinstance(value, str) and not value.strip():
+        return "n/a"
+    return value
+
+
+def _config_summary_line(config: dict) -> str:
+    data_params = config.get("data_params", {})
+    nia_search = config.get("nia_search", {})
+    logging_params = config.get("logging_params", {})
+    parts = [
+        "CONFIG_SUMMARY",
+        f"dataset={_value_or_na(data_params.get('dataset_name'))}",
+        f"regime={_value_or_na(data_params.get('regime'))}",
+        f"cycle_id={_value_or_na(data_params.get('cycle_id'))}",
+        f"seq_len={_value_or_na(data_params.get('seq_len'))}",
+        f"batch_size={_value_or_na(data_params.get('batch_size'))}",
+        f"n_features={_value_or_na(data_params.get('n_features'))}",
+        f"population_size={_value_or_na(nia_search.get('population_size'))}",
+        f"time_limit={_value_or_na(nia_search.get('time'))}",
+        f"metrics={_as_csv(nia_search.get('metrics'))}",
+        f"db_backend={_value_or_na(logging_params.get('db_backend', 'sqlite'))}",
+    ]
+    return " ".join(parts)
+
+
 if __name__ == '__main__':
 
     RUN_UUID = uuid.uuid4().hex
@@ -183,17 +222,19 @@ if __name__ == '__main__':
     Path(config['logging_params']['save_dir']).mkdir(parents=True, exist_ok=True)
 
     Log.enable(config['logging_params'])
-    Log.info(f'Program start: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
-    Log.info(f"RUN UUID: {RUN_UUID}")
-    Log.info(f"PyTorch was compiled with CUDA version: {torch.version.cuda}")
+    regime_tag = regime or "n/a"
+    cycle_tag = cycle_id if cycle_id is not None else "n/a"
+    Log.info(
+        f"RUN_START run_uuid={RUN_UUID} dataset={base_dataset_name} "
+        f"db_dataset={db_dataset_name} regime={regime_tag} cycle_id={cycle_tag} "
+        f"started_at={datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
     cuda_available = torch.cuda.is_available()
-    Log.info(f"Is CUDA available on this system? {'Yes' if cuda_available else 'No'}")
-    Log.info(f"PyTorch version: {torch.__version__}")
-
-    Log.header("NiaNetVAE settings")
-    Log.info(config)
-    if db_dataset_name != base_dataset_name:
-        Log.info(f"DB dataset name: {db_dataset_name} (base dataset: {base_dataset_name})")
+    Log.info(
+        f"ENV torch={torch.__version__} cuda_compiled={torch.version.cuda} "
+        f"cuda_available={str(cuda_available).lower()}"
+    )
+    Log.info(_config_summary_line(config))
 
     conn = get_db_connector(config, "solutions")
     seed_everything(config['exp_params']['manual_seed'], True)
@@ -226,4 +267,4 @@ if __name__ == '__main__':
     config['nia_search']['metrics'] = metrics
     solve_architecture_problem(algorithms)
 
-    Log.info(f'\n Program end: {datetime.now().strftime("%H:%M:%S-%d/%m/%Y")}')
+    Log.info(f"RUN_END run_uuid={RUN_UUID} ended_at={datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

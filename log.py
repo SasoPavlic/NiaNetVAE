@@ -20,16 +20,30 @@ class Log:
     HEADER_R = [Fore.WHITE, Back.RED, Style.BRIGHT]
     HEADER_G = [Fore.WHITE, Back.GREEN, Style.BRIGHT]
 
+    @staticmethod
+    def _parse_level(value, default=logging.INFO):
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            parsed = getattr(logging, value.strip().upper(), None)
+            if isinstance(parsed, int):
+                return parsed
+        return default
+
     @classmethod
     def enable(cls, storage):
         colorama_init()
         cls.logger = logging.getLogger(storage['name'])
         cls.logger.setLevel(logging.DEBUG)
         cls.logger.propagate = False  # Prevent propagation to ancestor loggers
+        cls.logger.handlers.clear()
+
+        console_level = cls._parse_level(storage.get('console_level', 'INFO'), logging.INFO)
+        file_level = cls._parse_level(storage.get('file_level', 'INFO'), logging.INFO)
 
         # Stream handler for stdout (DEBUG, INFO, WARNING)
         stdout_handler = logging.StreamHandler(sys.stdout)
-        stdout_handler.setLevel(logging.DEBUG)
+        stdout_handler.setLevel(console_level)
         stdout_formatter = logging.Formatter("%(message)s")
         stdout_handler.setFormatter(stdout_formatter)
         stdout_handler.addFilter(MaxLevelFilter(logging.ERROR))
@@ -46,7 +60,8 @@ class Log:
 
         # Create and setup file handler
         file_handler = logging.FileHandler(storage['save_dir'] + storage['logger_file'])
-        file_formatter = FileFormatter("%(asctime)s\n%(message)s")
+        file_handler.setLevel(file_level)
+        file_formatter = FileFormatter("%(asctime)s %(levelname)s %(message)s")
         file_handler.setFormatter(file_formatter)
         cls.logger.addHandler(file_handler)
 
@@ -85,11 +100,9 @@ class Log:
 
 class FileFormatter(logging.Formatter):
     def plain(self, string):
-        ansi_escape = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]|[-]{2,}')
+        ansi_escape = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
         return ansi_escape.sub('', string)
 
     def format(self, record):
         message = super().format(record)
-        plain_message = self.plain(message)
-        separator = '=' * 80
-        return ''.join((separator, "\n", plain_message, "\n", separator))
+        return self.plain(message)

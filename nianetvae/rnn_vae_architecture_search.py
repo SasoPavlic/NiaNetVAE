@@ -10,7 +10,6 @@ from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.problem import Problem
 from pymoo.optimize import minimize
 from pymoo.termination import get_termination
-from tabulate import tabulate
 
 from log import Log
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment, FineTuneLearningRateFinder
@@ -22,6 +21,7 @@ config = None
 conn = None
 datamodule = None
 dataset_name = None
+PENALTY = int(9e10)
 
 
 def compute_normalized_metric(metric_name, value, is_higher_better, conn, dataset_name, alg_name):
@@ -45,13 +45,13 @@ def compute_normalized_metric(metric_name, value, is_higher_better, conn, datase
 
         # Handle cases where no min/max values are observed yet
         if min_val == float('inf') and max_val == float('-inf'):
-            Log.warning(f"No observed min/max for {metric_name}. Defaulting to value-based normalization.")
+            Log.debug(f"No observed min/max for {metric_name}. Defaulting to value-based normalization.")
             min_val, max_val = value, value  # Use current value as both bounds
         elif min_val == float('inf'):
-            Log.warning(f"No observed minimum for {metric_name}. Using current value as min.")
+            Log.debug(f"No observed minimum for {metric_name}. Using current value as min.")
             min_val = value
         elif max_val == float('-inf'):
-            Log.warning(f"No observed maximum for {metric_name}. Using current value as max.")
+            Log.debug(f"No observed maximum for {metric_name}. Using current value as max.")
             max_val = value
 
         # Handle zero range
@@ -214,42 +214,130 @@ class RNNVAEArchitectureMultiObj(Problem):
         self.datamodule = datamodule
         self.dataset_name = dataset_name
         self.iteration = 0
+        self.stats = {"trained": 0, "cached": 0, "invalid": 0, "failed": 0}
+        self.best_fitness = None
+        self.best_hash = None
         super().__init__(n_var=dimension, n_obj=2, n_constr=0, xl=0, xu=1)
+
+    @staticmethod
+    def _to_int(value, default=PENALTY):
+        try:
+            return int(round(float(value)))
+        except Exception:
+            return int(default)
+
+    @staticmethod
+    def _format_metric(value):
+        if isinstance(value, (float, np.floating)):
+            return f"{float(value):.4f}"
+        if isinstance(value, (int, np.integer)):
+            return str(int(value))
+        return str(value)
+
+    def _selected_metrics(self, experiment):
+        selected = self.config.get("nia_search", {}).get("metrics", [])
+        if isinstance(selected, str):
+            selected = [selected]
+
+        metrics = []
+        anomaly_metrics = getattr(experiment, "anomaly_metrics", {}) if experiment else {}
+
+        for metric_name in selected:
+            metric_key = str(metric_name).strip()
+            key_upper = metric_key.upper()
+            value = getattr(experiment.metrics, key_upper, None)
+            if (value is None or value == PENALTY) and isinstance(anomaly_metrics, dict):
+                if metric_key in anomaly_metrics:
+                    value = anomaly_metrics.get(metric_key)
+                elif metric_key.lower() in anomaly_metrics:
+                    value = anomaly_metrics.get(metric_key.lower())
+
+            if value is None or value == PENALTY:
+                continue
+            metrics.append(f"{metric_key}={self._format_metric(value)}")
+
+        return metrics
+
+    def _log_iteration_result(
+            self,
+            iteration,
+            hash_id,
+            status,
+            fitness,
+            error,
+            complexity,
+            duration_s=None,
+            reason=None,
+            metric_parts=None
+    ):
+        parts = [
+            "ITER_RESULT",
+            f"iter={iteration}",
+            f"hash={hash_id}",
+            f"status={status}",
+            f"fitness={self._to_int(fitness)}",
+            f"error={self._to_int(error)}",
+            f"complexity={self._to_int(complexity)}",
+        ]
+        if duration_s is not None:
+            parts.append(f"duration_s={float(duration_s):.1f}")
+        if reason:
+            parts.append(f"reason={reason}")
+        if metric_parts:
+            parts.extend(metric_parts)
+        Log.info(" ".join(parts))
 
     def _evaluate(self, X, out, *args, **kwargs):
         # X is an array of candidate solutions, shape (n_individuals, dimension)
         F = []
         for solution in X:
             self.iteration += 1
-            Log.debug("=" * 100)
-            Log.debug(f"ITERATION: {self.iteration}")
-            Log.debug(f"SOLUTION : {solution}")
+            fitness = PENALTY
+            error = PENALTY
+            complexity = PENALTY
+            status = "failed"
+            reason = None
+            duration = None
+            metric_parts = []
 
             model = RNNVAE(solution, **self.config)
-            existing_entry = self.conn.get_entries(hash_id=model.get_hash(), dataset_name=self.dataset_name)
+            model_hash = model.get_hash()
+            existing_entry = self.conn.get_entries(hash_id=model_hash, dataset_name=self.dataset_name)
 
             path = self.config['logging_params']['save_dir']
             Path(path).mkdir(parents=True, exist_ok=True)
 
             if existing_entry.shape[0] > 0:
-                error = existing_entry['error'][0]
-                complexity = existing_entry['complexity'][0]
+                status = "cached"
+                self.stats["cached"] += 1
+                error = self._to_int(existing_entry['error'][0])
+                complexity = self._to_int(existing_entry['complexity'][0])
+                if 'fitness' in existing_entry.columns:
+                    fitness = self._to_int(existing_entry['fitness'][0])
+                else:
+                    fitness = self._to_int(error + complexity)
             else:
                 # If the model configuration is invalid, assign worst values.
                 if not model.is_valid:
-                    error = int(9e10)
-                    complexity = int(9e10)
+                    status = "invalid"
+                    reason = "invalid_architecture"
+                    self.stats["invalid"] += 1
+                    error = PENALTY
+                    complexity = PENALTY
+                    fitness = PENALTY
                     self.conn.save_model_and_entry(
                         dataset_name=self.dataset_name,
                         alg_name="NSGA2",
                         iteration=self.iteration,
                         model=model,
-                        fitness=int(9e10),
+                        fitness=PENALTY,
                         solution=solution,
                         error=error,
                         complexity=complexity
                     )
                 else:
+                    status = "trained"
+                    self.stats["trained"] += 1
                     experiment = RNNVAExperiment(model, self.dataset_name, "NSGA2", **self.config)
                     trainer = Trainer(
                         enable_progress_bar=True,
@@ -266,14 +354,9 @@ class RNNVAEArchitectureMultiObj(Problem):
                         **self.config['trainer_params']
                     )
 
-                    Log.info(f"======= Training {self.config['logging_params']['name']} =======")
                     start_time = datetime.now()
-                    Log.info(f'\nTraining start: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
                     trainer.fit(experiment, datamodule=self.datamodule)
-                    Log.info(f'\nTraining end: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
-                    Log.info(f'\nTest start: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
                     trainer.test(experiment, datamodule=self.datamodule)
-                    Log.info(f'\nTest end: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
                     end_time = datetime.now()
                     duration = (end_time - start_time).total_seconds()
 
@@ -284,9 +367,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                         self.config['data_params']['n_features'],
                         self.config['data_params']['seq_len']
                     )
+                    metric_parts = self._selected_metrics(experiment)
 
-                    Log.debug(tabulate([[fitness, complexity, error]], headers=["Fitness, Complexity", "Error"],
-                                       tablefmt="pretty"))
                     self.conn.save_model_and_entry(
                         dataset_name=self.dataset_name,
                         alg_name="NSGA2",
@@ -304,8 +386,29 @@ class RNNVAEArchitectureMultiObj(Problem):
 
             # Ensure that if any value is nan, we use the worst-case penalty.
             if np.isnan(error) or np.isnan(complexity):
-                error = int(9e10)
-                complexity = int(9e10)
+                fitness = PENALTY
+                error = PENALTY
+                complexity = PENALTY
+                status = "failed"
+                reason = "nan_objective"
+                self.stats["failed"] += 1
+
+            if self.best_fitness is None or fitness < self.best_fitness:
+                self.best_fitness = self._to_int(fitness)
+                self.best_hash = model_hash
+
+            self._log_iteration_result(
+                iteration=self.iteration,
+                hash_id=model_hash,
+                status=status,
+                fitness=fitness,
+                error=error,
+                complexity=complexity,
+                duration_s=duration,
+                reason=reason,
+                metric_parts=metric_parts
+            )
+
             F.append([error, complexity])
         out["F"] = np.array(F)
 
@@ -340,7 +443,6 @@ def solve_architecture_problem(selected_algorithms):
         Log.error(f"Error parsing time limit from config: {time_str}. Ensure it is in HH:MM:SS format.")
         raise e
     termination = get_termination("time", max_time=max_time)
-    Log.info(f"Using time-based termination: {time_str} (={max_time} seconds)")
 
     # Set up the NSGA-II algorithm with the population size from config.
     algorithm = NSGA2(pop_size=config['nia_search']['population_size'])
@@ -348,7 +450,11 @@ def solve_architecture_problem(selected_algorithms):
     # Determine the number of parallel jobs (using CUDA if available).
     n_jobs = torch.cuda.device_count() if torch.cuda.is_available() else 1
 
-    Log.info("=====================================SEARCH STARTED==============================================")
+    Log.info(
+        f"SEARCH_START algorithm=NSGA2 population_size={config['nia_search']['population_size']} "
+        f"time_limit={time_str} time_limit_seconds={max_time} n_jobs={n_jobs} "
+        f"metrics={config['nia_search'].get('metrics')}"
+    )
     res = minimize(
         problem,
         algorithm,
@@ -357,12 +463,23 @@ def solve_architecture_problem(selected_algorithms):
         verbose=True,
         n_jobs=n_jobs
     )
-    Log.info("=====================================SEARCH COMPLETED============================================")
-    Log.info(f"Solutions: {res.X}")
 
     # Retrieve the best solution from the database (using your existing criteria).
     best_solution, best_algorithm = conn.best_results(dataset_name)
+    if best_solution is None:
+        Log.error(
+            f"SEARCH_DONE iterations={problem.iteration} trained={problem.stats['trained']} "
+            f"cached={problem.stats['cached']} invalid={problem.stats['invalid']} failed={problem.stats['failed']} "
+            "best_hash=None best_fitness=None no_solution=true"
+        )
+        return
+
     best_model = RNNVAE(best_solution, **config)
     model_file = config['logging_params']['save_dir'] + f"{dataset_name}_NSGA2_{best_model.hash_id}.pt"
     torch.save(best_model.state_dict(), model_file)
-    Log.info(f"Best model saved to: {model_file}")
+    Log.info(
+        f"SEARCH_DONE iterations={problem.iteration} trained={problem.stats['trained']} "
+        f"cached={problem.stats['cached']} invalid={problem.stats['invalid']} failed={problem.stats['failed']} "
+        f"best_hash={best_model.hash_id} best_fitness={problem.best_fitness}"
+    )
+    Log.info(f"BEST_MODEL_SAVED path={model_file}")

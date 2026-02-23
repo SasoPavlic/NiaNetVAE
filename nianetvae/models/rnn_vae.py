@@ -1,14 +1,10 @@
-import os
 import time
-from datetime import datetime
 import numpy as np
 import torch
 from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
-import random
 import hashlib
-from tabulate import tabulate
 
 from log import Log
 from .base import BaseVAE
@@ -96,7 +92,7 @@ class RNNVAE(BaseVAE, nn.Module):
             )
             if encoder_hidden_dims is None:
                 self.is_valid = False
-                Log.error("Invalid encoder configuration (univariate).")
+                Log.debug("Invalid encoder configuration (univariate).")
                 self.bottleneck_size = None
                 self.hidden_dims = []
                 self.encoding_layers = None
@@ -113,7 +109,7 @@ class RNNVAE(BaseVAE, nn.Module):
             )
             if encoder_hidden_dims is None:
                 self.is_valid = False
-                Log.error("Invalid encoder configuration (multivariate).")
+                Log.debug("Invalid encoder configuration (multivariate).")
                 self.bottleneck_size = None
                 self.hidden_dims = []
                 self.encoding_layers = None
@@ -139,34 +135,13 @@ class RNNVAE(BaseVAE, nn.Module):
         )
 
         self.get_hash()
-        outputs = [[
-            self.hash_id,
-            self.layer_type,
-            self.encoder_layer_step,
-            self.encoder_num_layers,
-            self.decoder_num_layers,
-            self.decoder_layer_step,
-            self.activation_name,
-            self.optimizer_name,
-            self.bottleneck_size,
-            self.encoding_layers,
-            self.decoding_layers
-        ]]
-        Log.info(tabulate(
-            outputs,
-            headers=[
-                "ID", "Layer type (y1)",
-                "Encoder step (y2)",
-                "Encoder layers (y5)",
-                "Decoder layers (y3)",
-                "Decoder step (y4)",
-                "Activation (y6)",
-                "Optimizer (y7)",
-                "Bottleneck size",
-                "Encoder", "Decoder"
-            ],
-            tablefmt="pretty"
-        ))
+        Log.debug(
+            f"MODEL_DECODE hash={self.hash_id} layer_type={self.layer_type} "
+            f"enc_step={self.encoder_layer_step} enc_layers={self.encoder_num_layers} "
+            f"dec_layers={self.decoder_num_layers} dec_step={self.decoder_layer_step} "
+            f"activation={self.activation_name} optimizer={self.optimizer_name} "
+            f"bottleneck_size={self.bottleneck_size}"
+        )
 
     def get_hash(self):
         self.hash_id = hashlib.sha1(
@@ -292,12 +267,12 @@ class RNNVAE(BaseVAE, nn.Module):
         hidden_dims = []
         current_dim = input_dim
         if current_dim - layer_step * num_layers <= 0:
-            Log.error("Invalid encoder configuration: non-positive hidden dimension.")
+            Log.debug("Invalid encoder configuration: non-positive hidden dimension.")
             return None
         for _ in range(num_layers):
             current_dim -= layer_step
             if current_dim <= 0:
-                Log.error("Invalid encoder configuration: layer_step too large.")
+                Log.debug("Invalid encoder configuration: layer_step too large.")
                 return None
             hidden_dims.append(int(current_dim))
         Log.debug(f"Encoder hidden dims: {hidden_dims}")
@@ -310,7 +285,7 @@ class RNNVAE(BaseVAE, nn.Module):
         hidden_dims = []
         current_dim = start_dim
         if current_dim + layer_step * num_layers < end_dim:
-            Log.error("Invalid decoder configuration: cannot reach output dimension.")
+            Log.debug("Invalid decoder configuration: cannot reach output dimension.")
             return None
         for idx in range(num_layers):
             current_dim += layer_step
@@ -351,7 +326,7 @@ class RNNVAE(BaseVAE, nn.Module):
             )
             if self.decoder_hidden_dims is None:
                 self.is_valid = False
-                Log.error("Invalid asymmetrical decoder configuration.")
+                Log.debug("Invalid asymmetrical decoder configuration.")
                 return
 
         decoder_input_size = self.bottleneck_size

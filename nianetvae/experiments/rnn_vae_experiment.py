@@ -31,13 +31,13 @@ class FineTuneLearningRateFinder(LearningRateFinder):
                 elif loss > self.previous_loss:
                     Log.debug(f"\nLoss increased from {self.previous_loss} to {loss}")
                     self.lr_find(trainer, pl_module)
-                    Log.info(f"Learning rate: {pl_module.learning_rate}")
+                    Log.debug(f"Learning rate: {pl_module.learning_rate}")
 
                 self.previous_loss = pl_module.train_loss['loss'].item()
 
             else:
                 self.lr_find(trainer, pl_module)
-                Log.info(f"Learning rate: {pl_module.learning_rate}")
+                Log.debug(f"Learning rate: {pl_module.learning_rate}")
 
 
 class RNNVAExperiment(LightningModule):
@@ -171,7 +171,7 @@ class RNNVAExperiment(LightningModule):
     def on_test_end(self):
         if not self.compute_anomaly_metrics or self.anomaly_detection_metrics is None:
             self.anomaly_metrics = {}
-            Log.info("Anomaly detection metrics are disabled (exp_params.compute_anomaly_metrics=false).")
+            Log.debug("Anomaly detection metrics are disabled (exp_params.compute_anomaly_metrics=false).")
             return
 
         # Compute anomaly detection metrics

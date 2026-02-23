@@ -222,7 +222,7 @@ class SQLiteConnector:
             ''', (dataset_name, algorithm_name, metric_name))
             row = cur.fetchone()
             if row is None:
-                Log.info(f"No existing min/max for {metric_name}. Returning defaults.")
+                Log.debug(f"No existing min/max for {metric_name}. Returning defaults.")
                 return float('inf'), float('-inf')
             return row
         except Exception as e:
@@ -542,7 +542,7 @@ class PostgresConnector:
             ''', (dataset_name, algorithm_name, metric_name))
             row = cur.fetchone()
             if row is None:
-                Log.info(f"No existing min/max for {metric_name}. Returning defaults.")
+                Log.debug(f"No existing min/max for {metric_name}. Returning defaults.")
                 return float('inf'), float('-inf')
             return row
         except Exception as e:

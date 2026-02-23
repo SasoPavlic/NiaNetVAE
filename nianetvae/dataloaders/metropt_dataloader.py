@@ -311,6 +311,7 @@ class MetroPTDataLoader(BaseDataLoader):
 
         self.n_features: Optional[int] = None
         self.split_info: Dict[str, object] = {}
+        self._summary_logged = False
 
         self.train_dataset = None
         self.val_dataset = None
@@ -523,39 +524,19 @@ class MetroPTDataLoader(BaseDataLoader):
 
         self.test_dataset = test_ds
 
-        # Log a concise summary for reproducibility/debugging.
-        Log.header("MetroPTDataLoader summary")
-        Log.info(
-            {
-                "regime": self.split_info.get("regime"),
-                "cycle_id": self.split_info.get("cycle_id"),
-                "n_features": self.n_features,
-                "seq_len": self.seq_len,
-                "stride": self.stride,
-                "rolling_window": self.rolling_window,
-                "baseline_start": str(self.split_info.get("baseline_start")),
-                "baseline_end": str(self.split_info.get("baseline_end")),
-                "post_train_start": str(self.split_info.get("post_train_start")),
-                "post_train_end": str(self.split_info.get("post_train_end")),
-                "test_start": str(self.split_info.get("test_start")),
-                "test_end": str(self.split_info.get("test_end")),
-                "rows": {
-                    "baseline_time": self.split_info.get("baseline_rows_time"),
-                    "baseline_train_phase": self.split_info.get("baseline_rows_train_phase"),
-                    "train": self.split_info.get("train_rows"),
-                    "test": self.split_info.get("test_rows"),
-                },
-                "segments": {
-                    "train": self.split_info.get("train_segments"),
-                    "test": self.split_info.get("test_segments"),
-                },
-                "windows": {
-                    "train": int(len(self.train_dataset)) if self.train_dataset is not None else 0,
-                    "val": int(len(self.val_dataset)) if self.val_dataset is not None else 0,
-                    "test": int(len(self.test_dataset)) if self.test_dataset is not None else 0,
-                },
-            }
-        )
+        # Log once per datamodule instance to avoid repeated spam from trainer setup cycles.
+        if not self._summary_logged:
+            Log.info(
+                "DATALOADER_SUMMARY "
+                f"dataset={self.dataset_name} regime={self.split_info.get('regime')} cycle_id={self.split_info.get('cycle_id')} "
+                f"n_features={self.n_features} seq_len={self.seq_len} stride={self.stride} rolling_window={self.rolling_window} "
+                f"train_rows={self.split_info.get('train_rows')} test_rows={self.split_info.get('test_rows')} "
+                f"train_segments={self.split_info.get('train_segments')} test_segments={self.split_info.get('test_segments')} "
+                f"train_windows={int(len(self.train_dataset)) if self.train_dataset is not None else 0} "
+                f"val_windows={int(len(self.val_dataset)) if self.val_dataset is not None else 0} "
+                f"test_windows={int(len(self.test_dataset)) if self.test_dataset is not None else 0}"
+            )
+            self._summary_logged = True
 
     def train_dataloader(self):
         if not self.train_dataset:

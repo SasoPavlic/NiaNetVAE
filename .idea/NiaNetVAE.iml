@@ -3,6 +3,22 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.idea/copilot/chatSessions" />
+      <excludeFolder url="file://$MODULE_DIR$/.idea/dataSources" />
+      <excludeFolder url="file://$MODULE_DIR$/.idea/queries" />
+      <excludeFolder url="file://$MODULE_DIR$/.run" />
+      <excludeFolder url="file://$MODULE_DIR$/data/kpi_dataset" />
+      <excludeFolder url="file://$MODULE_DIR$/data/mba_dataset" />
+      <excludeFolder url="file://$MODULE_DIR$/data/metropt_dataset" />
+      <excludeFolder url="file://$MODULE_DIR$/data/msds_dataset" />
+      <excludeFolder url="file://$MODULE_DIR$/data/nab_dataset" />
+      <excludeFolder url="file://$MODULE_DIR$/data/smap_and_msl_dataset" />
+      <excludeFolder url="file://$MODULE_DIR$/data/smd_dataset" />
+      <excludeFolder url="file://$MODULE_DIR$/data/swat_dataset" />
+      <excludeFolder url="file://$MODULE_DIR$/data/ucr_dataset" />
+      <excludeFolder url="file://$MODULE_DIR$/data/wadi_dataset" />
+      <excludeFolder url="file://$MODULE_DIR$/helpers/sewerage_dataset" />
+      <excludeFolder url="file://$MODULE_DIR$/logs" />
+      <excludeFolder url="file://$MODULE_DIR$/results/backups" />
     </content>
     <orderEntry type="jdk" jdkName="Poetry (NiaNetVAE)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
