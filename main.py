@@ -135,7 +135,7 @@ if __name__ == '__main__':
     parser.add_argument('--cycle-id',
                         dest="cycle_id",
                         type=int,
-                        help='MetroPT cycle id (1-based). When set, regime is forced to per_maint.')
+                        help='MetroPT cycle id for per_maint (0=pre_W1, 1..21=maintenance windows). When set, regime is forced to per_maint.')
 
     args = parser.parse_args()
 

@@ -13,7 +13,8 @@ Two regimes are supported:
       Train: baseline = first train_minutes from dataset start (inclusive cutoff), phases in train_phases.
       Test:  (baseline_end, start_W1), phases in test_phases (typically {0}).
   - regime="per_maint"
-      cycle_id is 1-based and maps to Davari window order (#1..#21).
+      cycle_id=0 maps to pre_W1 (baseline-trained model tested on baseline_end..W1_start).
+      cycle_id=1..21 maps to Davari window order (#1..#21).
       post_train = [end_j, min(end_j + post_train_minutes, start_{j+1}))
       after_maint = [end(post_train), start_{j+1})   (or until end of data if j is the last window)
       Train: baseline ∪ post_train, phases in train_phases (typically {0,1}).
@@ -359,6 +360,8 @@ class MetroPTDataLoader(BaseDataLoader):
             "cycle_id": self.cycle_id if self.regime == "per_maint" else None,
             "baseline_start": base_start,
             "baseline_end": base_end,
+            "train_phases": sorted(train_phases),
+            "test_phases": sorted(test_phases),
         }
 
         if self.regime == "single":
@@ -381,44 +384,66 @@ class MetroPTDataLoader(BaseDataLoader):
             )
 
         elif self.regime == "per_maint":
-            if self.cycle_id < 1 or self.cycle_id > len(windows):
+            if self.cycle_id < 0 or self.cycle_id > len(windows):
                 raise ValueError(
-                    f"cycle_id out of range: got {self.cycle_id}, expected 1..{len(windows)}"
+                    f"cycle_id out of range: got {self.cycle_id}, expected 0..{len(windows)}"
                 )
-            j = self.cycle_id - 1
-            wj_start, wj_end, wid, _sev = windows[j]
-            is_last = j == len(windows) - 1
-            next_start = windows[j + 1][0] if not is_last else pd.to_datetime(index.max())
-            next_start = pd.to_datetime(next_start)
-
-            post_train_start = pd.to_datetime(wj_end)
-            post_train_end = post_train_start + pd.Timedelta(minutes=float(self.post_train_minutes))
-            if post_train_end > next_start:
-                post_train_end = next_start
-
-            after_start = post_train_end
-            after_end = next_start
-
-            post_train_time_mask = (index >= post_train_start) & (index < post_train_end)
-            if is_last:
-                after_time_mask = (index >= after_start) & (index <= after_end)
+            if self.cycle_id == 0:
+                if w1_start <= base_end:
+                    raise ValueError(
+                        "Per-maint cycle_id=0 (pre_W1) test interval is empty: baseline_end is after W1 start. "
+                        f"baseline_end={base_end}, W1_start={w1_start}"
+                    )
+                test_start = base_end
+                test_end = w1_start
+                train_time_mask = baseline_mask
+                test_time_mask = (index > test_start) & (index < test_end)
+                info.update(
+                    {
+                        "maintenance_id": "pre_W1",
+                        "maintenance_start": None,
+                        "maintenance_end": None,
+                        "post_train_start": None,
+                        "post_train_end": None,
+                        "test_start": test_start,
+                        "test_end": test_end,
+                    }
+                )
             else:
-                after_time_mask = (index >= after_start) & (index < after_end)
+                j = self.cycle_id - 1
+                wj_start, wj_end, wid, _sev = windows[j]
+                is_last = j == len(windows) - 1
+                next_start = windows[j + 1][0] if not is_last else pd.to_datetime(index.max())
+                next_start = pd.to_datetime(next_start)
 
-            train_time_mask = baseline_mask | post_train_time_mask
-            test_time_mask = after_time_mask
+                post_train_start = pd.to_datetime(wj_end)
+                post_train_end = post_train_start + pd.Timedelta(minutes=float(self.post_train_minutes))
+                if post_train_end > next_start:
+                    post_train_end = next_start
 
-            info.update(
-                {
-                    "maintenance_id": wid,
-                    "maintenance_start": pd.to_datetime(wj_start),
-                    "maintenance_end": pd.to_datetime(wj_end),
-                    "post_train_start": post_train_start,
-                    "post_train_end": post_train_end,
-                    "test_start": after_start,
-                    "test_end": after_end,
-                }
-            )
+                after_start = post_train_end
+                after_end = next_start
+
+                post_train_time_mask = (index >= post_train_start) & (index < post_train_end)
+                if is_last:
+                    after_time_mask = (index >= after_start) & (index <= after_end)
+                else:
+                    after_time_mask = (index >= after_start) & (index < after_end)
+
+                train_time_mask = baseline_mask | post_train_time_mask
+                test_time_mask = after_time_mask
+
+                info.update(
+                    {
+                        "maintenance_id": wid,
+                        "maintenance_start": pd.to_datetime(wj_start),
+                        "maintenance_end": pd.to_datetime(wj_end),
+                        "post_train_start": post_train_start,
+                        "post_train_end": post_train_end,
+                        "test_start": after_start,
+                        "test_end": after_end,
+                    }
+                )
         else:
             raise ValueError(
                 f"Unsupported regime={self.regime!r}. Use 'single' or 'per_maint'."

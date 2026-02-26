@@ -126,3 +126,42 @@ def test_metropt_dataloader_per_maint_cycle_1_splits(tmp_path: Path) -> None:
     # Training mask should split into at least baseline + post-train segments.
     assert int(split.get("train_segments", 0)) >= 2
 
+
+def test_metropt_dataloader_per_maint_cycle_0_uses_phase0_test_filter(tmp_path: Path) -> None:
+    _ensure_test_logger(tmp_path)
+    csv_path = _write_synth_metropt_csv(tmp_path)
+
+    dm = MetroPTDataLoader(
+        dataset_name="MetroPT",
+        data_path=str(csv_path),
+        batch_size=16,
+        seq_len=10,
+        num_workers=0,
+        persistent_workers=False,
+        pin_memory=False,
+        val_size=20,
+        data_percentage=100,
+        rolling_window="2h",
+        train_minutes=12 * 60,
+        post_train_minutes=12 * 60,
+        pre_maint_minutes=120,
+        regime="per_maint",
+        cycle_id=0,
+        stride=2,
+        timestamp_col="timestamp",
+        drop_unnamed_index=True,
+        train_phases=(0, 1),
+        test_phases=(0,),
+    )
+    dm.setup()
+
+    split = dm.split_info
+    assert split["regime"] == "per_maint"
+    assert split["cycle_id"] == 0
+    assert split["maintenance_id"] == "pre_W1"
+    assert split["test_phases"] == [0]
+
+    assert pd.to_datetime(split["test_start"]) == pd.to_datetime(split["baseline_end"])
+    assert pd.to_datetime(split["test_end"]) == pd.Timestamp("2020-04-12 11:50:00")
+    assert int(split["test_rows"]) > 0
+

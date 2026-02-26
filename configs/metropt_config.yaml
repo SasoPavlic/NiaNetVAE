@@ -3,7 +3,9 @@
 # This follows the same pattern as other dataset configs in this repo: it only defines `data_params`.
 # All other settings (trainer/search/logging/exp_params) should come from `configs/main_config.yaml`.
 #
-# Per-maint cycle semantics (cycle_id = j, 1-based by Davari order #1..#21):
+# Per-maint cycle semantics:
+#   cycle_id = 0 => pre_W1 (baseline-trained model tested on baseline_end..W1_start)
+#   cycle_id = j => Davari order #1..#21
 #   post_train  = [end_j, min(end_j + post_train_minutes, start_{j+1}))
 #   after_maint = [end(post_train), start_{j+1})  (or until end of data if j is the last window)
 #   Train phases: {0,1}; Test phases: {0}; phase 2 is excluded everywhere.
@@ -30,7 +32,7 @@ data_params:
 
   # Regime: "single" or "per_maint"
   regime: "single"
-  # Used only when regime="per_maint"
+  # Used only when regime="per_maint" (0=pre_W1, 1..21=maintenance cycles)
   cycle_id: 1
 
   # Sliding window stride to reduce window explosion.

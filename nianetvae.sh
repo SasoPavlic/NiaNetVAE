@@ -8,7 +8,7 @@
 #SBATCH --gres=gpu:1                                             # Request 1 GPU
 #SBATCH --mem-per-gpu=50GB                                       # Memory per GPU
 #SBATCH --time=96:00:00                                          # Maximum runtime
-#SBATCH --array=1-21                                             # One job per cycle
+#SBATCH --array=0-21                                             # One job per cycle (0=pre_W1, 1..21=maintenance cycles)
 
 # === Prepare output directory ===
 OUTPUT_DIR=/d/hpc/home/sasop/outputs
