@@ -21,6 +21,11 @@ env/
 coverage.xml
 htmlcov/
 
+# Secrets
+.env
+.env.*
+!.env.example
+
 # Logs, checkpoints, outputs
 logs/
 results/

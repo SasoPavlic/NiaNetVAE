@@ -1,9 +1,12 @@
+import json
 import math
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import torch
+from lightning.pytorch import seed_everything
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import EarlyStopping
 from pymoo.algorithms.moo.nsga2 import NSGA2
@@ -22,6 +25,184 @@ conn = None
 datamodule = None
 dataset_name = None
 PENALTY = int(9e10)
+
+
+def _as_jsonable(value):
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (datetime,)):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _as_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_as_jsonable(v) for v in value]
+    return value
+
+
+def _get_git_ref() -> str | None:
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return out or None
+    except Exception:
+        return None
+
+
+def _resolve_export_dir(cfg: dict) -> Path:
+    logging_params = cfg.get("logging_params", {})
+    export_root = logging_params.get("model_export_dir", "logs/per_maint_models")
+    dataset = str(cfg.get("data_params", {}).get("dataset_name", "dataset")).strip() or "dataset"
+    regime = str(cfg.get("data_params", {}).get("regime", "")).strip().lower()
+    cycle_id = cfg.get("data_params", {}).get("cycle_id")
+
+    if regime == "per_maint" and cycle_id is not None:
+        try:
+            cycle_dir = f"cycle_{int(cycle_id):02d}"
+        except Exception:
+            cycle_dir = f"cycle_{cycle_id}"
+        return Path(export_root) / dataset / cycle_dir
+
+    run_label = RUN_UUID or datetime.now().strftime("%Y%m%d%H%M%S")
+    return Path(export_root) / dataset / f"run_{run_label}"
+
+
+def _build_final_trainer(default_root_dir: str):
+    return Trainer(
+        enable_progress_bar=True,
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        devices=1,
+        default_root_dir=default_root_dir,
+        log_every_n_steps=50,
+        logger=False,
+        enable_checkpointing=False,
+        callbacks=[
+            FineTuneLearningRateFinder(**config['fine_tune_lr_finder']),
+            EarlyStopping(**config['early_stop'], verbose=True, check_finite=True),
+        ],
+        **config['trainer_params']
+    )
+
+
+def _run_final_training(best_solution):
+    seed_everything(config['exp_params']['manual_seed'], True)
+    model = RNNVAE(best_solution, **config)
+    if not model.is_valid:
+        raise ValueError("Best solution produced an invalid model during final training.")
+
+    final_root = config['logging_params']['save_dir']
+    experiment = RNNVAExperiment(model, dataset_name, "NSGA2", **config)
+    trainer = _build_final_trainer(default_root_dir=final_root)
+
+    started_at = datetime.now()
+    trainer.fit(experiment, datamodule=datamodule)
+    trainer.test(experiment, datamodule=datamodule)
+    ended_at = datetime.now()
+    duration_s = (ended_at - started_at).total_seconds()
+
+    final_metrics = {}
+    try:
+        final_metrics = experiment.metrics.compute()
+    except Exception:
+        final_metrics = {}
+    anomaly_metrics = getattr(experiment, "anomaly_metrics", {}) or {}
+    fitness, error, complexity = calculate_fitness(
+        "NSGA2",
+        model,
+        experiment,
+        config['data_params']['n_features'],
+        config['data_params']['seq_len']
+    )
+    return {
+        "model": model,
+        "experiment": experiment,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "duration_s": duration_s,
+        "fitness": fitness,
+        "error": error,
+        "complexity": complexity,
+        "metrics": final_metrics,
+        "anomaly_metrics": anomaly_metrics,
+    }
+
+
+def _export_cycle_artifacts(
+        export_dir: Path,
+        model: RNNVAE,
+        best_solution,
+        best_algorithm,
+        search_result: dict,
+        final_result: dict,
+):
+    export_dir.mkdir(parents=True, exist_ok=True)
+    model_path = export_dir / "model.pt"
+    torch.save(model.state_dict(), model_path)
+
+    data_params = config.get("data_params", {})
+    metadata = {
+        "schema_version": "1.0",
+        "dataset_name": data_params.get("dataset_name"),
+        "db_dataset_name": dataset_name,
+        "regime": data_params.get("regime"),
+        "cycle_id": data_params.get("cycle_id"),
+        "model_class": "nianetvae.models.rnn_vae.RNNVAE",
+        "solution": _as_jsonable(best_solution),
+        "hash_id": str(model.hash_id),
+        "n_features": data_params.get("n_features"),
+        "seq_len": data_params.get("seq_len"),
+        "stride": data_params.get("stride"),
+        "rolling_window": data_params.get("rolling_window"),
+        "train_minutes": data_params.get("train_minutes"),
+        "post_train_minutes": data_params.get("post_train_minutes"),
+        "pre_maint_minutes": data_params.get("pre_maint_minutes"),
+        "train_phases": data_params.get("train_phases"),
+        "test_phases": data_params.get("test_phases"),
+        "created_at": datetime.now().isoformat(),
+        "run_uuid": RUN_UUID,
+        "git_ref": _get_git_ref(),
+        "weights_file": "model.pt",
+    }
+    meta_path = export_dir / "model_meta.json"
+    meta_path.write_text(json.dumps(_as_jsonable(metadata), indent=2, sort_keys=True), encoding="utf-8")
+
+    summary = {
+        "schema_version": "1.0",
+        "created_at": datetime.now().isoformat(),
+        "run_uuid": RUN_UUID,
+        "git_ref": _get_git_ref(),
+        "algorithm": best_algorithm,
+        "dataset_name": data_params.get("dataset_name"),
+        "db_dataset_name": dataset_name,
+        "regime": data_params.get("regime"),
+        "cycle_id": data_params.get("cycle_id"),
+        "search": search_result,
+        "final_training": {
+            "started_at": final_result["started_at"],
+            "ended_at": final_result["ended_at"],
+            "duration_s": final_result["duration_s"],
+            "fitness": final_result["fitness"],
+            "error": final_result["error"],
+            "complexity": final_result["complexity"],
+            "metrics": final_result["metrics"],
+            "anomaly_metrics": final_result["anomaly_metrics"],
+        },
+        "artifacts": {
+            "weights_file": "model.pt",
+            "meta_file": "model_meta.json",
+        }
+    }
+    summary_path = export_dir / "search_summary.json"
+    summary_path.write_text(json.dumps(_as_jsonable(summary), indent=2, sort_keys=True), encoding="utf-8")
+    return model_path, meta_path, summary_path
 
 
 def compute_normalized_metric(metric_name, value, is_higher_better, conn, dataset_name, alg_name):
@@ -474,8 +655,25 @@ def solve_architecture_problem(selected_algorithms):
         )
         return
 
-    best_model = RNNVAE(best_solution, **config)
-    model_file = config['logging_params']['save_dir'] + f"{dataset_name}_NSGA2_{best_model.hash_id}.pt"
+    search_result = {
+        "iterations": problem.iteration,
+        "trained": problem.stats["trained"],
+        "cached": problem.stats["cached"],
+        "invalid": problem.stats["invalid"],
+        "failed": problem.stats["failed"],
+        "best_hash": problem.best_hash,
+        "best_fitness": problem.best_fitness,
+        "best_solution": _as_jsonable(best_solution),
+        "time_limit": time_str,
+        "time_limit_seconds": max_time,
+    }
+
+    final_result = _run_final_training(best_solution)
+    best_model = final_result["model"]
+    model_file = (
+        Path(config['logging_params']['save_dir'])
+        / f"{dataset_name}_NSGA2_{best_model.hash_id}.pt"
+    )
     torch.save(best_model.state_dict(), model_file)
     Log.info(
         f"SEARCH_DONE iterations={problem.iteration} trained={problem.stats['trained']} "
@@ -483,3 +681,19 @@ def solve_architecture_problem(selected_algorithms):
         f"best_hash={best_model.hash_id} best_fitness={problem.best_fitness}"
     )
     Log.info(f"BEST_MODEL_SAVED path={model_file}")
+
+    export_enabled = bool(config.get("logging_params", {}).get("export_enabled", False))
+    if export_enabled:
+        export_dir = _resolve_export_dir(config)
+        model_path, meta_path, summary_path = _export_cycle_artifacts(
+            export_dir=export_dir,
+            model=best_model,
+            best_solution=best_solution,
+            best_algorithm=best_algorithm,
+            search_result=search_result,
+            final_result=final_result,
+        )
+        Log.info(
+            f"MODEL_EXPORT_READY dir={export_dir} "
+            f"weights={model_path.name} meta={meta_path.name} summary={summary_path.name}"
+        )

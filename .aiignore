@@ -17,3 +17,7 @@ helpers/
 logs/
 results/
 
+# Secrets
+.env
+.env.*
+!.env.example

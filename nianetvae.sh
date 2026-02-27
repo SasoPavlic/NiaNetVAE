@@ -23,10 +23,19 @@ echo "Cycle ID: ${SLURM_ARRAY_TASK_ID}"
 # Check GPU visibility
 srun nvidia-smi
 
+# Prepare bind mounts (mount .env if present, so app can load DB credentials inside container)
+BIND_MOUNTS="$(pwd)/logs:/app/logs,$(pwd)/data:/app/data,$(pwd)/configs:/app/configs"
+if [ -f "$(pwd)/.env" ]; then
+    BIND_MOUNTS="${BIND_MOUNTS},$(pwd)/.env:/app/.env:ro"
+    echo "Detected .env at $(pwd)/.env and mounted it to /app/.env"
+else
+    echo "No .env found at $(pwd)/.env. Postgres runs will fail until .env is provided."
+fi
+
 # Execute the Singularity container
 singularity exec --nv \
     -e \
     --pwd /app \
-    -B $(pwd)/logs:/app/logs,$(pwd)/data:/app/data,$(pwd)/configs:/app/configs \
+    -B "${BIND_MOUNTS}" \
     docker://spartan300/nianet:vaepymoo \
     python main.py -alg particle_swarm -met SMAPE --cycle-id ${SLURM_ARRAY_TASK_ID}

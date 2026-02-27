@@ -1,7 +1,7 @@
 # main_config.yaml
 nia_search:
   population_size: 100
-  time: "95:00:00"   # Termination after 95 hours (format: HH:MM:SS)
+  time: "00:30:00"   # Termination after 95 hours (format: HH:MM:SS)
   algorithms:
     - can_be_deleted
   metrics:
@@ -41,17 +41,12 @@ logging_params:
   save_dir: "logs"
   db_storage: "logs/solutions.db"
   db_backend: "postgres"
-  db_params:
-    host: "host.domain"
-    port: 1111
-    dbname: "nianetvae"
-    user: "nianetvae"
-    password: "passwordstrong"
-    sslmode: "disable"
+  export_enabled: true
+  model_export_dir: "logs/per_maint_models"
 
 # Shared Data Loader parameters
 data_loader_params:
-  data_percentage: 100
+  data_percentage: 10
   batch_size: 32
   val_size: 10
   num_workers: 0

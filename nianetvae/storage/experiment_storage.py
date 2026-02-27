@@ -21,6 +21,86 @@ except Exception:  # pragma: no cover - optional dependency
 # Your “infinity” penalty constant
 infinity = int(9e10)
 
+_DB_ENV_VAR_MAP = {
+    "host": "NIANETVAE_DB_HOST",
+    "port": "NIANETVAE_DB_PORT",
+    "dbname": "NIANETVAE_DB_NAME",
+    "user": "NIANETVAE_DB_USER",
+    "password": "NIANETVAE_DB_PASSWORD",
+    "sslmode": "NIANETVAE_DB_SSLMODE",
+}
+
+
+def _load_dotenv_if_present(path: str = ".env") -> bool:
+    """
+    Lightweight .env loader.
+    Returns True when a dotenv file was found and processed.
+    """
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as dotenv_file:
+            for raw_line in dotenv_file:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[7:].strip()
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                if not key:
+                    continue
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                    value = value[1:-1]
+                os.environ[key] = value
+        return True
+    except Exception as e:
+        Log.warning(f"Failed to parse .env file at {path}: {e}")
+        return False
+
+
+def _resolve_env_value(var_name):
+    value = os.environ.get(var_name)
+    if value is not None and str(value).strip() != "":
+        return value
+    return None
+
+
+def _postgres_params_from_env():
+    db_params = {}
+    missing_env_vars = []
+
+    for db_key in ("host", "port", "dbname", "user", "password"):
+        env_name = _DB_ENV_VAR_MAP[db_key]
+        env_value = _resolve_env_value(env_name)
+        if env_value is None:
+            missing_env_vars.append(env_name)
+            continue
+        if db_key == "port":
+            try:
+                db_params[db_key] = int(env_value)
+            except Exception:
+                db_params[db_key] = env_value
+        else:
+            db_params[db_key] = env_value
+
+    sslmode_env_name = _DB_ENV_VAR_MAP["sslmode"]
+    db_params["sslmode"] = _resolve_env_value(sslmode_env_name) or "disable"
+    return db_params, missing_env_vars
+
+
+def _missing_postgres_env_message(missing_env_vars):
+    expected = ", ".join(missing_env_vars)
+    return (
+        "Missing required Postgres environment variables: "
+        f"{missing_env_vars}. "
+        "Create a .env file in the run directory (mounted to /app/.env on HPC) with values for: "
+        f"{expected}"
+    )
+
 
 def _retry_db(max_retries=5, base_delay=0.1, jitter=0.05):
     """
@@ -707,10 +787,16 @@ def get_db_connector(config, table_name: str):
     logging_params = config.get("logging_params", {})
     backend = str(logging_params.get("db_backend", "sqlite")).strip().lower()
     if backend == "postgres":
-        db_params = logging_params.get("db_params", {})
-        required = ["host", "port", "dbname", "user", "password"]
-        missing = [k for k in required if not db_params.get(k)]
-        if missing:
-            raise ValueError(f"Missing Postgres db_params keys: {missing}")
+        dotenv_loaded = _load_dotenv_if_present(".env")
+        if not dotenv_loaded:
+            raise ValueError(
+                "Postgres backend requires a .env file in the current working directory "
+                "with NIANETVAE_DB_HOST, NIANETVAE_DB_PORT, NIANETVAE_DB_NAME, "
+                "NIANETVAE_DB_USER, and NIANETVAE_DB_PASSWORD."
+            )
+        db_params, missing_env_vars = _postgres_params_from_env()
+        Log.info("Loaded database environment variables from .env in the current working directory.")
+        if missing_env_vars:
+            raise ValueError(_missing_postgres_env_message(missing_env_vars))
         return PostgresConnector(db_params=db_params, table_name=table_name)
     return SQLiteConnector(logging_params.get("db_storage"), table_name)
