@@ -4,7 +4,7 @@ setup(
     name='NiaNetVAE',
     version="1.0.0",
     packages=['nianetvae', 'nianetvae.models', 'nianetvae.storage', 'nianetvae.dataloaders',
-              'nianetvae.experiments'],
+              'nianetvae.experiments', 'nianetvae.tools'],
     url='https://github.com/SasoPavlic/NiaNetVAE',
     license='MIT License',
     author='Saso Pavlic',

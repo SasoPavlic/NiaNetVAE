@@ -5,6 +5,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -109,9 +110,11 @@ def _cycle_key(cycle_id: int) -> str:
     return f"{int(cycle_id):02d}"
 
 
-def build_manifest(config: dict, export_root: Path, cycles: list[int]) -> dict:
+def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_relative_to: Path) -> dict:
     dataset_name = str(config.get("data_params", {}).get("dataset_name", "dataset")).strip() or "dataset"
     regime = str(config.get("data_params", {}).get("regime", "per_maint")).strip().lower() or "per_maint"
+    dataset_root = export_root / dataset_name
+    paths_relative_to = paths_relative_to.resolve()
 
     manifest = {
         "schema_version": "1.0",
@@ -119,6 +122,7 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int]) -> dict:
         "regime": regime,
         "generated_at": datetime.now().isoformat(),
         "config_fingerprint": _config_fingerprint(config),
+        "paths_relative_to": "manifest_directory",
         "active_cycle_order": [_cycle_key(cycle_id) for cycle_id in cycles],
         "cycles": {},
         "notes": [],
@@ -130,7 +134,7 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int]) -> dict:
 
     for cycle_id in cycles:
         key = _cycle_key(cycle_id)
-        cycle_dir = export_root / dataset_name / f"cycle_{key}"
+        cycle_dir = dataset_root / f"cycle_{key}"
         model_path = cycle_dir / "model.pt"
         meta_path = cycle_dir / "model_meta.json"
         summary_path = cycle_dir / "search_summary.json"
@@ -141,14 +145,22 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int]) -> dict:
         if has_artifacts:
             metadata = _read_meta(meta_path)
             status = "trained"
+            artifact_dir_rel = os.path.relpath(cycle_dir, paths_relative_to).replace("\\", "/")
+            model_path_rel = os.path.relpath(model_path, paths_relative_to).replace("\\", "/")
+            meta_path_rel = os.path.relpath(meta_path, paths_relative_to).replace("\\", "/")
+            summary_path_rel = (
+                os.path.relpath(summary_path, paths_relative_to).replace("\\", "/")
+                if summary_path.exists()
+                else None
+            )
             entry = {
                 "cycle_id": int(cycle_id),
                 "status": status,
                 "trainable": bool(trainable),
-                "artifact_dir": str(cycle_dir),
-                "model_path": str(model_path),
-                "meta_path": str(meta_path),
-                "summary_path": str(summary_path) if summary_path.exists() else None,
+                "artifact_dir": artifact_dir_rel,
+                "model_path": model_path_rel,
+                "meta_path": meta_path_rel,
+                "summary_path": summary_path_rel,
                 "hash_id": metadata.get("hash_id"),
                 "run_uuid": metadata.get("run_uuid"),
                 "created_at": metadata.get("created_at"),
@@ -232,11 +244,15 @@ def main():
     export_root = args.export_root or config.get("logging_params", {}).get("model_export_dir", "logs/per_maint_models")
     export_root_path = Path(str(export_root)).resolve()
     cycles = _parse_cycles(args.cycles)
-    manifest = build_manifest(config, export_root_path, cycles)
-
     dataset_name = str(config.get("data_params", {}).get("dataset_name", "dataset")).strip() or "dataset"
     output_path = Path(args.output).resolve() if args.output else (export_root_path / dataset_name / "cycle_manifest.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = build_manifest(
+        config=config,
+        export_root=export_root_path,
+        cycles=cycles,
+        paths_relative_to=output_path.parent,
+    )
     output_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     print(f"Manifest written: {output_path}")
 

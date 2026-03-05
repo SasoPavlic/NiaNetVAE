@@ -1,7 +1,7 @@
 # main_config.yaml
 nia_search:
   population_size: 100
-  time: "00:30:00"   # Termination after 95 hours (format: HH:MM:SS)
+  time: "20:00:00"   # Termination after 95 hours (format: HH:MM:SS)
   algorithms:
     - can_be_deleted
   metrics:
@@ -12,8 +12,8 @@ model_params:
   name: 'RecurrentVariationalAutoencoder'
 
 trainer_params:
-  min_epochs: 1
-  max_epochs: 1
+  min_epochs: 10
+  max_epochs: 20
 
 early_stop:
   monitor: "val_loss"
@@ -46,8 +46,8 @@ logging_params:
 
 # Shared Data Loader parameters
 data_loader_params:
-  data_percentage: 10
-  batch_size: 32
+  data_percentage: 100
+  batch_size: 256
   val_size: 10
   num_workers: 0
   persistent_workers: False

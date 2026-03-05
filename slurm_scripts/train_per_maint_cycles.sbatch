@@ -7,11 +7,12 @@
 #SBATCH --ntasks=1                                               # Number of tasks
 #SBATCH --gres=gpu:1                                             # Request 1 GPU
 #SBATCH --mem-per-gpu=50GB                                       # Memory per GPU
-#SBATCH --time=96:00:00                                          # Maximum runtime
+#SBATCH --time=21:00:00                                          # Maximum runtime
 #SBATCH --array=0-21                                             # One job per cycle (0=pre_W1, 1..21=maintenance cycles)
 
 # === Prepare output directory ===
 OUTPUT_DIR=/d/hpc/home/sasop/outputs
+IMAGE_PATH=/d/hpc/home/sasop/images/nianet-vaepymoo-current.sif
 mkdir -p "${OUTPUT_DIR}"    # ensure the folder exists
 
 # Log environment details
@@ -19,6 +20,12 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node List: $SLURM_JOB_NODELIST"
 echo "Output files will be written to ${OUTPUT_DIR}/"
 echo "Cycle ID: ${SLURM_ARRAY_TASK_ID}"
+echo "Image path: ${IMAGE_PATH}"
+
+if [ ! -f "${IMAGE_PATH}" ]; then
+    echo "Missing SIF image at ${IMAGE_PATH}"
+    exit 1
+fi
 
 # Check GPU visibility
 srun nvidia-smi
@@ -37,5 +44,5 @@ singularity exec --nv \
     -e \
     --pwd /app \
     -B "${BIND_MOUNTS}" \
-    docker://spartan300/nianet:vaepymoo \
+    "${IMAGE_PATH}" \
     python main.py -alg particle_swarm -met SMAPE --cycle-id ${SLURM_ARRAY_TASK_ID}

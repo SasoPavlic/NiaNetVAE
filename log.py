@@ -19,6 +19,10 @@ class Log:
     HEADER_W = [Fore.BLACK, Back.WHITE, Style.BRIGHT]
     HEADER_R = [Fore.WHITE, Back.RED, Style.BRIGHT]
     HEADER_G = [Fore.WHITE, Back.GREEN, Style.BRIGHT]
+    logger = logging.getLogger("NiaNetVAE")
+    logger.propagate = False
+    if not logger.handlers:
+        logger.addHandler(logging.NullHandler())
 
     @staticmethod
     def _parse_level(value, default=logging.INFO):
@@ -66,28 +70,42 @@ class Log:
         cls.logger.addHandler(file_handler)
 
     @classmethod
+    def _ensure_logger(cls):
+        if hasattr(cls, "logger") and isinstance(cls.logger, logging.Logger):
+            return
+        cls.logger = logging.getLogger("NiaNetVAE")
+        cls.logger.propagate = False
+        if not cls.logger.handlers:
+            cls.logger.addHandler(logging.NullHandler())
+
+    @classmethod
     def header(cls, message, type="WHITE"):
         options = cls.HEADER_W if type == "WHITE" else cls.HEADER_R if type == "RED" else cls.HEADER_G
         cls.info(message.center(80, '-'), options)
 
     @classmethod
     def debug(cls, message, options=[Fore.CYAN]):
+        cls._ensure_logger()
         cls.logger.debug(cls.create_message(message, options))
 
     @classmethod
     def info(cls, message, options=[Fore.GREEN]):
+        cls._ensure_logger()
         cls.logger.info(cls.create_message(message, options))
 
     @classmethod
     def warning(cls, message, options=[Fore.YELLOW]):
+        cls._ensure_logger()
         cls.logger.warning(cls.create_message(message, options))
 
     @classmethod
     def error(cls, message, options=[Fore.MAGENTA]):
+        cls._ensure_logger()
         cls.logger.error(cls.create_message(message, options))
 
     @classmethod
     def critical(cls, message, options=[Fore.RED, Style.BRIGHT]):
+        cls._ensure_logger()
         cls.logger.critical(cls.create_message(message, options))
 
     @classmethod

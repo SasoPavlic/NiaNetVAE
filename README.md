@@ -94,31 +94,34 @@ docker run \
 1. First build an image with docker (above example)
 2. Docker push to Docker Hub: ```docker push username/nianet:vae```
 3. SSH into a HPC Cluster via your access credentials
-4. Create the following _nianetvae.sh_ script: ```cat > nianetvae.sh```
-```
-#!/bin/bash
-## Running code on SLURM cluster
-##https://pytorch-lightning.readthedocs.io/en/stable/clouds/cluster_advanced.html
-#SBATCH -J nianet-vae-pso
-#SBATCH -o nianet-vae-pso-%j.out
-#SBATCH -e nianet-vae-pso-%j.err
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --partition=gpu
-#SBATCH --mem-per-gpu=80GB  # memory per GPU
-#SBATCH --gres=gpu:1
-#SBATCH --time=96:00:00
+4. Copy the scripts from `slurm_scripts/` to your HPC working directory:
+   - `train_per_maint_cycles.sbatch` (array search job `0..21`)
+   - `build_cycle_manifest.sbatch` (single manifest job)
+   - `submit_per_maint_pipeline.sh` (submits both with dependency)
+5. Make scripts executable: ```chmod +x submit_per_maint_pipeline.sh```
+6. Make sure folders `logs`, `data`, `configs` exist in your HPC working directory.
+7. Submit the full pipeline (array + manifest):
+   ```bash
+   ./submit_per_maint_pipeline.sh
+   ```
 
-singularity exec -e \
-    --pwd /app \
-    -B $(pwd)/logs:/app/logs,$(pwd)/data:/app/data,$(pwd)/configs:/app/configs \
-    --nv docker://spartan300/nianet:vae \
-    python main.py -alg particle_swarm
-```
-1. Make script executable: ```chmod +x nianetvae.sh```
-2. Make sure that you have the following folders in your current directory: logs, data, configs
-3. Set folder permissions to 777: ```chmod -R 777 logs data configs```
-4. Submit your script to a job scheduler: ```SBATCH nianetvae.sh```
+##### Per-maint exported artifacts and manifest (for metropt consumption)
+
+1. In `configs/main_config.yaml` set:
+   - `logging_params.export_enabled: true`
+   - `logging_params.model_export_dir: logs/per_maint_models`
+2. Run the per-maint array jobs on HPC (for example `--array=0-21`).
+3. If you use `submit_per_maint_pipeline.sh`, manifest generation runs automatically after the array job.
+4. If you run only `train_per_maint_cycles.sbatch`, generate manifest manually:
+   ```bash
+   python -m nianetvae.tools.generate_cycle_manifest --config configs/main_config.yaml --cycles 0-21
+   ```
+5. This writes:
+   - `logs/per_maint_models/MetroPT/cycle_XX/model.pt`
+   - `logs/per_maint_models/MetroPT/cycle_XX/model_meta.json`
+   - `logs/per_maint_models/MetroPT/cycle_XX/search_summary.json`
+   - `logs/per_maint_models/MetroPT/cycle_manifest.json`
+6. Manifest artifact paths are stored relative to the manifest directory for cross-platform portability (HPC Linux -> local Windows).
 
 ### HELP ⚠️
 

@@ -81,7 +81,7 @@ docker run --rm -it --gpus all \
 
 ### HPC submit
 ```bash
-sbatch nianetvae.sh
+./slurm_scripts/submit_per_maint_pipeline.sh
 ```
 
 ## 4. PROJECT STRUCTURE FOR AGENTS
@@ -145,15 +145,16 @@ Dataset considerations:
 
 ## 7. HPC + DOCKER WORKFLOW
 - Build/push container externally, then run on cluster via Singularity/Apptainer.
-- `nianetvae.sh` is the operational reference:
+- `slurm_scripts/train_per_maint_cycles.sbatch` is the operational reference:
   - GPU partition.
-  - `--array=1-21` for cycle-per-job MetroPT.
+  - `--array=0-21` for cycle-per-job MetroPT (including `pre_W1` as cycle 0).
   - Bind mounts:
     - `$(pwd)/logs:/app/logs`
     - `$(pwd)/data:/app/data`
     - `$(pwd)/configs:/app/configs`
 - Do not break bind-mounted path assumptions (`/app/...`).
 - Do not remove `--cycle-id ${SLURM_ARRAY_TASK_ID}` from MetroPT array runs.
+- Keep `slurm_scripts/build_cycle_manifest.sbatch` chained after array completion to generate `cycle_manifest.json`.
 - Keep image entry command consistent with `python main.py ...`.
 
 ## 8. SAFETY AND CONSTRAINTS
