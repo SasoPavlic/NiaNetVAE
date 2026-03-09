@@ -1,175 +1,71 @@
 # AGENTS.md
 
-## 1. PROJECT OVERVIEW
-NiaNetVAE is a config-driven ML system for evolutionary search of recurrent variational autoencoder architectures for time-series reconstruction and anomaly-oriented evaluation.
+## Purpose and Role
+`NiaNetVAE` is the model-production repository in the MetroPT workflow:
+- It searches recurrent VAE architectures per maintenance cycle.
+- It trains candidates, scores them by fitness (reconstruction error + complexity), and selects the best model.
+- It exports cycle artifacts and generates a manifest consumed downstream by `metropt-pdm-framework`.
 
-Engineering behavior:
-- Entry point: `main.py`.
-- Search engine: `pymoo` with `NSGA2` in `nianetvae/rnn_vae_architecture_search.py`.
-- Model factory/search space: `nianetvae/models/rnn_vae.py` (7-gene solution vector maps to layer type, depth/step, activation, optimizer).
-- Training runtime: PyTorch Lightning (`Trainer`) through `nianetvae/experiments/rnn_vae_experiment.py`.
-- Data ingestion: dataset-specific LightningDataModules in `nianetvae/dataloaders/`.
-- Storage:
-  - SQLite (`logging_params.db_storage`) or
-  - Postgres (`logging_params.db_backend: postgres`, `logging_params.db_params`).
-- MetroPT integration supports:
-  - `regime: single`
-  - `regime: per_maint` with `--cycle-id`
-  - DB dataset isolation suffix `MetroPT_cycleXX` for per-cycle jobs.
+## Main Entry Points
+- `main.py`: config loading/merge, CLI overrides, dataloader selection, DB connector setup, search bootstrap.
+- `nianetvae/rnn_vae_architecture_search.py`: NSGA2 search loop, fitness calculation, final retraining, export.
+- `nianetvae/tools/generate_cycle_manifest.py`: manifest generation from exported cycle artifacts.
+- `slurm_scripts/submit_per_maint_pipeline.sh`: HPC submission wrapper (array training + dependent manifest job).
 
-ML objective:
-- Multi-objective optimization of reconstruction quality + architecture complexity.
-- Fitness normalization uses observed metric min/max persisted in DB.
-- Invalid architectures are penalized with worst-case values.
+## Pipeline Map (Where Things Live)
+- Dataset loading + cycle segmentation: `nianetvae/dataloaders/metropt_dataloader.py`
+- Architecture gene mapping / model build: `nianetvae/models/rnn_vae.py`
+- Training/test runtime and metrics accumulation: `nianetvae/experiments/rnn_vae_experiment.py`
+- Fitness objective and search orchestration: `nianetvae/rnn_vae_architecture_search.py`
+- Persistence layer (SQLite/Postgres): `nianetvae/storage/experiment_storage.py`
+- Exported manifest tool: `nianetvae/tools/generate_cycle_manifest.py`
 
-## 2. DEVELOPMENT ENVIRONMENT
-- Python: `>=3.10,<3.12` (from `pyproject.toml`).
-- Dependency management:
-  - Primary: Poetry (`pyproject.toml`, `poetry.lock`).
-  - Docker install path uses `requirements.txt`.
-- CUDA/GPU:
-  - GPU expected for production runs.
-  - Local Poetry workflow commonly requires:
-    - `poetry run poe autoinstall-torch-cuda`
-- Docker:
-  - Main image uses `Dockerfile` with Lightning CUDA base.
-  - Data is mounted at runtime; datasets are not copied into image.
+## Stable Contracts (Do Not Change Silently)
+- **Cycle semantics** (`MetroPTDataLoader`):
+  - `regime="per_maint"` with `cycle_id=0` as `pre_W1`.
+  - `cycle_id=1..21` maps to Davari window order.
+  - Phase `2` is excluded from train/test filtering in this adaptation.
+- **Export layout** (current default):
+  - `logs/per_maint_models/<dataset>/cycle_XX/model.pt`
+  - `logs/per_maint_models/<dataset>/cycle_XX/model_meta.json`
+  - `logs/per_maint_models/<dataset>/cycle_XX/search_summary.json`
+  - `logs/per_maint_models/<dataset>/cycle_manifest.json`
+- **Schema expectations**:
+  - `model_meta.json`, `search_summary.json`, and `cycle_manifest.json` currently emit `schema_version: "1.0"`.
+  - Manifest paths are written relative to manifest directory (`paths_relative_to: manifest_directory`).
 
-## 3. RUN AND BUILD COMMANDS
-From repo root (`NiaNetVAE/`):
+If you change export formats, manifest fields, cycle naming, feature expectations, or model-loading assumptions, you must evaluate and update downstream `metropt-pdm-framework` compatibility in the same change set.
 
-### Install (Poetry) ONLY USE THIS WHEN EXPLICITLY ASKED, BECAUSE IT TAKES A VERY LONG TIME
-```bash
-poetry install
-poetry run poe autoinstall-torch-cuda
-```
+## Change Rules for Search/Fitness
+- Preserve config-driven flow (`configs/main_config.yaml` + dataset config merge).
+- Keep candidate dimensionality contract (`RNNVAE` 7-gene vector) unless explicitly versioned and coordinated.
+- Keep penalty semantics (`9e10`) for invalid/failed candidates unless there is a deliberate migration.
+- When extending fitness logic, keep metric normalization + DB min/max update behavior coherent and backward compatible.
+- Prefer minimal, reviewable edits over broad refactors.
 
-### Local training/search
-```bash
-python main.py -c configs/main_config.yaml -alg particle_swarm -met SMAPE
-```
+## Training/Inference Assumption Safety
+- Use `Log` (`log.py`) for run diagnostics; avoid ad-hoc `print` paths in core runtime.
+- Keep `--cycle-id` behavior intact for per-cycle HPC runs (`main.py` + Slurm scripts).
+- Do not remove final deterministic training/export path after search when `export_enabled=true`.
+- Do not hardcode secrets; Postgres credentials are expected through `.env` (`NIANETVAE_DB_*`).
 
-### MetroPT per-cycle run
-```bash
-python main.py -c configs/main_config.yaml -alg particle_swarm -met SMAPE --cycle-id 5
-```
+## Validation Expectations
+Run from repository root:
+- Unit/split tests:
+  - `pytest tests/test_metropt_dataloader.py`
+- Local per-cycle smoke run:
+  - `python main.py -c configs/main_config.yaml -alg particle_swarm -met SMAPE --cycle-id 0`
+- Manifest generation smoke:
+  - `python -m nianetvae.tools.generate_cycle_manifest --config configs/main_config.yaml --cycles 0-21`
+- Export verification:
+  - confirm `model.pt`, `model_meta.json`, `search_summary.json` exist for trained cycles and manifest resolves statuses.
 
-### Tests
-```bash
-pytest tests/test_metropt_dataloader.py
-```
-or
-```bash
-poetry run pytest tests/test_metropt_dataloader.py
-```
+## Generated Artifacts and Large Files
+- Treat `logs/`, `results/`, and exported model artifacts as generated outputs; do not use them as source-of-truth code inputs.
+- Do not modify datasets under `data/` as part of routine code changes.
+- Avoid committing large generated files/checkpoints unless explicitly required by the task.
 
-### Docker build
-```bash
-docker build -t spartan300/nianet:vaepymoo -f Dockerfile .
-```
-
-### Docker run (GPU, mounted volumes)
-```bash
-docker run --rm -it --gpus all \
-  -v $(pwd)/logs:/app/logs \
-  -v $(pwd)/data:/app/data \
-  -v $(pwd)/configs:/app/configs \
-  -w /app \
-  spartan300/nianet:vaepymoo \
-  python main.py -c configs/main_config.yaml -alg particle_swarm -met SMAPE
-```
-
-### HPC submit
-```bash
-./slurm_scripts/submit_per_maint_pipeline.sh
-```
-
-## 4. PROJECT STRUCTURE FOR AGENTS
-- `main.py`
-  - Config loading/merging, CLI overrides, dataloader selection, search bootstrap.
-- `configs/`
-  - `main_config.yaml`: global run/search/logging/trainer/db settings.
-  - `*_config.yaml`: dataset-level `data_params` (e.g., `metropt_config.yaml`).
-- `nianetvae/`
-  - Core package.
-- `nianetvae/dataloaders/`
-  - Dataset-specific LightningDataModules and sequence datasets.
-- `nianetvae/models/`
-  - VAE base + `RNNVAE` search-space implementation.
-- `nianetvae/experiments/`
-  - Lightning experiment module, reconstruction metrics, anomaly metrics.
-- `nianetvae/storage/`
-  - SQLite/Postgres connectors and experiment persistence.
-- `training/`
-  - No dedicated `training/` directory exists. Training flow is implemented in `main.py` + `nianetvae/experiments/` + `nianetvae/rnn_vae_architecture_search.py`.
-
-### 4.A Excluded folders (do not use as implementation targets)
-- `helpers/`
-- `logs/`
-- `data/`
-- `results/`
-
-## 5. CODING CONVENTIONS
-- Follow existing architecture:
-  - Config-first workflow (`YAML` + runtime merge).
-  - Dataset selection by `data_params.dataset_name`.
-- Logging:
-  - Use `Log` class from `log.py` (`Log.info/debug/warning/error`), not `print`.
-- Model creation pattern:
-  - Construct model from solution vector (`RNNVAE(solution, **config)`).
-  - Respect `model.is_valid` and penalty behavior.
-- Experiment pattern:
-  - Use `RNNVAExperiment` with Lightning callbacks (`FineTuneLearningRateFinder`, `EarlyStopping`).
-- Storage pattern:
-  - Use `get_db_connector(config, table_name)` factory.
-  - Keep SQLite and Postgres support backward compatible.
-- Typing:
-  - Mixed style in codebase (partial typing in newer modules). Match local file style.
-- Avoid introducing new abstractions unless repeated pain is proven.
-
-## 6. TESTING AND VALIDATION
-Minimum before merge:
-1. Run targeted test:
-   - `pytest tests/test_metropt_dataloader.py`
-2. Run one smoke training invocation with your edited config.
-3. Verify no regressions in:
-   - config loading
-   - dataloader selection
-   - DB connector initialization
-   - end-of-run best model save path.
-
-Dataset considerations:
-- Do not require large real datasets for unit tests.
-- Follow current test approach: synthetic temp CSV for MetroPT loader.
-- Keep sequence shapes and split semantics stable.
-
-## 7. HPC + DOCKER WORKFLOW
-- Build/push container externally, then run on cluster via Singularity/Apptainer.
-- `slurm_scripts/train_per_maint_cycles.sbatch` is the operational reference:
-  - GPU partition.
-  - `--array=0-21` for cycle-per-job MetroPT (including `pre_W1` as cycle 0).
-  - Bind mounts:
-    - `$(pwd)/logs:/app/logs`
-    - `$(pwd)/data:/app/data`
-    - `$(pwd)/configs:/app/configs`
-- Do not break bind-mounted path assumptions (`/app/...`).
-- Do not remove `--cycle-id ${SLURM_ARRAY_TASK_ID}` from MetroPT array runs.
-- Keep `slurm_scripts/build_cycle_manifest.sbatch` chained after array completion to generate `cycle_manifest.json`.
-- Keep image entry command consistent with `python main.py ...`.
-
-## 8. SAFETY AND CONSTRAINTS
-- Do not modify datasets under `data/`.
-- Do not alter or delete prior experiment outputs/log artifacts.
-- Preserve backward compatibility for non-MetroPT datasets.
-- Keep both DB backends functional (`sqlite` + `postgres`).
-- Do not hardcode environment-specific credentials in new code.
-- Avoid schema-breaking DB changes unless explicitly requested with migration plan.
-- Do not silently change search objective semantics or metric names.
-
-## 9. AGENT BEHAVIOR RULES
-- Prefer minimal edits over large refactors.
-- Follow existing architecture instead of inventing new abstractions.
-- Always align new modules with current folder patterns.
-- Keep changes localized; avoid cross-cutting rewrites.
-- Validate with targeted tests first, then broader smoke checks.
-- If runtime assumptions are unclear (HPC paths, DB availability, CUDA), surface them explicitly before implementation.
+## Explicit Assumptions
+- Assumption: `metropt-pdm-framework` consumes the current manifest/artifact schema and relative-path behavior.
+- Assumption: Production per-maint runs target cycle range `0..21` for MetroPT.
+- Assumption: HPC scripts are environment-specific (paths, partition, image location) and may require local cluster adaptation.
