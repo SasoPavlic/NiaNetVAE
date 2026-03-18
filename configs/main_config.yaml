@@ -8,7 +8,6 @@ nia_search:
 # Global parameters
 model_params:
   name: 'RecurrentVariationalAutoencoder'
-  mapping_version: "v2"
 
 trainer_params:
   min_epochs: 3

@@ -55,7 +55,6 @@ class RNNVAE(BaseVAE, nn.Module):
         self.n_features = n_features
         self.seq_len = seq_len
         self.batch_size = batch_size
-        self.mapping_version = self.resolve_mapping_version(kwargs)
         self.mapping_context = {}
         # Keep defaults for robust hashing/logging even if decode fails early.
         self.encoder_layer_step = 1
@@ -73,10 +72,10 @@ class RNNVAE(BaseVAE, nn.Module):
 
         self.hidden_dims = []
         self.decoder_hidden_dims = []
-        decode_ok = self._decode_solution_v2(y2, y3, y4, y5) if self.mapping_version == "v2" else self._decode_solution_v1(y2, y3, y4, y5)
+        decode_ok = self._decode_solution(y2, y3, y4, y5)
         if not decode_ok:
             self.is_valid = False
-            Log.debug(f"Invalid architecture configuration for mapping_version={self.mapping_version}.")
+            Log.debug("Invalid architecture configuration for solution mapping.")
             self.bottleneck_size = None
             self.hidden_dims = []
             self.encoding_layers = None
@@ -84,25 +83,13 @@ class RNNVAE(BaseVAE, nn.Module):
             self.get_hash()
             return
 
-        if self.mapping_version == "v2":
-            # Mapping v2 builds a deterministic decoder profile directly.
-            self.generate_autoencoder(
-                self.layer_type,
-                self.dataset_shape,
-                self.hidden_dims,
-                symmetrical=False,
-                decoder_hidden_dims_override=self.decoder_hidden_dims,
-            )
-        else:
-            self.generate_autoencoder(
-                self.layer_type,
-                self.dataset_shape,
-                self.hidden_dims,
-                symmetrical=(
-                    self.encoder_layer_step == self.decoder_layer_step and
-                    self.encoder_num_layers == self.decoder_num_layers
-                )
-            )
+        # Mapping builds a deterministic decoder profile directly.
+        self.generate_autoencoder(
+            self.layer_type,
+            self.dataset_shape,
+            self.hidden_dims,
+            decoder_hidden_dims_override=self.decoder_hidden_dims,
+        )
 
         if not self.is_valid:
             self.get_hash()
@@ -110,7 +97,7 @@ class RNNVAE(BaseVAE, nn.Module):
 
         self.get_hash()
         Log.debug(
-            f"MODEL_DECODE hash={self.hash_id} mapping_version={self.mapping_version} layer_type={self.layer_type} "
+            f"MODEL_DECODE hash={self.hash_id} layer_type={self.layer_type} "
             f"enc_step={self.encoder_layer_step} enc_layers={self.encoder_num_layers} "
             f"dec_layers={self.decoder_num_layers} dec_step={self.decoder_layer_step} "
             f"activation={self.activation_name} optimizer={self.optimizer_name} "
@@ -128,13 +115,10 @@ class RNNVAE(BaseVAE, nn.Module):
             str(self.optimizer_name),
             str(self.bottleneck_size),
         ]
-        # Keep legacy v1 hash representation stable; include mapping payload for v2+.
-        if self.mapping_version != "v1":
-            hash_parts.extend([
-                str(self.mapping_version),
-                str(getattr(self, "encoder_hidden_dims", [])),
-                str(getattr(self, "decoder_hidden_dims", [])),
-            ])
+        hash_parts.extend([
+            str(getattr(self, "encoder_hidden_dims", [])),
+            str(getattr(self, "decoder_hidden_dims", [])),
+        ])
         self.hash_id = hashlib.sha1(
             "".join(hash_parts).encode('utf-8')
         ).hexdigest()
@@ -231,27 +215,6 @@ class RNNVAE(BaseVAE, nn.Module):
         self.optimizer_name = optimizer_names[index]
         return optimizer_names[index]
 
-    def map_layer_step(self, gene, ref_dim):
-        gene = float(gene)
-        min_step = 1
-        max_step = ref_dim
-        layer_step = int(min_step + gene * (max_step - min_step))
-        return max(min(layer_step, max_step), min_step)
-
-    def map_num_layers(self, gene, ref_dim):
-        gene = float(gene)
-        min_layers = 1
-        max_layers = ref_dim
-        num_layers = int(min_layers + gene * (max_layers - min_layers))
-        return max(min(num_layers, max_layers), min_layers)
-
-    def resolve_mapping_version(self, kwargs):
-        model_params = kwargs.get("model_params", {}) if isinstance(kwargs, dict) else {}
-        version = str(model_params.get("mapping_version", "v1")).strip().lower()
-        if version in {"v2", "2"}:
-            return "v2"
-        return "v1"
-
     @staticmethod
     def _map_from_options(gene, options):
         if not options:
@@ -340,39 +303,7 @@ class RNNVAE(BaseVAE, nn.Module):
         avg = int(round(float(np.mean(diffs)))) if diffs else 1
         return max(avg, 1)
 
-    def _decode_solution_v1(self, y2, y3, y4, y5):
-        ref_dim = self._reference_dim()
-
-        self.encoder_layer_step = self.map_layer_step(y2, ref_dim)
-        self.decoder_layer_step = self.map_layer_step(y4, ref_dim)
-
-        max_enc = max(1, ref_dim // self.encoder_layer_step)
-        max_dec = max(1, ref_dim // self.decoder_layer_step)
-
-        self.encoder_num_layers = self.map_num_layers(y5, max_enc)
-        self.decoder_num_layers = self.map_num_layers(y3, max_dec)
-
-        if self.is_univariate:
-            encoder_hidden_dims = self.calculate_univariate_hidden_dims(
-                self.seq_len,
-                self.encoder_layer_step,
-                self.encoder_num_layers
-            )
-        else:
-            encoder_hidden_dims = self.calculate_hidden_dims(
-                self.n_features,
-                self.encoder_layer_step,
-                self.encoder_num_layers
-            )
-
-        if encoder_hidden_dims is None:
-            return False
-
-        self.hidden_dims = encoder_hidden_dims
-        self.bottleneck_size = encoder_hidden_dims[-1]
-        return True
-
-    def _decode_solution_v2(self, y2, y3, y4, y5):
+    def _decode_solution(self, y2, y3, y4, y5):
         ref_dim = self._reference_dim()
         if ref_dim <= 1:
             return False
@@ -418,7 +349,6 @@ class RNNVAE(BaseVAE, nn.Module):
         self.encoder_layer_step = self._estimate_step(ref_dim, self.hidden_dims)
         self.decoder_layer_step = self._estimate_step(self.bottleneck_size, self.decoder_hidden_dims)
         self.mapping_context = {
-            "mapping_version": "v2",
             "ref_dim": int(ref_dim),
             "bottleneck_ratio": float(bottleneck_ratio),
             "encoder_curvature": float(encoder_curvature),
@@ -427,41 +357,7 @@ class RNNVAE(BaseVAE, nn.Module):
         }
         return True
 
-    def calculate_hidden_dims(self, input_dim, layer_step, num_layers):
-        hidden_dims = []
-        current_dim = input_dim
-        if current_dim - layer_step * num_layers <= 0:
-            Log.debug("Invalid encoder configuration: non-positive hidden dimension.")
-            return None
-        for _ in range(num_layers):
-            current_dim -= layer_step
-            if current_dim <= 0:
-                Log.debug("Invalid encoder configuration: layer_step too large.")
-                return None
-            hidden_dims.append(int(current_dim))
-        Log.debug(f"Encoder hidden dims: {hidden_dims}")
-        return hidden_dims
-
-    def calculate_univariate_hidden_dims(self, h_init, layer_step, num_layers):
-        return self.calculate_hidden_dims(h_init, layer_step, num_layers)
-
-    def calculate_decoder_hidden_dims(self, start_dim, end_dim, layer_step, num_layers):
-        hidden_dims = []
-        current_dim = start_dim
-        if current_dim + layer_step * num_layers < end_dim:
-            Log.debug("Invalid decoder configuration: cannot reach output dimension.")
-            return None
-        for idx in range(num_layers):
-            current_dim += layer_step
-            if current_dim >= end_dim and idx != num_layers - 1:
-                current_dim = end_dim
-            hidden_dims.append(int(current_dim))
-        if hidden_dims and hidden_dims[-1] < end_dim:
-            hidden_dims.append(end_dim)
-        Log.debug(f"Decoder hidden dims: {hidden_dims}")
-        return hidden_dims
-
-    def generate_autoencoder(self, layer_type, dataset_shape, hidden_dims, symmetrical=True, decoder_hidden_dims_override=None):
+    def generate_autoencoder(self, layer_type, dataset_shape, hidden_dims, decoder_hidden_dims_override=None):
         # Build encoder
         self.encoder_hidden_dims = hidden_dims
         encoder_input_size = self.n_features
@@ -479,21 +375,11 @@ class RNNVAE(BaseVAE, nn.Module):
 
         # Build decoder
         self.decoding_layers = nn.ModuleList()
-        if decoder_hidden_dims_override is not None:
-            self.decoder_hidden_dims = [int(v) for v in decoder_hidden_dims_override]
-        elif symmetrical:
-            self.decoder_hidden_dims = self.encoder_hidden_dims[::-1]
-        else:
-            self.decoder_hidden_dims = self.calculate_decoder_hidden_dims(
-                start_dim=self.bottleneck_size,
-                end_dim=self.n_features,
-                layer_step=self.decoder_layer_step,
-                num_layers=self.decoder_num_layers
-            )
-            if self.decoder_hidden_dims is None:
-                self.is_valid = False
-                Log.debug("Invalid asymmetrical decoder configuration.")
-                return
+        if decoder_hidden_dims_override is None:
+            self.is_valid = False
+            Log.debug("Decoder hidden dims override is required for deterministic mapping.")
+            return
+        self.decoder_hidden_dims = [int(v) for v in decoder_hidden_dims_override]
 
         decoder_input_size = self.bottleneck_size
         for hidden_dim in self.decoder_hidden_dims:

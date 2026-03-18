@@ -153,7 +153,6 @@ def _export_cycle_artifacts(
         "regime": data_params.get("regime"),
         "cycle_id": data_params.get("cycle_id"),
         "model_class": "nianetvae.models.rnn_vae.RNNVAE",
-        "mapping_version": getattr(model, "mapping_version", "v1"),
         "mapping_context": _as_jsonable(getattr(model, "mapping_context", {})),
         "solution": _as_jsonable(best_solution),
         "hash_id": str(model.hash_id),
@@ -194,7 +193,6 @@ def _export_cycle_artifacts(
             "complexity": final_result["complexity"],
             "metrics": final_result["metrics"],
             "anomaly_metrics": final_result["anomaly_metrics"],
-            "mapping_version": getattr(model, "mapping_version", "v1"),
         },
         "artifacts": {
             "weights_file": "model.pt",
