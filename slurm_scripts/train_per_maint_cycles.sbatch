@@ -45,4 +45,4 @@ singularity exec --nv \
     --pwd /app \
     -B "${BIND_MOUNTS}" \
     "${IMAGE_PATH}" \
-    python main.py -alg particle_swarm -met SMAPE --cycle-id ${SLURM_ARRAY_TASK_ID}
+    python main.py -met SMAPE --cycle-id ${SLURM_ARRAY_TASK_ID}

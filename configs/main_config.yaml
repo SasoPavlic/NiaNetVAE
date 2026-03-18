@@ -1,19 +1,18 @@
 # main_config.yaml
 nia_search:
-  population_size: 100
-  time: "20:00:00"   # Termination after 95 hours (format: HH:MM:SS)
-  algorithms:
-    - can_be_deleted
+  population_size: 50
+  time: "20:00:00"   # Termination after 30 minutes (format: HH:MM:SS)
   metrics:
     - SMAPE
 
 # Global parameters
 model_params:
   name: 'RecurrentVariationalAutoencoder'
+  mapping_version: "v2"
 
 trainer_params:
-  min_epochs: 10
-  max_epochs: 20
+  min_epochs: 3
+  max_epochs: 5
 
 early_stop:
   monitor: "val_loss"

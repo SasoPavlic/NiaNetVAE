@@ -115,10 +115,8 @@ def _run_final_training(best_solution):
         final_metrics = {}
     anomaly_metrics = getattr(experiment, "anomaly_metrics", {}) or {}
     fitness, error, complexity = calculate_fitness(
-        "NSGA2",
         model,
         experiment,
-        config['data_params']['n_features'],
         config['data_params']['seq_len']
     )
     return {
@@ -155,6 +153,8 @@ def _export_cycle_artifacts(
         "regime": data_params.get("regime"),
         "cycle_id": data_params.get("cycle_id"),
         "model_class": "nianetvae.models.rnn_vae.RNNVAE",
+        "mapping_version": getattr(model, "mapping_version", "v1"),
+        "mapping_context": _as_jsonable(getattr(model, "mapping_context", {})),
         "solution": _as_jsonable(best_solution),
         "hash_id": str(model.hash_id),
         "n_features": data_params.get("n_features"),
@@ -194,6 +194,7 @@ def _export_cycle_artifacts(
             "complexity": final_result["complexity"],
             "metrics": final_result["metrics"],
             "anomaly_metrics": final_result["anomaly_metrics"],
+            "mapping_version": getattr(model, "mapping_version", "v1"),
         },
         "artifacts": {
             "weights_file": "model.pt",
@@ -205,62 +206,13 @@ def _export_cycle_artifacts(
     return model_path, meta_path, summary_path
 
 
-def compute_normalized_metric(metric_name, value, is_higher_better, conn, dataset_name, alg_name):
+def calculate_fitness(model, experiment, seq_len):
     """
-    Retrieve, handle, and normalize a metric value using observed min/max values from the database.
+    Calculate fitness from raw SMAPE and model complexity.
 
     Args:
-        metric_name (str): The name of the metric.
-        value (float): The raw metric value to normalize.
-        is_higher_better (bool): Whether higher values are better for this metric.
-        conn: The database connection object for retrieving min/max values.
-        dataset_name (str): The name of the dataset.
-        alg_name (str): The name of the algorithm.
-
-    Returns:
-        float: The normalized metric value in the range [0, 1].
-    """
-    try:
-        # Retrieve min and max values from the database
-        min_val, max_val = conn.get_min_max(dataset_name, alg_name, metric_name)
-
-        # Handle cases where no min/max values are observed yet
-        if min_val == float('inf') and max_val == float('-inf'):
-            Log.debug(f"No observed min/max for {metric_name}. Defaulting to value-based normalization.")
-            min_val, max_val = value, value  # Use current value as both bounds
-        elif min_val == float('inf'):
-            Log.debug(f"No observed minimum for {metric_name}. Using current value as min.")
-            min_val = value
-        elif max_val == float('-inf'):
-            Log.debug(f"No observed maximum for {metric_name}. Using current value as max.")
-            max_val = value
-
-        # Handle zero range
-        if max_val == min_val:
-            # Always return 1.0 for a zero range (worst-case normalization)
-            return 1.0
-
-        # Normalize the value
-        normalized = (value - min_val) / (max_val - min_val)
-        normalized = max(0.0, min(1.0, normalized))  # Clamp to [0, 1]
-
-        # Invert if higher values are better
-        return 1.0 - normalized if is_higher_better else normalized
-
-    except Exception as e:
-        Log.error(f"Error normalizing metric {metric_name}: {e}")
-        return 1.0  # Return worst normalized value in case of failure
-
-
-def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
-    """
-    Calculate the fitness value for the given model and experiment metrics.
-
-    Args:
-        alg_name: Name of the algorithm.
         model: The model being evaluated.
         experiment: The experiment object containing metrics.
-        n_features: Number of features in the dataset.
         seq_len: Sequence length of the dataset.
 
     Returns:
@@ -273,7 +225,7 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
         Log.error("Some metric values are still None. Fitness function is waiting for metrics data.")
         return int(9e10), int(9e10), int(9e10)
 
-    # Fetch raw metrics
+    # Fetch raw metrics.
     try:
         raw_metrics = experiment.metrics.compute()
         Log.debug(f"Raw metrics: {raw_metrics}")
@@ -281,72 +233,19 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
         Log.error(f"Error computing metrics: {e}")
         return int(9e10), int(9e10), int(9e10)
 
-    # Update database with raw metrics (skip None, NaN or infinity‐sentinel)
-    for metric_name, value in raw_metrics.items():
-        Log.debug(f"Updating database for metric: {metric_name}, value: {value}")
-        if value is None or (isinstance(value, float) and math.isnan(value)) or value == int(9e10):
-            Log.warning(f"Skipping observed‐min/max update for raw metric '{metric_name}': invalid value {value}")
-            continue
-        conn.update_min_max(dataset_name, alg_name, metric_name, value)
+    smape = raw_metrics.get("SMAPE")
+    if smape is None:
+        Log.error("SMAPE metric is missing in computed metrics; cannot evaluate fitness.")
+        return int(9e10), int(9e10), int(9e10)
 
-    anomaly_metrics = getattr(experiment, "anomaly_metrics", None)
-    if isinstance(anomaly_metrics, dict) and anomaly_metrics:
-        # Update database with anomaly metrics (skip None, NaN or infinity‐sentinel)
-        for metric_name, value in anomaly_metrics.items():
-            Log.debug(f"Updating database for anomaly metric: {metric_name}, value: {value}")
-            if value is None or (isinstance(value, float) and math.isnan(value)) or value == int(9e10):
-                Log.warning(
-                    f"Skipping observed‐min/max update for anomaly metric '{metric_name}': invalid value {value}"
-                )
-                continue
-            conn.update_min_max(dataset_name, alg_name, metric_name, value)
+    try:
+        smape_value = float(smape)
+    except Exception:
+        Log.error(f"SMAPE value is not numeric: {smape}")
+        return int(9e10), int(9e10), int(9e10)
 
-    # Normalize all metrics
-    normalized_metrics = {}
-    for metric_name, value in raw_metrics.items():
-        try:
-            normalized_metrics[metric_name] = compute_normalized_metric(
-                metric_name, value, False, conn, dataset_name, alg_name
-            )
-            Log.debug(f"Normalized metric {metric_name}: {normalized_metrics[metric_name]}")
-        except Exception as e:
-            Log.error(f"Error normalizing metric {metric_name}: {e}")
-            normalized_metrics[metric_name] = 1.0
-
-    if isinstance(anomaly_metrics, dict) and anomaly_metrics:
-        for metric_name, value in anomaly_metrics.items():
-            try:
-                normalized_metrics[metric_name] = compute_normalized_metric(
-                    metric_name, value, False, conn, dataset_name, alg_name
-                )
-                Log.debug(f"Normalized metric {metric_name}: {normalized_metrics[metric_name]}")
-            except Exception as e:
-                Log.error(f"Error normalizing metric {metric_name}: {e}")
-                normalized_metrics[metric_name] = 1.0
-
-    # Ensure metrics_to_calculate is always a list
-    metrics_to_calculate = config['nia_search']['metrics']
-    if isinstance(metrics_to_calculate, str):
-        metrics_to_calculate = [metrics_to_calculate]
-
-    Log.debug(f"Metrics to calculate: {metrics_to_calculate}")
-
-    # Calculate error_x using metrics specified in the config.
-    # Also check that at least one metric was found and added.
-    error_x = 0.0
-    found_any = False
-    for metric_name in metrics_to_calculate:
-        if metric_name in normalized_metrics:
-            error_x += normalized_metrics[metric_name]
-            found_any = True
-        else:
-            Log.error(
-                f"Metric {metric_name} not found in normalized metrics. Available: {list(normalized_metrics.keys())}"
-            )
-
-    # If no metrics were found or error_x remains zero, return worst possible value.
-    if not found_any or error_x == 0.0:
-        Log.error("No valid metric was added to error_x or error_x remains zero. Returning worst possible value.")
+    if not math.isfinite(smape_value):
+        Log.error(f"Invalid non-finite SMAPE value: {smape_value}")
         return int(9e10), int(9e10), int(9e10)
 
     # Complexity calculation
@@ -365,11 +264,11 @@ def calculate_fitness(alg_name, model, experiment, n_features, seq_len):
 
     # Total fitness calculation
     try:
-        error = int(round(error_x, 6) * 1000000)
+        error = int(round(smape_value, 6) * 1000000)
         fitness = error + complexity
         Log.debug(f"Calculated fitness: {fitness}, error: {error}, complexity: {complexity}")
 
-        if math.isnan(fitness) or math.isnan(error) or math.isnan(complexity):
+        if not math.isfinite(float(fitness)) or not math.isfinite(float(error)) or not math.isfinite(float(complexity)):
             Log.error("Invalid fitness, error, or complexity value detected. Returning worst possible value.")
             return int(9e10), int(9e10), int(9e10)
 
@@ -542,10 +441,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                     duration = (end_time - start_time).total_seconds()
 
                     fitness, error, complexity = calculate_fitness(
-                        "NSGA2",
                         model,
                         experiment,
-                        self.config['data_params']['n_features'],
                         self.config['data_params']['seq_len']
                     )
                     metric_parts = self._selected_metrics(experiment)
@@ -594,7 +491,7 @@ class RNNVAEArchitectureMultiObj(Problem):
         out["F"] = np.array(F)
 
 
-def solve_architecture_problem(selected_algorithms):
+def solve_architecture_problem():
     """
     Uses pymoo's NSGA-II to perform a multiobjective search for the optimal balance between
     error and complexity. Optimizer settings (e.g., population size, termination criteria) are

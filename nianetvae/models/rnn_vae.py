@@ -1,4 +1,5 @@
 import time
+from decimal import Decimal, ROUND_HALF_UP
 import numpy as np
 import torch
 from torch import Tensor
@@ -15,12 +16,9 @@ class RNNVAE(BaseVAE, nn.Module):
     def __init__(self, solution, **kwargs) -> None:
         super(RNNVAE, self).__init__()
         """
-        New dimensionality (solution vector of length 7):
-            y1: encoder layer type,
-            y2: encoder layer step,
-            y3: decoder number of layers,
-            y4: decoder layer step,
-            y5: encoder number of layers,
+        Solution vector dimensionality (length 7):
+            y1: recurrent layer family,
+            y2..y5: mapping-specific architecture genes,
             y6: activation function,
             y7: optimizer algorithm.
         """
@@ -57,86 +55,62 @@ class RNNVAE(BaseVAE, nn.Module):
         self.n_features = n_features
         self.seq_len = seq_len
         self.batch_size = batch_size
+        self.mapping_version = self.resolve_mapping_version(kwargs)
+        self.mapping_context = {}
+        # Keep defaults for robust hashing/logging even if decode fails early.
+        self.encoder_layer_step = 1
+        self.decoder_layer_step = 1
+        self.encoder_num_layers = 1
+        self.decoder_num_layers = 1
+        self.bottleneck_size = 1
 
         # Map solution vector (length 7)
         y1, y2, y3, y4, y5, y6, y7 = solution
 
         self.layer_type = self.map_layer_type(y1)  # Shared for encoder & decoder
-
-        # === unify uni‐ and multivariate mapping ===
-        # choose the reference dimension: sequence length for univariate, feature count for multivariate
-        ref_dim = self.seq_len if self.is_univariate else self.n_features
-
-        # map raw genes into valid step sizes in [1…ref_dim]
-        self.encoder_layer_step = self.map_layer_step(y2, ref_dim)
-        self.decoder_layer_step = self.map_layer_step(y4, ref_dim)
-
-        # now cap the layer counts so that step * num_layers ≤ ref_dim
-        max_enc = max(1, ref_dim // self.encoder_layer_step)
-        max_dec = max(1, ref_dim // self.decoder_layer_step)
-
-        # finally map into those smaller ranges
-        self.encoder_num_layers = self.map_num_layers(y5, max_enc)
-        self.decoder_num_layers = self.map_num_layers(y3, max_dec)
-        # ============================================
-
         self.activation = self.map_activation(y6)
         self.optimizer_name = self.map_optimizer(y7, self)
 
-        # Build encoder hidden dimensions using encoder parameters.
-        if self.is_univariate:
-            encoder_hidden_dims = self.calculate_univariate_hidden_dims(
-                self.seq_len,
-                self.encoder_layer_step,
-                self.encoder_num_layers
+        self.hidden_dims = []
+        self.decoder_hidden_dims = []
+        decode_ok = self._decode_solution_v2(y2, y3, y4, y5) if self.mapping_version == "v2" else self._decode_solution_v1(y2, y3, y4, y5)
+        if not decode_ok:
+            self.is_valid = False
+            Log.debug(f"Invalid architecture configuration for mapping_version={self.mapping_version}.")
+            self.bottleneck_size = None
+            self.hidden_dims = []
+            self.encoding_layers = None
+            self.decoding_layers = None
+            self.get_hash()
+            return
+
+        if self.mapping_version == "v2":
+            # Mapping v2 builds a deterministic decoder profile directly.
+            self.generate_autoencoder(
+                self.layer_type,
+                self.dataset_shape,
+                self.hidden_dims,
+                symmetrical=False,
+                decoder_hidden_dims_override=self.decoder_hidden_dims,
             )
-            if encoder_hidden_dims is None:
-                self.is_valid = False
-                Log.debug("Invalid encoder configuration (univariate).")
-                self.bottleneck_size = None
-                self.hidden_dims = []
-                self.encoding_layers = None
-                self.decoding_layers = None
-                self.get_hash()
-                return
-            self.hidden_dims = encoder_hidden_dims
-            self.bottleneck_size = encoder_hidden_dims[-1]
         else:
-            encoder_hidden_dims = self.calculate_hidden_dims(
-                self.n_features,
-                self.encoder_layer_step,
-                self.encoder_num_layers
+            self.generate_autoencoder(
+                self.layer_type,
+                self.dataset_shape,
+                self.hidden_dims,
+                symmetrical=(
+                    self.encoder_layer_step == self.decoder_layer_step and
+                    self.encoder_num_layers == self.decoder_num_layers
+                )
             )
-            if encoder_hidden_dims is None:
-                self.is_valid = False
-                Log.debug("Invalid encoder configuration (multivariate).")
-                self.bottleneck_size = None
-                self.hidden_dims = []
-                self.encoding_layers = None
-                self.decoding_layers = None
-                self.get_hash()
-                return
-            self.hidden_dims = encoder_hidden_dims
-            self.bottleneck_size = encoder_hidden_dims[-1]
 
         if not self.is_valid:
             self.get_hash()
             return
 
-        # Generate the autoencoder with dynamic parameters.
-        self.generate_autoencoder(
-            self.layer_type,
-            self.dataset_shape,
-            self.hidden_dims,
-            symmetrical=(
-                self.encoder_layer_step == self.decoder_layer_step and
-                self.encoder_num_layers == self.decoder_num_layers
-            )
-        )
-
         self.get_hash()
         Log.debug(
-            f"MODEL_DECODE hash={self.hash_id} layer_type={self.layer_type} "
+            f"MODEL_DECODE hash={self.hash_id} mapping_version={self.mapping_version} layer_type={self.layer_type} "
             f"enc_step={self.encoder_layer_step} enc_layers={self.encoder_num_layers} "
             f"dec_layers={self.decoder_num_layers} dec_step={self.decoder_layer_step} "
             f"activation={self.activation_name} optimizer={self.optimizer_name} "
@@ -144,17 +118,25 @@ class RNNVAE(BaseVAE, nn.Module):
         )
 
     def get_hash(self):
+        hash_parts = [
+            self.layer_type,
+            str(self.encoder_layer_step),
+            str(self.encoder_num_layers),
+            str(self.decoder_num_layers),
+            str(self.decoder_layer_step),
+            str(self.activation_name),
+            str(self.optimizer_name),
+            str(self.bottleneck_size),
+        ]
+        # Keep legacy v1 hash representation stable; include mapping payload for v2+.
+        if self.mapping_version != "v1":
+            hash_parts.extend([
+                str(self.mapping_version),
+                str(getattr(self, "encoder_hidden_dims", [])),
+                str(getattr(self, "decoder_hidden_dims", [])),
+            ])
         self.hash_id = hashlib.sha1(
-            str(
-                self.layer_type +
-                str(self.encoder_layer_step) +
-                str(self.encoder_num_layers) +
-                str(self.decoder_num_layers) +
-                str(self.decoder_layer_step) +
-                str(self.activation_name) +
-                str(self.optimizer_name) +
-                str(self.bottleneck_size)
-            ).encode('utf-8')
+            "".join(hash_parts).encode('utf-8')
         ).hexdigest()
         return self.hash_id
 
@@ -263,6 +245,188 @@ class RNNVAE(BaseVAE, nn.Module):
         num_layers = int(min_layers + gene * (max_layers - min_layers))
         return max(min(num_layers, max_layers), min_layers)
 
+    def resolve_mapping_version(self, kwargs):
+        model_params = kwargs.get("model_params", {}) if isinstance(kwargs, dict) else {}
+        version = str(model_params.get("mapping_version", "v1")).strip().lower()
+        if version in {"v2", "2"}:
+            return "v2"
+        return "v1"
+
+    @staticmethod
+    def _map_from_options(gene, options):
+        if not options:
+            raise ValueError("Options for gene mapping cannot be empty.")
+        idx = int(float(gene) * len(options))
+        idx = max(0, min(idx, len(options) - 1))
+        return options[idx]
+
+    def _reference_dim(self):
+        return int(self.seq_len if self.is_univariate else self.n_features)
+
+    @staticmethod
+    def _ratio_to_bottleneck_size(ref_dim, ratio):
+        raw = Decimal(str(ref_dim)) * Decimal(str(ratio))
+        rounded = raw.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        return int(rounded)
+
+    @staticmethod
+    def _allocate_strict_steps(total_delta, num_layers, curvature):
+        total_delta = int(total_delta)
+        num_layers = int(num_layers)
+        if total_delta <= 0 or num_layers <= 0:
+            return None
+        if num_layers > total_delta:
+            return None
+
+        positions = np.arange(1, num_layers + 1, dtype=float)
+        raw = np.power(positions, float(curvature))
+        raw = raw / raw.sum() * float(total_delta)
+
+        steps = np.floor(raw).astype(int)
+        steps = np.maximum(steps, 1)
+        current_sum = int(steps.sum())
+
+        if current_sum > total_delta:
+            for idx in np.argsort(-steps):
+                if current_sum <= total_delta:
+                    break
+                if steps[idx] > 1:
+                    steps[idx] -= 1
+                    current_sum -= 1
+            if current_sum > total_delta:
+                return None
+
+        remainder = total_delta - int(steps.sum())
+        if remainder > 0:
+            frac = raw - np.floor(raw)
+            order = np.argsort(-frac)
+            for i in range(remainder):
+                steps[order[i % num_layers]] += 1
+
+        return steps.tolist()
+
+    def _build_monotone_hidden_dims(self, start_dim, end_dim, num_layers, curvature):
+        start_dim = int(start_dim)
+        end_dim = int(end_dim)
+        num_layers = int(num_layers)
+        if start_dim <= 0 or end_dim <= 0 or num_layers <= 0:
+            return None
+        if start_dim == end_dim:
+            return None
+
+        decreasing = start_dim > end_dim
+        delta = abs(start_dim - end_dim)
+        steps = self._allocate_strict_steps(delta, num_layers, curvature)
+        if steps is None:
+            return None
+
+        dims = []
+        current = start_dim
+        for step in steps:
+            current = current - step if decreasing else current + step
+            dims.append(int(current))
+        return dims
+
+    @staticmethod
+    def _estimate_step(start_dim, dims):
+        if not dims:
+            return 1
+        prev = int(start_dim)
+        diffs = []
+        for dim in dims:
+            dim = int(dim)
+            diffs.append(abs(prev - dim))
+            prev = dim
+        avg = int(round(float(np.mean(diffs)))) if diffs else 1
+        return max(avg, 1)
+
+    def _decode_solution_v1(self, y2, y3, y4, y5):
+        ref_dim = self._reference_dim()
+
+        self.encoder_layer_step = self.map_layer_step(y2, ref_dim)
+        self.decoder_layer_step = self.map_layer_step(y4, ref_dim)
+
+        max_enc = max(1, ref_dim // self.encoder_layer_step)
+        max_dec = max(1, ref_dim // self.decoder_layer_step)
+
+        self.encoder_num_layers = self.map_num_layers(y5, max_enc)
+        self.decoder_num_layers = self.map_num_layers(y3, max_dec)
+
+        if self.is_univariate:
+            encoder_hidden_dims = self.calculate_univariate_hidden_dims(
+                self.seq_len,
+                self.encoder_layer_step,
+                self.encoder_num_layers
+            )
+        else:
+            encoder_hidden_dims = self.calculate_hidden_dims(
+                self.n_features,
+                self.encoder_layer_step,
+                self.encoder_num_layers
+            )
+
+        if encoder_hidden_dims is None:
+            return False
+
+        self.hidden_dims = encoder_hidden_dims
+        self.bottleneck_size = encoder_hidden_dims[-1]
+        return True
+
+    def _decode_solution_v2(self, y2, y3, y4, y5):
+        ref_dim = self._reference_dim()
+        if ref_dim <= 1:
+            return False
+
+        encoder_depth = self._map_from_options(y2, [1, 2, 3, 4, 5])
+        # Dense, bounded ratio grid keeps mapping simple while improving coverage.
+        bottleneck_ratio = self._map_from_options(y3, [round(r / 100.0, 2) for r in range(4, 51)])
+        encoder_curvature = self._map_from_options(y4, [0.7, 1.0, 1.3, 1.8])
+        decoder_depth_offset = self._map_from_options(y5, [-1, 0, 1, 2])
+
+        bottleneck_size = self._ratio_to_bottleneck_size(ref_dim, bottleneck_ratio)
+        bottleneck_size = max(1, min(ref_dim - 1, bottleneck_size))
+
+        max_depth = max(1, ref_dim - bottleneck_size)
+        encoder_depth = max(1, min(int(encoder_depth), max_depth))
+
+        encoder_hidden_dims = self._build_monotone_hidden_dims(
+            start_dim=ref_dim,
+            end_dim=bottleneck_size,
+            num_layers=encoder_depth,
+            curvature=encoder_curvature,
+        )
+        if not encoder_hidden_dims:
+            return False
+
+        decoder_target = ref_dim
+        decoder_depth = max(1, min(int(encoder_depth + decoder_depth_offset), max_depth))
+        decoder_curvature = max(0.4, 2.0 - float(encoder_curvature))
+        decoder_hidden_dims = self._build_monotone_hidden_dims(
+            start_dim=bottleneck_size,
+            end_dim=decoder_target,
+            num_layers=decoder_depth,
+            curvature=decoder_curvature,
+        )
+        if not decoder_hidden_dims:
+            return False
+
+        self.hidden_dims = encoder_hidden_dims
+        self.decoder_hidden_dims = decoder_hidden_dims
+        self.bottleneck_size = bottleneck_size
+        self.encoder_num_layers = int(len(self.hidden_dims))
+        self.decoder_num_layers = int(len(self.decoder_hidden_dims))
+        self.encoder_layer_step = self._estimate_step(ref_dim, self.hidden_dims)
+        self.decoder_layer_step = self._estimate_step(self.bottleneck_size, self.decoder_hidden_dims)
+        self.mapping_context = {
+            "mapping_version": "v2",
+            "ref_dim": int(ref_dim),
+            "bottleneck_ratio": float(bottleneck_ratio),
+            "encoder_curvature": float(encoder_curvature),
+            "decoder_curvature": float(decoder_curvature),
+            "decoder_depth_offset": int(decoder_depth_offset),
+        }
+        return True
+
     def calculate_hidden_dims(self, input_dim, layer_step, num_layers):
         hidden_dims = []
         current_dim = input_dim
@@ -297,7 +461,7 @@ class RNNVAE(BaseVAE, nn.Module):
         Log.debug(f"Decoder hidden dims: {hidden_dims}")
         return hidden_dims
 
-    def generate_autoencoder(self, layer_type, dataset_shape, hidden_dims, symmetrical=True):
+    def generate_autoencoder(self, layer_type, dataset_shape, hidden_dims, symmetrical=True, decoder_hidden_dims_override=None):
         # Build encoder
         self.encoder_hidden_dims = hidden_dims
         encoder_input_size = self.n_features
@@ -315,7 +479,9 @@ class RNNVAE(BaseVAE, nn.Module):
 
         # Build decoder
         self.decoding_layers = nn.ModuleList()
-        if symmetrical:
+        if decoder_hidden_dims_override is not None:
+            self.decoder_hidden_dims = [int(v) for v in decoder_hidden_dims_override]
+        elif symmetrical:
             self.decoder_hidden_dims = self.encoder_hidden_dims[::-1]
         else:
             self.decoder_hidden_dims = self.calculate_decoder_hidden_dims(

@@ -49,14 +49,20 @@ If you change export formats, manifest fields, cycle naming, feature expectation
 - Do not remove final deterministic training/export path after search when `export_enabled=true`.
 - Do not hardcode secrets; Postgres credentials are expected through `.env` (`NIANETVAE_DB_*`).
 
+## Local Execution Environment
+- For local commands in this workspace, use the dedicated Poetry interpreter:
+  - `/mnt/c/Users/sasop/AppData/Local/pypoetry/Cache/virtualenvs/nianetvae-ET2fLSr5-py3.11/Scripts/python.exe`
+- Optional shell helper for shorter commands:
+  - `PYTHON_BIN=/mnt/c/Users/sasop/AppData/Local/pypoetry/Cache/virtualenvs/nianetvae-ET2fLSr5-py3.11/Scripts/python.exe`
+
 ## Validation Expectations
 Run from repository root:
 - Unit/split tests:
-  - `pytest tests/test_metropt_dataloader.py`
+  - `$PYTHON_BIN -m pytest tests/test_metropt_dataloader.py`
 - Local per-cycle smoke run:
-  - `python main.py -c configs/main_config.yaml -alg particle_swarm -met SMAPE --cycle-id 0`
+  - `$PYTHON_BIN main.py -c configs/main_config.yaml -met SMAPE --cycle-id 0`
 - Manifest generation smoke:
-  - `python -m nianetvae.tools.generate_cycle_manifest --config configs/main_config.yaml --cycles 0-21`
+  - `$PYTHON_BIN -m nianetvae.tools.generate_cycle_manifest --config configs/main_config.yaml --cycles 0-21`
 - Export verification:
   - confirm `model.pt`, `model_meta.json`, `search_summary.json` exist for trained cycles and manifest resolves statuses.
 

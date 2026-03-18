@@ -122,12 +122,6 @@ if __name__ == '__main__':
                         help='path to the config file',
                         default='configs/main_config.yaml')
 
-    # TODO Can be deleted after double checking
-    parser.add_argument('--algorithms', '-alg',
-                        dest="algorithms",
-                        metavar='list_of_strings',
-                        help='NIA algorithms to use (comma-separated)')
-
     parser.add_argument('--metrics', '-met',
                         dest="metrics",
                         metavar='list_of_strings',
@@ -252,19 +246,10 @@ if __name__ == '__main__':
     nianetvae.rnn_vae_architecture_search.datamodule = datamodule
     nianetvae.rnn_vae_architecture_search.dataset_name = db_dataset_name
 
-    # TODO Can be deleted after double checking
-    algorithms = []
-    if args.algorithms is not None:
-        args.algorithms = args.algorithms.split(',')
-        algorithms = args.algorithms
-    else:
-        algorithms = config['nia_search']['algorithms']
-
-    # Update algorithms and metrics based on arguments or config
-    algorithms = args.algorithms if args.algorithms else config['nia_search']['algorithms']
+    # Update metrics based on arguments or config
     metrics = args.metrics if args.metrics else config['nia_search']['metrics']
 
     config['nia_search']['metrics'] = metrics
-    solve_architecture_problem(algorithms)
+    solve_architecture_problem()
 
     Log.info(f"RUN_END run_uuid={RUN_UUID} ended_at={datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

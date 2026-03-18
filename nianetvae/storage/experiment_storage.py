@@ -152,7 +152,6 @@ class SQLiteConnector:
         # Ensure tables exist on startup, but do not fail on error
         try:
             self._create_table()
-            self._create_table_metrics()
         except Exception as e:
             Log.error(f"Error initializing database tables: {e}")
 
@@ -209,30 +208,6 @@ class SQLiteConnector:
                 conn.close()
 
     @_retry_db()
-    def _create_table_metrics(self):
-        conn = None
-        try:
-            conn = self._get_connection()
-            cur = conn.cursor()
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS observed_metrics (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    dataset_name TEXT NOT NULL,
-                    algorithm_name TEXT NOT NULL,
-                    metric_name TEXT NOT NULL,
-                    observed_min REAL NOT NULL,
-                    observed_max REAL NOT NULL,
-                    UNIQUE(dataset_name,algorithm_name,metric_name)
-                );
-            ''')
-            conn.commit()
-        except Exception as e:
-            Log.error(f"Error creating metrics table: {e}")
-        finally:
-            if conn:
-                conn.close()
-
-    @_retry_db()
     def get_entries(self, hash_id, dataset_name):
         conn = None
         try:
@@ -283,58 +258,6 @@ class SQLiteConnector:
         except Exception as e:
             Log.error(f"Error fetching best results: {e}")
             return None, None
-        finally:
-            if conn:
-                conn.close()
-
-    def get_min_max(self, dataset_name, algorithm_name, metric_name):
-        """
-        Retrieve observed min and max for a metric. Returns default infinities on error or missing.
-        """
-        conn = None
-        try:
-            conn = self._get_connection()
-            cur = conn.cursor()
-            cur.execute('''
-                SELECT observed_min, observed_max
-                FROM observed_metrics
-                WHERE dataset_name = ? AND algorithm_name = ? AND metric_name = ?
-            ''', (dataset_name, algorithm_name, metric_name))
-            row = cur.fetchone()
-            if row is None:
-                Log.debug(f"No existing min/max for {metric_name}. Returning defaults.")
-                return float('inf'), float('-inf')
-            return row
-        except Exception as e:
-            Log.error(f"Error in get_min_max for {metric_name}: {e}")
-            return float('inf'), float('-inf')
-        finally:
-            if conn:
-                conn.close()
-
-    def update_min_max(self, dataset_name, algorithm_name, metric_name, value):
-        """
-        Insert or update the min/max pair for a metric, but do not fail the script on errors.
-        """
-        conn = None
-        try:
-            current_min, current_max = self.get_min_max(dataset_name, algorithm_name, metric_name)
-            new_min = min(current_min, value)
-            new_max = max(current_max, value)
-
-            conn = self._get_connection()
-            cur = conn.cursor()
-            cur.execute('''
-                INSERT INTO observed_metrics
-                  (dataset_name, algorithm_name, metric_name, observed_min, observed_max)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(dataset_name,algorithm_name,metric_name)
-                DO UPDATE SET observed_min=excluded.observed_min,
-                              observed_max=excluded.observed_max;
-            ''', (dataset_name, algorithm_name, metric_name, new_min, new_max))
-            conn.commit()
-        except Exception as e:
-            Log.error(f"Failed to update min/max for {metric_name}: {e}")
         finally:
             if conn:
                 conn.close()
@@ -483,7 +406,6 @@ class PostgresConnector:
         self.table_name = table_name
         try:
             self._create_table()
-            self._create_table_metrics()
         except Exception as e:
             Log.error(f"Error initializing Postgres tables: {e}")
 
@@ -527,30 +449,6 @@ class PostgresConnector:
             conn.commit()
         except Exception as e:
             Log.error(f"Error creating Postgres main table: {e}")
-        finally:
-            if conn:
-                conn.close()
-
-    @_retry_pg()
-    def _create_table_metrics(self):
-        conn = None
-        try:
-            conn = self._get_connection()
-            cur = conn.cursor()
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS observed_metrics (
-                    id SERIAL PRIMARY KEY,
-                    dataset_name TEXT NOT NULL,
-                    algorithm_name TEXT NOT NULL,
-                    metric_name TEXT NOT NULL,
-                    observed_min REAL NOT NULL,
-                    observed_max REAL NOT NULL,
-                    UNIQUE(dataset_name,algorithm_name,metric_name)
-                );
-            ''')
-            conn.commit()
-        except Exception as e:
-            Log.error(f"Error creating Postgres metrics table: {e}")
         finally:
             if conn:
                 conn.close()
@@ -606,52 +504,6 @@ class PostgresConnector:
         except Exception as e:
             Log.error(f"Error fetching best results: {e}")
             return None, None
-        finally:
-            if conn:
-                conn.close()
-
-    def get_min_max(self, dataset_name, algorithm_name, metric_name):
-        conn = None
-        try:
-            conn = self._get_connection()
-            cur = conn.cursor()
-            cur.execute('''
-                SELECT observed_min, observed_max
-                FROM observed_metrics
-                WHERE dataset_name = %s AND algorithm_name = %s AND metric_name = %s
-            ''', (dataset_name, algorithm_name, metric_name))
-            row = cur.fetchone()
-            if row is None:
-                Log.debug(f"No existing min/max for {metric_name}. Returning defaults.")
-                return float('inf'), float('-inf')
-            return row
-        except Exception as e:
-            Log.error(f"Error in get_min_max for {metric_name}: {e}")
-            return float('inf'), float('-inf')
-        finally:
-            if conn:
-                conn.close()
-
-    def update_min_max(self, dataset_name, algorithm_name, metric_name, value):
-        conn = None
-        try:
-            current_min, current_max = self.get_min_max(dataset_name, algorithm_name, metric_name)
-            new_min = min(current_min, value)
-            new_max = max(current_max, value)
-
-            conn = self._get_connection()
-            cur = conn.cursor()
-            cur.execute('''
-                INSERT INTO observed_metrics
-                  (dataset_name, algorithm_name, metric_name, observed_min, observed_max)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT(dataset_name,algorithm_name,metric_name)
-                DO UPDATE SET observed_min=EXCLUDED.observed_min,
-                              observed_max=EXCLUDED.observed_max;
-            ''', (dataset_name, algorithm_name, metric_name, new_min, new_max))
-            conn.commit()
-        except Exception as e:
-            Log.error(f"Failed to update min/max for {metric_name}: {e}")
         finally:
             if conn:
                 conn.close()
