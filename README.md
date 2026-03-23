@@ -89,6 +89,25 @@ docker run \
 1. Run the installation via ```poetry install ```
 2. Then run the task with```poetry run poe autoinstall-torch-cuda```
 
+##### Workflow Mode
+
+Set `workflow.mode` in `configs/main_config.yaml`:
+
+- `baseline_search` (default): current architecture-search workflow.
+- `per_maint_finetune`: Experiment A workflow.
+
+Notes:
+- `per_maint_finetune` requires `data_params.regime: "per_maint"` and `data_params.cycle_id` to be set.
+- `per_maint_finetune` behavior:
+  - `cycle_id=0`: runs baseline architecture search to initialize the first model.
+  - `cycle_id>0`: reuses previous cycle architecture/weights and performs fine-tune training for the current cycle.
+- Controlled fine-tune policy (cycle `>0`) is config-driven:
+  - Base LR: `exp_params.learning_rate` (default `0.01`).
+  - Fine-tune LR: `base_lr * workflow.finetune.learning_rate_scale` (default scale `0.1`).
+  - Fine-tune epoch cap: `workflow.finetune.max_epochs` (default `3`).
+- If previous cycle artifacts are missing (`model.pt`, `model_meta.json`), run exits with an explicit error.
+- Workflow mode is config-only (`workflow.mode` in YAML).
+
 ##### Running NiaNetVAE script with HPC SLURM:
 
 1. First build an image with docker (above example)

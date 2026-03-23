@@ -18,8 +18,10 @@ from nianetvae.dataloaders.wadi_dataloader import WADIDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.dataloaders.metropt_dataloader import MetroPTDataLoader
 from nianetvae.storage.experiment_storage import get_db_connector
-from nianetvae.rnn_vae_architecture_search import solve_architecture_problem
+from nianetvae.rnn_vae_architecture_search import solve_architecture_problem, run_per_maint_finetune_cycle
 import nianetvae.experiments.metrics_evaluation
+
+ALLOWED_WORKFLOW_MODES = {"baseline_search", "per_maint_finetune"}
 
 
 def _load_yaml_file(path: str) -> dict:
@@ -95,20 +97,40 @@ def _config_summary_line(config: dict) -> str:
     data_params = config.get("data_params", {})
     nia_search = config.get("nia_search", {})
     logging_params = config.get("logging_params", {})
+    trainer_params = config.get("trainer_params", {})
+    workflow_mode = ((config.get("workflow") or {}).get("mode"))
     parts = [
         "CONFIG_SUMMARY",
+        f"workflow_mode={_value_or_na(workflow_mode)}",
         f"dataset={_value_or_na(data_params.get('dataset_name'))}",
         f"regime={_value_or_na(data_params.get('regime'))}",
         f"cycle_id={_value_or_na(data_params.get('cycle_id'))}",
         f"seq_len={_value_or_na(data_params.get('seq_len'))}",
         f"batch_size={_value_or_na(data_params.get('batch_size'))}",
         f"n_features={_value_or_na(data_params.get('n_features'))}",
+        f"min_epochs={_value_or_na(trainer_params.get('min_epochs'))}",
+        f"max_epochs={_value_or_na(trainer_params.get('max_epochs'))}",
         f"population_size={_value_or_na(nia_search.get('population_size'))}",
         f"time_limit={_value_or_na(nia_search.get('time'))}",
         f"metrics={_as_csv(nia_search.get('metrics'))}",
         f"db_backend={_value_or_na(logging_params.get('db_backend', 'sqlite'))}",
     ]
     return " ".join(parts)
+
+
+def _resolve_workflow_mode(config: dict) -> str:
+    workflow = config.get("workflow") or {}
+    raw_mode = workflow.get("mode", "baseline_search")
+    mode = str(raw_mode).strip().lower() if raw_mode is not None else "baseline_search"
+    if not mode:
+        mode = "baseline_search"
+    if mode not in ALLOWED_WORKFLOW_MODES:
+        allowed = ", ".join(sorted(ALLOWED_WORKFLOW_MODES))
+        raise ValueError(
+            f"Invalid workflow.mode={raw_mode!r}. Allowed values: {allowed}."
+        )
+    config["workflow"] = {"mode": mode}
+    return mode
 
 
 if __name__ == '__main__':
@@ -191,6 +213,12 @@ if __name__ == '__main__':
         # Avoid passing this key into dataloaders (even though most accept **kwargs).
         config["data_params"].pop("compute_anomaly_metrics", None)
 
+    try:
+        workflow_mode = _resolve_workflow_mode(config)
+    except ValueError as exc:
+        _err(str(exc))
+        exit(1)
+
     # Validate that the dataset config provided the required keys before running anything expensive.
     if not config.get("data_params", {}).get("dataset_name"):
         _err(
@@ -211,6 +239,20 @@ if __name__ == '__main__':
         except Exception:
             db_dataset_name = base_dataset_name
 
+    if workflow_mode == "per_maint_finetune":
+        if regime != "per_maint":
+            _err(
+                "workflow.mode='per_maint_finetune' requires "
+                "data_params.regime='per_maint'."
+            )
+            exit(1)
+        if cycle_id is None:
+            _err(
+                "workflow.mode='per_maint_finetune' requires "
+                "data_params.cycle_id to be set."
+            )
+            exit(1)
+
     # Continue with the rest of the code
     config['logging_params']['save_dir'] += '/' + RUN_UUID + '/'
     Path(config['logging_params']['save_dir']).mkdir(parents=True, exist_ok=True)
@@ -220,7 +262,8 @@ if __name__ == '__main__':
     cycle_tag = cycle_id if cycle_id is not None else "n/a"
     Log.info(
         f"RUN_START run_uuid={RUN_UUID} dataset={base_dataset_name} "
-        f"db_dataset={db_dataset_name} regime={regime_tag} cycle_id={cycle_tag} "
+        f"db_dataset={db_dataset_name} workflow_mode={workflow_mode} "
+        f"regime={regime_tag} cycle_id={cycle_tag} "
         f"started_at={datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
     cuda_available = torch.cuda.is_available()
@@ -246,10 +289,11 @@ if __name__ == '__main__':
     nianetvae.rnn_vae_architecture_search.datamodule = datamodule
     nianetvae.rnn_vae_architecture_search.dataset_name = db_dataset_name
 
-    # Update metrics based on arguments or config
-    metrics = args.metrics if args.metrics else config['nia_search']['metrics']
-
-    config['nia_search']['metrics'] = metrics
-    solve_architecture_problem()
+    if workflow_mode == "baseline_search":
+        metrics = args.metrics if args.metrics else config['nia_search']['metrics']
+        config['nia_search']['metrics'] = metrics
+        solve_architecture_problem()
+    elif workflow_mode == "per_maint_finetune":
+        run_per_maint_finetune_cycle()
 
     Log.info(f"RUN_END run_uuid={RUN_UUID} ended_at={datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

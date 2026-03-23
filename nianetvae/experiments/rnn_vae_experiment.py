@@ -1,5 +1,4 @@
 from lightning.pytorch import LightningModule
-from lightning.pytorch.callbacks import LearningRateFinder
 from tabulate import tabulate
 
 from torch import Tensor
@@ -12,34 +11,6 @@ from nianetvae.experiments.anomaly_evaluation import AnomalyDetectionMetrics
 from nianetvae.models.base import BaseVAE
 
 
-class FineTuneLearningRateFinder(LearningRateFinder):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs['lr_finder'])
-        self.tune_n_epochs = kwargs['tune_n_epochs']
-        self.previous_loss = float('inf')
-
-    def on_fit_start(self, *args, **kwargs):
-        return
-
-    def on_train_epoch_start(self, trainer, pl_module):
-        if trainer.current_epoch % self.tune_n_epochs == 0 or trainer.current_epoch == 0:
-            if pl_module.train_loss is not None:
-                loss = pl_module.train_loss['loss'].item()
-                if loss < self.previous_loss:
-                    Log.debug(f"\nLoss decreased from {self.previous_loss} to {loss}")
-
-                elif loss > self.previous_loss:
-                    Log.debug(f"\nLoss increased from {self.previous_loss} to {loss}")
-                    self.lr_find(trainer, pl_module)
-                    Log.debug(f"Learning rate: {pl_module.learning_rate}")
-
-                self.previous_loss = pl_module.train_loss['loss'].item()
-
-            else:
-                self.lr_find(trainer, pl_module)
-                Log.debug(f"Learning rate: {pl_module.learning_rate}")
-
-
 class RNNVAExperiment(LightningModule):
     def __init__(self, model: BaseVAE, dataset_name, alg_name, **kwargs) -> None:
         super(RNNVAExperiment, self).__init__()
@@ -48,8 +19,8 @@ class RNNVAExperiment(LightningModule):
         self.model = model
         self.dataset_name=dataset_name
         self.alg_name=alg_name
-        self.learning_rate = 0.01
         self.params = kwargs['exp_params']
+        self.learning_rate = float(self.params.get('learning_rate', 0.01))
         self.seq_len = kwargs['data_params']['seq_len']
         self.n_features = kwargs['data_params']['n_features']
         self.curr_device = None
@@ -196,4 +167,3 @@ class RNNVAExperiment(LightningModule):
             Log.info(tabulate(metrics_list, headers=["Metric", "Value"], tablefmt="pretty"))
         else:
             Log.error("Anomaly detection was not performed due to errors.")
-

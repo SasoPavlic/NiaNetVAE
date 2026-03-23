@@ -37,12 +37,11 @@ import torch.nn as nn
 import yaml
 import matplotlib.pyplot as plt
 from lightning.pytorch import Trainer, seed_everything
-from lightning.pytorch.callbacks import EarlyStopping
 from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger
 
 # --- Project imports ---
 from log import Log
-from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment, FineTuneLearningRateFinder
+from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
 from nianetvae.models.rnn_vae import RNNVAE
 
 # Dataloaders (same mapping as main.py)
@@ -404,11 +403,6 @@ def main():
     # ---------- Lightning Experiment ----------
     experiment = RNNVAExperiment(model, model_path, dataset_name, **config)
 
-    callbacks = [
-        FineTuneLearningRateFinder(**config["fine_tune_lr_finder"]),
-        EarlyStopping(**config["early_stop"], verbose=True, check_finite=True),
-    ]
-
     loggers = [
         CSVLogger(save_dir=model_path, name="pl_logs"),
         TensorBoardLogger(save_dir=model_path, name="tb")
@@ -421,7 +415,6 @@ def main():
         default_root_dir=model_path,
         log_every_n_steps=50,
         logger=loggers,
-        callbacks=callbacks,
         **config["trainer_params"],
     )
 

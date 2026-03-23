@@ -8,14 +8,13 @@ import numpy as np
 import torch
 from lightning.pytorch import seed_everything
 from lightning.pytorch import Trainer
-from lightning.pytorch.callbacks import EarlyStopping
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.problem import Problem
 from pymoo.optimize import minimize
 from pymoo.termination import get_termination
 
 from log import Log
-from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment, FineTuneLearningRateFinder
+from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
 from nianetvae.models.rnn_vae import RNNVAE
 
 # Global variables that are set by main.py before calling solve_architecture_problem
@@ -75,7 +74,10 @@ def _resolve_export_dir(cfg: dict) -> Path:
     return Path(export_root) / dataset / f"run_{run_label}"
 
 
-def _build_final_trainer(default_root_dir: str):
+def _build_final_trainer(default_root_dir: str, trainer_params_override: dict | None = None):
+    trainer_params = dict(config.get('trainer_params', {}))
+    if trainer_params_override:
+        trainer_params.update(trainer_params_override)
     return Trainer(
         enable_progress_bar=True,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
@@ -84,23 +86,34 @@ def _build_final_trainer(default_root_dir: str):
         log_every_n_steps=50,
         logger=False,
         enable_checkpointing=False,
-        callbacks=[
-            FineTuneLearningRateFinder(**config['fine_tune_lr_finder']),
-            EarlyStopping(**config['early_stop'], verbose=True, check_finite=True),
-        ],
-        **config['trainer_params']
+        **trainer_params
     )
 
 
-def _run_final_training(best_solution):
-    seed_everything(config['exp_params']['manual_seed'], True)
-    model = RNNVAE(best_solution, **config)
-    if not model.is_valid:
-        raise ValueError("Best solution produced an invalid model during final training.")
-
+def _run_training_with_model(
+        model: RNNVAE,
+        algorithm_name: str,
+        learning_rate: float | None = None,
+        trainer_params_override: dict | None = None,
+):
     final_root = config['logging_params']['save_dir']
-    experiment = RNNVAExperiment(model, dataset_name, "NSGA2", **config)
-    trainer = _build_final_trainer(default_root_dir=final_root)
+    experiment = RNNVAExperiment(model, dataset_name, algorithm_name, **config)
+    if learning_rate is not None:
+        experiment.learning_rate = float(learning_rate)
+    effective_trainer_params = dict(config.get("trainer_params", {}))
+    if trainer_params_override:
+        effective_trainer_params.update(trainer_params_override)
+    Log.info(
+        "TRAINING_POLICY "
+        f"alg={algorithm_name} optimizer={model.optimizer_name} "
+        f"learning_rate={experiment.learning_rate} scheduler=none "
+        f"min_epochs={effective_trainer_params.get('min_epochs')} "
+        f"max_epochs={effective_trainer_params.get('max_epochs')}"
+    )
+    trainer = _build_final_trainer(
+        default_root_dir=final_root,
+        trainer_params_override=trainer_params_override,
+    )
 
     started_at = datetime.now()
     trainer.fit(experiment, datamodule=datamodule)
@@ -131,6 +144,161 @@ def _run_final_training(best_solution):
         "metrics": final_metrics,
         "anomaly_metrics": anomaly_metrics,
     }
+
+
+def _run_final_training(best_solution):
+    seed_everything(config['exp_params']['manual_seed'], True)
+    model = RNNVAE(best_solution, **config)
+    if not model.is_valid:
+        raise ValueError("Best solution produced an invalid model during final training.")
+    return _run_training_with_model(model, "NSGA2")
+
+
+def _resolve_finetune_policy() -> dict:
+    workflow = config.get("workflow") or {}
+    finetune_cfg = workflow.get("finetune") or {}
+    exp_params = config.get("exp_params") or {}
+    trainer_params = config.get("trainer_params") or {}
+
+    base_lr = float(exp_params.get("learning_rate", 0.01))
+    lr_scale = float(finetune_cfg.get("learning_rate_scale", 0.1))
+    if base_lr <= 0:
+        raise ValueError(f"Invalid exp_params.learning_rate={base_lr}. Must be > 0.")
+    if lr_scale <= 0:
+        raise ValueError(
+            f"Invalid workflow.finetune.learning_rate_scale={lr_scale}. Must be > 0."
+        )
+    finetune_lr = base_lr * lr_scale
+
+    max_epochs = int(finetune_cfg.get("max_epochs", 3))
+    if max_epochs < 1:
+        raise ValueError(
+            f"Invalid workflow.finetune.max_epochs={max_epochs}. Must be >= 1."
+        )
+
+    default_min_epochs = int(trainer_params.get("min_epochs", 1))
+    min_epochs = int(finetune_cfg.get("min_epochs", min(default_min_epochs, max_epochs)))
+    if min_epochs < 1:
+        raise ValueError(
+            f"Invalid workflow.finetune.min_epochs={min_epochs}. Must be >= 1."
+        )
+    if min_epochs > max_epochs:
+        raise ValueError(
+            "Invalid fine-tune epoch policy: "
+            f"workflow.finetune.min_epochs={min_epochs} > max_epochs={max_epochs}."
+        )
+
+    return {
+        "base_learning_rate": base_lr,
+        "learning_rate_scale": lr_scale,
+        "finetune_learning_rate": finetune_lr,
+        "trainer_params_override": {
+            "min_epochs": min_epochs,
+            "max_epochs": max_epochs,
+        },
+    }
+
+
+def _resolve_cycle_export_dir(cycle_id: int) -> Path:
+    cfg = {
+        "logging_params": dict(config.get("logging_params", {})),
+        "data_params": dict(config.get("data_params", {})),
+    }
+    cfg["data_params"]["regime"] = "per_maint"
+    cfg["data_params"]["cycle_id"] = int(cycle_id)
+    return _resolve_export_dir(cfg)
+
+
+def run_per_maint_finetune_cycle():
+    data_params = config.get("data_params", {})
+    cycle_id = data_params.get("cycle_id")
+    if cycle_id is None:
+        raise ValueError("per_maint_finetune requires data_params.cycle_id.")
+    cycle_id = int(cycle_id)
+
+    if cycle_id == 0:
+        Log.info("FINETUNE_MODE cycle_id=0 uses baseline_search for initial architecture.")
+        solve_architecture_problem()
+        return
+
+    previous_cycle_id = cycle_id - 1
+    previous_cycle_dir = _resolve_cycle_export_dir(previous_cycle_id)
+    current_cycle_dir = _resolve_export_dir(config)
+    previous_weights = previous_cycle_dir / "model.pt"
+    previous_meta = previous_cycle_dir / "model_meta.json"
+
+    if not previous_weights.exists() or not previous_meta.exists():
+        raise FileNotFoundError(
+            "per_maint_finetune requires previous cycle artifacts. "
+            f"Missing model/meta for cycle {previous_cycle_id:02d} at {previous_cycle_dir}."
+        )
+
+    previous_metadata = json.loads(previous_meta.read_text(encoding="utf-8"))
+    previous_solution = previous_metadata.get("solution")
+    if previous_solution is None:
+        raise ValueError(
+            f"Previous cycle metadata is missing solution array: {previous_meta}"
+        )
+
+    seed_everything(config['exp_params']['manual_seed'], True)
+    model = RNNVAE(previous_solution, **config)
+    if not model.is_valid:
+        raise ValueError(
+            "Previous cycle solution produced an invalid architecture during finetune setup."
+        )
+
+    state_dict = torch.load(previous_weights, map_location="cpu")
+    model.load_state_dict(state_dict)
+    finetune_policy = _resolve_finetune_policy()
+
+    Log.info(
+        f"FINETUNE_START cycle_id={cycle_id:02d} source_cycle={previous_cycle_id:02d} "
+        f"source_model={previous_weights}"
+    )
+    Log.info(
+        "FINETUNE_POLICY "
+        f"base_learning_rate={finetune_policy['base_learning_rate']} "
+        f"learning_rate_scale={finetune_policy['learning_rate_scale']} "
+        f"finetune_learning_rate={finetune_policy['finetune_learning_rate']} "
+        f"min_epochs={finetune_policy['trainer_params_override']['min_epochs']} "
+        f"max_epochs={finetune_policy['trainer_params_override']['max_epochs']} "
+        "scheduler=none"
+    )
+    final_result = _run_training_with_model(
+        model,
+        "PER_MAINT_FINETUNE",
+        learning_rate=finetune_policy["finetune_learning_rate"],
+        trainer_params_override=finetune_policy["trainer_params_override"],
+    )
+    Log.info(
+        f"FINETUNE_DONE cycle_id={cycle_id:02d} source_cycle={previous_cycle_id:02d} "
+        f"fitness={final_result['fitness']} error={final_result['error']} "
+        f"complexity={final_result['complexity']}"
+    )
+
+    export_enabled = bool(config.get("logging_params", {}).get("export_enabled", False))
+    if not export_enabled:
+        return
+
+    search_result = {
+        "mode": "per_maint_finetune",
+        "search_performed": False,
+        "source_cycle_id": previous_cycle_id,
+        "source_cycle_key": f"{previous_cycle_id:02d}",
+        "source_weights_file": str(previous_weights),
+    }
+    model_path, meta_path, summary_path = _export_cycle_artifacts(
+        export_dir=current_cycle_dir,
+        model=final_result["model"],
+        best_solution=previous_solution,
+        best_algorithm="PER_MAINT_FINETUNE",
+        search_result=search_result,
+        final_result=final_result,
+    )
+    Log.info(
+        f"MODEL_EXPORT_READY dir={current_cycle_dir} "
+        f"weights={model_path.name} meta={meta_path.name} summary={summary_path.name}"
+    )
 
 
 def _export_cycle_artifacts(
@@ -425,10 +593,6 @@ class RNNVAEArchitectureMultiObj(Problem):
                         log_every_n_steps=50,
                         logger=False,
                         enable_checkpointing=False,
-                        callbacks=[
-                            FineTuneLearningRateFinder(**self.config['fine_tune_lr_finder']),
-                            EarlyStopping(**self.config['early_stop'], verbose=True, check_finite=True),
-                        ],
                         **self.config['trainer_params']
                     )
 
