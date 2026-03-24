@@ -113,6 +113,7 @@ def _cycle_key(cycle_id: int) -> str:
 def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_relative_to: Path) -> dict:
     dataset_name = str(config.get("data_params", {}).get("dataset_name", "dataset")).strip() or "dataset"
     regime = str(config.get("data_params", {}).get("regime", "per_maint")).strip().lower() or "per_maint"
+    workflow_mode = str((config.get("workflow") or {}).get("mode", "")).strip().lower() or None
     dataset_root = export_root / dataset_name
     paths_relative_to = paths_relative_to.resolve()
 
@@ -120,6 +121,7 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
         "schema_version": "1.0",
         "dataset": dataset_name,
         "regime": regime,
+        "workflow_mode": workflow_mode,
         "generated_at": datetime.now().isoformat(),
         "config_fingerprint": _config_fingerprint(config),
         "paths_relative_to": "manifest_directory",

@@ -100,7 +100,8 @@ Notes:
 - `per_maint_finetune` requires `data_params.regime: "per_maint"` and `data_params.cycle_id` to be set.
 - `per_maint_finetune` behavior:
   - `cycle_id=0`: runs baseline architecture search to initialize the first model.
-  - `cycle_id>0`: reuses previous cycle architecture/weights and performs fine-tune training for the current cycle.
+  - `cycle_id>0`: reuses latest previous trained cycle architecture/weights and performs fine-tune training.
+  - If a cycle is non-trainable (for example zero rows after phase filtering), run is skipped gracefully and `cycle_status.json` is written with `status=skipped_non_trainable`.
 - Controlled fine-tune policy (cycle `>0`) is config-driven:
   - Base LR: `exp_params.learning_rate` (default `0.01`).
   - Fine-tune LR: `base_lr * workflow.finetune.learning_rate_scale` (default scale `0.1`).
@@ -114,23 +115,28 @@ Notes:
 2. Docker push to Docker Hub: ```docker push username/nianet:vae```
 3. SSH into a HPC Cluster via your access credentials
 4. Copy the scripts from `slurm_scripts/` to your HPC working directory:
-   - `train_per_maint_cycles.sbatch` (array search job `0..21`)
+   - `train_per_maint_cycles.sbatch` (single-cycle training job; cycle id passed via env)
    - `build_cycle_manifest.sbatch` (single manifest job)
-   - `submit_per_maint_pipeline.sh` (submits both with dependency)
+   - `submit_per_maint_pipeline.sh` (submits sequential cycle chain + final manifest dependency)
 5. Make scripts executable: ```chmod +x submit_per_maint_pipeline.sh```
 6. Make sure folders `logs`, `data`, `configs` exist in your HPC working directory.
-7. Submit the full pipeline (array + manifest):
+7. Submit the full pipeline (sequential cycles + final manifest):
    ```bash
    ./submit_per_maint_pipeline.sh
    ```
+8. Optional resume controls:
+   - `RESUME_FROM=auto` (default): starts from first missing cycle artifact.
+   - `RESUME_FROM=<cycle_id>`: force resume from a specific cycle.
+   - `START_CYCLE=<n> END_CYCLE=<m>`: limit submission range.
+   - In auto mode, cycles with `cycle_status.json` marker `skipped_non_trainable` are treated as already handled.
 
 ##### Per-maint exported artifacts and manifest (for metropt consumption)
 
 1. In `configs/main_config.yaml` set:
    - `logging_params.export_enabled: true`
    - `logging_params.model_export_dir: logs/per_maint_models`
-2. Run the per-maint array jobs on HPC (for example `--array=0-21`).
-3. If you use `submit_per_maint_pipeline.sh`, manifest generation runs automatically after the array job.
+2. Run per-maint cycles sequentially via `submit_per_maint_pipeline.sh`.
+3. Manifest generation runs automatically as the final dependent job.
 4. If you run only `train_per_maint_cycles.sbatch`, generate manifest manually:
    ```bash
    python -m nianetvae.tools.generate_cycle_manifest --config configs/main_config.yaml --cycles 0-21
@@ -139,8 +145,10 @@ Notes:
    - `logs/per_maint_models/MetroPT/cycle_XX/model.pt`
    - `logs/per_maint_models/MetroPT/cycle_XX/model_meta.json`
    - `logs/per_maint_models/MetroPT/cycle_XX/search_summary.json`
+   - `logs/per_maint_models/MetroPT/cycle_XX/cycle_status.json` (only for skipped non-trainable cycles)
    - `logs/per_maint_models/MetroPT/cycle_manifest.json`
 6. Manifest artifact paths are stored relative to the manifest directory for cross-platform portability (HPC Linux -> local Windows).
+7. Manifest now includes top-level `workflow_mode` (for example `per_maint_finetune`) to make run context explicit downstream.
 
 ### HELP ⚠️
 

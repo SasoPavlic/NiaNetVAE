@@ -129,8 +129,15 @@ def _resolve_workflow_mode(config: dict) -> str:
         raise ValueError(
             f"Invalid workflow.mode={raw_mode!r}. Allowed values: {allowed}."
         )
-    config["workflow"] = {"mode": mode}
+    normalized_workflow = dict(workflow)
+    normalized_workflow["mode"] = mode
+    config["workflow"] = normalized_workflow
     return mode
+
+
+def _is_non_trainable_cycle_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "zero rows after phase filtering" in message
 
 
 if __name__ == '__main__':
@@ -275,19 +282,50 @@ if __name__ == '__main__':
 
     conn = get_db_connector(config, "solutions")
     seed_everything(config['exp_params']['manual_seed'], True)
+    nianetvae.rnn_vae_architecture_search.RUN_UUID = RUN_UUID
+    nianetvae.rnn_vae_architecture_search.config = config
+    nianetvae.rnn_vae_architecture_search.conn = conn
+    nianetvae.rnn_vae_architecture_search.dataset_name = db_dataset_name
 
     datamodule = select_dataloader(config)
-    datamodule.setup()
+    try:
+        datamodule.setup()
+    except Exception as exc:
+        finetune_cycle_id = None
+        try:
+            finetune_cycle_id = int(cycle_id) if cycle_id is not None else None
+        except Exception:
+            finetune_cycle_id = None
+        should_skip_non_trainable = (
+            workflow_mode == "per_maint_finetune"
+            and regime == "per_maint"
+            and finetune_cycle_id is not None
+            and finetune_cycle_id > 0
+            and _is_non_trainable_cycle_error(exc)
+        )
+        if should_skip_non_trainable:
+            detail = str(exc).strip()
+            Log.warning(
+                f"FINETUNE_SKIP cycle_id={finetune_cycle_id:02d} "
+                f"reason=non_trainable_cycle detail={detail}"
+            )
+            nianetvae.rnn_vae_architecture_search.export_skipped_non_trainable_cycle(
+                reason="non_trainable_cycle",
+                detail=detail,
+                source="datamodule.setup",
+            )
+            Log.info(
+                f"RUN_END run_uuid={RUN_UUID} ended_at={datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                "status=skipped_non_trainable"
+            )
+            exit(0)
+        raise
 
     # Allow dataloaders to override inferred feature dimensionality (e.g., rolling-feature datasets).
     if hasattr(datamodule, "n_features") and getattr(datamodule, "n_features"):
         config["data_params"]["n_features"] = int(getattr(datamodule, "n_features"))
 
-    nianetvae.rnn_vae_architecture_search.RUN_UUID = RUN_UUID
-    nianetvae.rnn_vae_architecture_search.config = config
-    nianetvae.rnn_vae_architecture_search.conn = conn
     nianetvae.rnn_vae_architecture_search.datamodule = datamodule
-    nianetvae.rnn_vae_architecture_search.dataset_name = db_dataset_name
 
     if workflow_mode == "baseline_search":
         metrics = args.metrics if args.metrics else config['nia_search']['metrics']

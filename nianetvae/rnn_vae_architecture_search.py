@@ -209,6 +209,54 @@ def _resolve_cycle_export_dir(cycle_id: int) -> Path:
     return _resolve_export_dir(cfg)
 
 
+def _find_latest_trained_cycle_artifacts_before(cycle_id: int):
+    for source_cycle_id in range(int(cycle_id) - 1, -1, -1):
+        source_cycle_dir = _resolve_cycle_export_dir(source_cycle_id)
+        source_weights = source_cycle_dir / "model.pt"
+        source_meta = source_cycle_dir / "model_meta.json"
+        if source_weights.exists() and source_meta.exists():
+            return source_cycle_id, source_cycle_dir, source_weights, source_meta
+    return None
+
+
+def export_skipped_non_trainable_cycle(reason: str, detail: str = "", source: str = "runtime"):
+    data_params = config.get("data_params", {})
+    cycle_id = data_params.get("cycle_id")
+    if cycle_id is None:
+        return
+    cycle_id = int(cycle_id)
+    if cycle_id <= 0:
+        return
+
+    export_enabled = bool(config.get("logging_params", {}).get("export_enabled", False))
+    if not export_enabled:
+        return
+
+    export_dir = _resolve_export_dir(config)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    status_path = export_dir / "cycle_status.json"
+    payload = {
+        "schema_version": "1.0",
+        "status": "skipped_non_trainable",
+        "cycle_id": cycle_id,
+        "dataset_name": data_params.get("dataset_name"),
+        "regime": data_params.get("regime"),
+        "reason": reason,
+        "detail": detail,
+        "source": source,
+        "run_uuid": RUN_UUID,
+        "created_at": datetime.now().isoformat(),
+    }
+    status_path.write_text(
+        json.dumps(_as_jsonable(payload), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    Log.info(
+        f"FINETUNE_SKIP_MARKER_WRITTEN cycle_id={cycle_id:02d} path={status_path} "
+        f"reason={reason}"
+    )
+
+
 def run_per_maint_finetune_cycle():
     data_params = config.get("data_params", {})
     cycle_id = data_params.get("cycle_id")
@@ -221,17 +269,14 @@ def run_per_maint_finetune_cycle():
         solve_architecture_problem()
         return
 
-    previous_cycle_id = cycle_id - 1
-    previous_cycle_dir = _resolve_cycle_export_dir(previous_cycle_id)
-    current_cycle_dir = _resolve_export_dir(config)
-    previous_weights = previous_cycle_dir / "model.pt"
-    previous_meta = previous_cycle_dir / "model_meta.json"
-
-    if not previous_weights.exists() or not previous_meta.exists():
+    previous_source = _find_latest_trained_cycle_artifacts_before(cycle_id)
+    if previous_source is None:
         raise FileNotFoundError(
             "per_maint_finetune requires previous cycle artifacts. "
-            f"Missing model/meta for cycle {previous_cycle_id:02d} at {previous_cycle_dir}."
+            f"No trained cycle artifacts found before cycle {cycle_id:02d}."
         )
+    previous_cycle_id, previous_cycle_dir, previous_weights, previous_meta = previous_source
+    current_cycle_dir = _resolve_export_dir(config)
 
     previous_metadata = json.loads(previous_meta.read_text(encoding="utf-8"))
     previous_solution = previous_metadata.get("solution")
