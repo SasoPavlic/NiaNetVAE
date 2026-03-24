@@ -235,6 +235,8 @@ def export_skipped_non_trainable_cycle(reason: str, detail: str = "", source: st
     export_dir = _resolve_export_dir(config)
     export_dir.mkdir(parents=True, exist_ok=True)
     status_path = export_dir / "cycle_status.json"
+    workflow_mode = str((config.get("workflow") or {}).get("mode", "")).strip().lower() or None
+    seed_source = (config.get("exp_params") or {}).get("manual_seed")
     payload = {
         "schema_version": "1.0",
         "status": "skipped_non_trainable",
@@ -246,6 +248,11 @@ def export_skipped_non_trainable_cycle(reason: str, detail: str = "", source: st
         "source": source,
         "run_uuid": RUN_UUID,
         "created_at": datetime.now().isoformat(),
+        "provenance": {
+            "experiment_mode": workflow_mode,
+            "source_cycle": None,
+            "seed_source": seed_source,
+        },
     }
     status_path.write_text(
         json.dumps(_as_jsonable(payload), indent=2, sort_keys=True),
@@ -359,12 +366,21 @@ def _export_cycle_artifacts(
     torch.save(model.state_dict(), model_path)
 
     data_params = config.get("data_params", {})
+    workflow_mode = str((config.get("workflow") or {}).get("mode", "")).strip().lower() or None
+    seed_source = (config.get("exp_params") or {}).get("manual_seed")
+    source_cycle = search_result.get("source_cycle_id")
+    provenance = {
+        "experiment_mode": workflow_mode,
+        "source_cycle": source_cycle,
+        "seed_source": seed_source,
+    }
     metadata = {
         "schema_version": "1.0",
         "dataset_name": data_params.get("dataset_name"),
         "db_dataset_name": dataset_name,
         "regime": data_params.get("regime"),
         "cycle_id": data_params.get("cycle_id"),
+        "workflow_mode": workflow_mode,
         "model_class": "nianetvae.models.rnn_vae.RNNVAE",
         "mapping_context": _as_jsonable(getattr(model, "mapping_context", {})),
         "solution": _as_jsonable(best_solution),
@@ -382,6 +398,7 @@ def _export_cycle_artifacts(
         "run_uuid": RUN_UUID,
         "git_ref": _get_git_ref(),
         "weights_file": "model.pt",
+        "provenance": provenance,
     }
     meta_path = export_dir / "model_meta.json"
     meta_path.write_text(json.dumps(_as_jsonable(metadata), indent=2, sort_keys=True), encoding="utf-8")
@@ -392,10 +409,12 @@ def _export_cycle_artifacts(
         "run_uuid": RUN_UUID,
         "git_ref": _get_git_ref(),
         "algorithm": best_algorithm,
+        "workflow_mode": workflow_mode,
         "dataset_name": data_params.get("dataset_name"),
         "db_dataset_name": dataset_name,
         "regime": data_params.get("regime"),
         "cycle_id": data_params.get("cycle_id"),
+        "provenance": provenance,
         "search": search_result,
         "final_training": {
             "started_at": final_result["started_at"],

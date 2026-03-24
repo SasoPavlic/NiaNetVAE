@@ -32,7 +32,14 @@ def _load_merged_config(config_path: Path) -> dict:
 
         candidate = Path(str(dataset_cfg))
         if not candidate.is_absolute():
-            candidate = (base_dir / candidate).resolve()
+            # Primary behavior: resolve relative to the config file directory.
+            candidate_resolved = (base_dir / candidate).resolve()
+            if candidate_resolved.exists():
+                candidate = candidate_resolved
+            else:
+                # Backward compatibility for config paths authored relative to project root.
+                # If base_dir resolution fails, try parent directory resolution.
+                candidate = (base_dir.parent / candidate).resolve()
         else:
             candidate = candidate.resolve()
         candidate_key = str(candidate)
@@ -110,10 +117,49 @@ def _cycle_key(cycle_id: int) -> str:
     return f"{int(cycle_id):02d}"
 
 
+def _extract_meta_provenance(metadata: dict) -> dict:
+    provenance = metadata.get("provenance") if isinstance(metadata.get("provenance"), dict) else {}
+    experiment_mode = provenance.get("experiment_mode") or metadata.get("workflow_mode")
+    source_cycle = provenance.get("source_cycle")
+    seed_source = provenance.get("seed_source")
+    out = {
+        "experiment_mode": experiment_mode,
+        "source_cycle": source_cycle,
+        "seed_source": seed_source,
+    }
+    return out
+
+
+def _validate_manifest_contract(manifest: dict) -> None:
+    if "cycles" not in manifest or not isinstance(manifest["cycles"], dict):
+        raise ValueError("Manifest contract violation: missing top-level 'cycles' object.")
+
+    allowed_statuses = {"trained", "alias", "missing"}
+    for key, entry in manifest["cycles"].items():
+        if not isinstance(entry, dict):
+            raise ValueError(f"Manifest contract violation: cycle {key} entry must be an object.")
+        status = str(entry.get("status", "")).strip().lower()
+        if status not in allowed_statuses:
+            raise ValueError(
+                f"Manifest contract violation: cycle {key} has unsupported status={status!r}."
+            )
+        if status == "trained":
+            if not entry.get("model_path") or not entry.get("meta_path"):
+                raise ValueError(
+                    f"Manifest contract violation: cycle {key} status=trained requires model_path and meta_path."
+                )
+        if status == "alias":
+            if entry.get("alias_to") is None:
+                raise ValueError(
+                    f"Manifest contract violation: cycle {key} status=alias requires alias_to."
+                )
+
+
 def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_relative_to: Path) -> dict:
     dataset_name = str(config.get("data_params", {}).get("dataset_name", "dataset")).strip() or "dataset"
     regime = str(config.get("data_params", {}).get("regime", "per_maint")).strip().lower() or "per_maint"
     workflow_mode = str((config.get("workflow") or {}).get("mode", "")).strip().lower() or None
+    seed_source = (config.get("exp_params") or {}).get("manual_seed")
     dataset_root = export_root / dataset_name
     paths_relative_to = paths_relative_to.resolve()
 
@@ -122,6 +168,7 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
         "dataset": dataset_name,
         "regime": regime,
         "workflow_mode": workflow_mode,
+        "seed_source": seed_source,
         "generated_at": datetime.now().isoformat(),
         "config_fingerprint": _config_fingerprint(config),
         "paths_relative_to": "manifest_directory",
@@ -146,6 +193,7 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
 
         if has_artifacts:
             metadata = _read_meta(meta_path)
+            summary_payload = _read_meta(summary_path) if summary_path.exists() else {}
             status = "trained"
             artifact_dir_rel = os.path.relpath(cycle_dir, paths_relative_to).replace("\\", "/")
             model_path_rel = os.path.relpath(model_path, paths_relative_to).replace("\\", "/")
@@ -167,6 +215,13 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
                 "run_uuid": metadata.get("run_uuid"),
                 "created_at": metadata.get("created_at"),
             }
+            provenance = _extract_meta_provenance(metadata)
+            if provenance.get("source_cycle") is None:
+                search_payload = summary_payload.get("search", {}) if isinstance(summary_payload, dict) else {}
+                inferred_source_cycle = search_payload.get("source_cycle_id")
+                if inferred_source_cycle is not None:
+                    provenance["source_cycle"] = inferred_source_cycle
+            entry.update(provenance)
             last_trained_cycle = int(cycle_id)
         elif not trainable:
             if last_trained_cycle is not None:
@@ -178,6 +233,7 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
                     "trainable": False,
                     "alias_to": int(last_trained_cycle),
                     "alias_to_key": _cycle_key(last_trained_cycle),
+                    "source_cycle": int(last_trained_cycle),
                     "reason": trainable_error or "non_trainable_cycle",
                 }
             else:
@@ -198,8 +254,11 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
                 "status": status,
                 "trainable": True,
                 "reason": "trainable_cycle_missing_artifact",
-            }
+                }
 
+        entry["experiment_mode"] = entry.get("experiment_mode") or workflow_mode
+        if entry.get("seed_source") is None:
+            entry["seed_source"] = seed_source
         manifest["cycles"][key] = entry
 
     if alias_cycles:
@@ -210,6 +269,7 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
         manifest["notes"].append(
             f"Missing cycle artifacts: {', '.join(missing_cycles)}"
         )
+    _validate_manifest_contract(manifest)
     return manifest
 
 

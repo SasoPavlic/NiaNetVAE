@@ -47,8 +47,8 @@ fi
 srun nvidia-smi
 
 # Prepare bind mounts (mount .env if present, so app can load DB credentials inside container).
-# Add compatibility alias for nested config references (/app/configs/configs/*).
-BIND_MOUNTS="$(pwd)/logs:/app/logs,$(pwd)/data:/app/data,$(pwd)/configs:/app/configs,$(pwd)/configs:/app/configs/configs"
+# Configs are mounted once at /app/configs (no nested /app/configs/configs alias).
+BIND_MOUNTS="$(pwd)/logs:/app/logs,$(pwd)/data:/app/data,$(pwd)/configs:/app/configs"
 if [ -f "$(pwd)/.env" ]; then
     BIND_MOUNTS="${BIND_MOUNTS},$(pwd)/.env:/app/.env:ro"
     echo "Detected .env at $(pwd)/.env and mounted it to /app/.env"

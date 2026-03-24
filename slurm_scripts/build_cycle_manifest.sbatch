@@ -46,10 +46,8 @@ if [ ! -f "${IMAGE_PATH}" ]; then
     exit 1
 fi
 
-# Note: main_config.yaml may reference dataset.config_file as "configs/<file>.yaml".
-# Add a compatibility alias mount so both /app/configs/<file> and
-# /app/configs/configs/<file> resolve to the same host directory.
-BIND_MOUNTS="$(pwd)/logs:/app/logs,$(pwd)/data:/app/data,$(pwd)/configs:/app/configs,$(pwd)/configs:/app/configs/configs"
+# Configs are mounted once at /app/configs (no nested /app/configs/configs alias).
+BIND_MOUNTS="$(pwd)/logs:/app/logs,$(pwd)/data:/app/data,$(pwd)/configs:/app/configs"
 if [ -f "$(pwd)/.env" ]; then
     BIND_MOUNTS="${BIND_MOUNTS},$(pwd)/.env:/app/.env:ro"
     echo "Detected .env at $(pwd)/.env and mounted it to /app/.env"
