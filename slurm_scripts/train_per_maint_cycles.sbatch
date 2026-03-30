@@ -7,7 +7,7 @@
 #SBATCH --ntasks=1                                               # Number of tasks
 #SBATCH --gres=gpu:1                                             # Request 1 GPU
 #SBATCH --mem-per-gpu=50GB                                       # Memory per GPU
-#SBATCH --time=21:00:00                                          # Maximum runtime
+#SBATCH --time=03:15:00                                          # Maximum runtime
 
 set -euo pipefail
 

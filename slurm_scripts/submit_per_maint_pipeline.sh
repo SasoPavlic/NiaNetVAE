@@ -13,6 +13,23 @@ END_CYCLE="${END_CYCLE:-21}"
 RESUME_FROM="${RESUME_FROM:-auto}"
 DATASET_NAME="${DATASET_NAME:-MetroPT}"
 EXPORT_ROOT="${EXPORT_ROOT:-logs/per_maint_models}"
+DETACHED_SUBMIT="${DETACHED_SUBMIT:-0}"
+
+# Optional detached mode:
+#   ./submit_per_maint_pipeline.sh --detach
+# This re-launches the script under nohup so SSH disconnects do not stop submission.
+if [ "${1:-}" = "--detach" ] && [ "${DETACHED_SUBMIT}" != "1" ]; then
+    mkdir -p outputs
+    ts=$(date +%Y%m%d_%H%M%S)
+    detach_log="outputs/submit_per_maint_pipeline_${ts}.log"
+    nohup env DETACHED_SUBMIT=1 bash "$0" > "${detach_log}" 2>&1 < /dev/null &
+    detach_pid=$!
+    echo "Detached submission started."
+    echo "  pid=${detach_pid}"
+    echo "  log=${detach_log}"
+    echo "Track progress with: tail -f ${detach_log}"
+    exit 0
+fi
 
 if [ ! -f "${TRAIN_SCRIPT}" ]; then
     echo "Missing ${TRAIN_SCRIPT}"

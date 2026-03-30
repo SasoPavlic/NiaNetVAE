@@ -18,10 +18,14 @@ from nianetvae.dataloaders.wadi_dataloader import WADIDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.dataloaders.metropt_dataloader import MetroPTDataLoader
 from nianetvae.storage.experiment_storage import get_db_connector
-from nianetvae.rnn_vae_architecture_search import solve_architecture_problem, run_per_maint_finetune_cycle
+from nianetvae.rnn_vae_architecture_search import (
+    solve_architecture_problem,
+    run_per_maint_finetune_cycle,
+    run_per_maint_warmstart_cycle,
+)
 import nianetvae.experiments.metrics_evaluation
 
-ALLOWED_WORKFLOW_MODES = {"baseline_search", "per_maint_finetune"}
+ALLOWED_WORKFLOW_MODES = {"baseline_search", "per_maint_finetune", "per_maint_warmstart_search"}
 
 
 def _load_yaml_file(path: str) -> dict:
@@ -246,16 +250,16 @@ if __name__ == '__main__':
         except Exception:
             db_dataset_name = base_dataset_name
 
-    if workflow_mode == "per_maint_finetune":
+    if workflow_mode in {"per_maint_finetune", "per_maint_warmstart_search"}:
         if regime != "per_maint":
             _err(
-                "workflow.mode='per_maint_finetune' requires "
+                f"workflow.mode='{workflow_mode}' requires "
                 "data_params.regime='per_maint'."
             )
             exit(1)
         if cycle_id is None:
             _err(
-                "workflow.mode='per_maint_finetune' requires "
+                f"workflow.mode='{workflow_mode}' requires "
                 "data_params.cycle_id to be set."
             )
             exit(1)
@@ -297,7 +301,7 @@ if __name__ == '__main__':
         except Exception:
             finetune_cycle_id = None
         should_skip_non_trainable = (
-            workflow_mode == "per_maint_finetune"
+            workflow_mode in {"per_maint_finetune", "per_maint_warmstart_search"}
             and regime == "per_maint"
             and finetune_cycle_id is not None
             and finetune_cycle_id > 0
@@ -306,7 +310,7 @@ if __name__ == '__main__':
         if should_skip_non_trainable:
             detail = str(exc).strip()
             Log.warning(
-                f"FINETUNE_SKIP cycle_id={finetune_cycle_id:02d} "
+                f"PER_MAINT_SKIP mode={workflow_mode} cycle_id={finetune_cycle_id:02d} "
                 f"reason=non_trainable_cycle detail={detail}"
             )
             nianetvae.rnn_vae_architecture_search.export_skipped_non_trainable_cycle(
@@ -333,5 +337,9 @@ if __name__ == '__main__':
         solve_architecture_problem()
     elif workflow_mode == "per_maint_finetune":
         run_per_maint_finetune_cycle()
+    elif workflow_mode == "per_maint_warmstart_search":
+        metrics = args.metrics if args.metrics else config['nia_search']['metrics']
+        config['nia_search']['metrics'] = metrics
+        run_per_maint_warmstart_cycle()
 
     Log.info(f"RUN_END run_uuid={RUN_UUID} ended_at={datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

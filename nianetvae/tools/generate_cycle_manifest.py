@@ -122,11 +122,16 @@ def _extract_meta_provenance(metadata: dict) -> dict:
     experiment_mode = provenance.get("experiment_mode") or metadata.get("workflow_mode")
     source_cycle = provenance.get("source_cycle")
     seed_source = provenance.get("seed_source")
+    search_init_mode = provenance.get("search_init_mode")
+    warm_start = provenance.get("warm_start")
     out = {
         "experiment_mode": experiment_mode,
         "source_cycle": source_cycle,
         "seed_source": seed_source,
+        "search_init_mode": search_init_mode,
     }
+    if warm_start is not None:
+        out["warm_start"] = warm_start
     return out
 
 
@@ -219,6 +224,10 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
             if provenance.get("source_cycle") is None:
                 search_payload = summary_payload.get("search", {}) if isinstance(summary_payload, dict) else {}
                 inferred_source_cycle = search_payload.get("source_cycle_id")
+                if inferred_source_cycle is None:
+                    warm_start_payload = search_payload.get("warm_start", {})
+                    if isinstance(warm_start_payload, dict):
+                        inferred_source_cycle = warm_start_payload.get("source_cycle_id")
                 if inferred_source_cycle is not None:
                     provenance["source_cycle"] = inferred_source_cycle
             entry.update(provenance)

@@ -1,4 +1,5 @@
 import json
+import gc
 import math
 import subprocess
 from datetime import datetime
@@ -88,6 +89,36 @@ def _build_final_trainer(default_root_dir: str, trainer_params_override: dict | 
         enable_checkpointing=False,
         **trainer_params
     )
+
+
+def _cleanup_candidate_runtime(trainer=None, experiment=None, model=None):
+    for obj in (trainer, experiment, model):
+        try:
+            del obj
+        except Exception:
+            pass
+    gc.collect()
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.synchronize()
+        except Exception:
+            pass
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        try:
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
+
+
+def _short_exception_reason(exc: Exception) -> str:
+    text = str(exc).strip().replace("\n", " ")
+    text = " ".join(text.split())
+    if len(text) > 180:
+        text = text[:177] + "..."
+    return f"{exc.__class__.__name__}:{text}" if text else exc.__class__.__name__
 
 
 def _run_training_with_model(
@@ -217,6 +248,137 @@ def _find_latest_trained_cycle_artifacts_before(cycle_id: int):
         if source_weights.exists() and source_meta.exists():
             return source_cycle_id, source_cycle_dir, source_weights, source_meta
     return None
+
+
+def _resolve_warm_start_sampling(dimensionality: int):
+    nia_search = config.get("nia_search") or {}
+    warm_cfg = nia_search.get("warm_start") or {}
+    pop_size = int(nia_search.get("population_size", 0))
+    data_params = config.get("data_params") or {}
+    regime = str(data_params.get("regime", "")).strip().lower()
+    cycle_id = data_params.get("cycle_id")
+    base_seed = int((config.get("exp_params") or {}).get("manual_seed", 42))
+
+    result = {
+        "enabled": False,
+        "sampling": None,
+        "init_mode": "random",
+        "source_cycle_id": None,
+        "reason": None,
+        "details": {
+            "enabled": False,
+            "carry_over_count": 0,
+            "perturb_count": 0,
+            "random_count": pop_size,
+            "perturbation_strength": None,
+        },
+    }
+
+    if not bool(warm_cfg.get("enabled", False)):
+        result["reason"] = "warm_start_disabled"
+        return result
+
+    if regime != "per_maint":
+        result["reason"] = f"unsupported_regime:{regime or 'none'}"
+        return result
+
+    if cycle_id is None:
+        result["reason"] = "missing_cycle_id"
+        return result
+
+    cycle_id = int(cycle_id)
+    if cycle_id <= 0:
+        result["reason"] = f"cycle_{cycle_id:02d}_random_init"
+        return result
+
+    previous_source = _find_latest_trained_cycle_artifacts_before(cycle_id)
+    if previous_source is None:
+        result["reason"] = f"no_previous_trained_cycle_before_{cycle_id:02d}"
+        return result
+
+    source_cycle_id, _, _, previous_meta = previous_source
+    previous_metadata = json.loads(previous_meta.read_text(encoding="utf-8"))
+    anchor_solution = previous_metadata.get("solution")
+    if anchor_solution is None:
+        result["reason"] = f"missing_solution_in_{previous_meta.name}"
+        return result
+
+    try:
+        anchor = np.asarray(anchor_solution, dtype=float).reshape(-1)
+    except Exception:
+        result["reason"] = "invalid_anchor_solution_format"
+        return result
+
+    if anchor.size != dimensionality:
+        result["reason"] = f"invalid_anchor_dim:{anchor.size}"
+        return result
+
+    anchor = np.clip(anchor, 0.0, 1.0)
+
+    carry_ratio = float(warm_cfg.get("carry_over_ratio", 0.10))
+    perturb_ratio = float(warm_cfg.get("perturb_ratio", 0.40))
+    perturbation_strength = float(warm_cfg.get("perturbation_strength", 0.08))
+
+    if carry_ratio < 0 or perturb_ratio < 0:
+        raise ValueError(
+            "Invalid warm_start ratios: carry_over_ratio and perturb_ratio must be >= 0."
+        )
+    if perturbation_strength < 0:
+        raise ValueError(
+            "Invalid warm_start perturbation_strength: must be >= 0."
+        )
+
+    carry_count = int(round(pop_size * carry_ratio))
+    perturb_count = int(round(pop_size * perturb_ratio))
+    if carry_ratio > 0 and carry_count == 0 and pop_size > 0:
+        carry_count = 1
+    if perturb_ratio > 0 and perturb_count == 0 and pop_size - carry_count > 0:
+        perturb_count = 1
+
+    if carry_count + perturb_count > pop_size:
+        overflow = (carry_count + perturb_count) - pop_size
+        reduce_perturb = min(perturb_count, overflow)
+        perturb_count -= reduce_perturb
+        overflow -= reduce_perturb
+        if overflow > 0:
+            carry_count = max(0, carry_count - overflow)
+
+    random_count = pop_size - carry_count - perturb_count
+    rng = np.random.default_rng(base_seed + cycle_id)
+
+    parts = []
+    if carry_count > 0:
+        parts.append(np.tile(anchor, (carry_count, 1)))
+    if perturb_count > 0:
+        noise = rng.uniform(-perturbation_strength, perturbation_strength, size=(perturb_count, dimensionality))
+        parts.append(np.clip(anchor + noise, 0.0, 1.0))
+    if random_count > 0:
+        parts.append(rng.uniform(0.0, 1.0, size=(random_count, dimensionality)))
+
+    if not parts:
+        result["reason"] = "empty_population_after_warm_start_counts"
+        return result
+
+    sampling = np.vstack(parts).astype(float, copy=False)
+    rng.shuffle(sampling, axis=0)
+
+    result.update({
+        "enabled": True,
+        "sampling": sampling,
+        "init_mode": "warm_start",
+        "source_cycle_id": int(source_cycle_id),
+        "reason": None,
+        "details": {
+            "enabled": True,
+            "source_cycle_id": int(source_cycle_id),
+            "carry_over_count": int(carry_count),
+            "perturb_count": int(perturb_count),
+            "random_count": int(random_count),
+            "perturbation_strength": float(perturbation_strength),
+            "base_seed": int(base_seed),
+        },
+    })
+    return result
 
 
 def export_skipped_non_trainable_cycle(reason: str, detail: str = "", source: str = "runtime"):
@@ -353,6 +515,36 @@ def run_per_maint_finetune_cycle():
     )
 
 
+def run_per_maint_warmstart_cycle():
+    data_params = config.get("data_params", {})
+    cycle_id = data_params.get("cycle_id")
+    if cycle_id is None:
+        raise ValueError("per_maint_warmstart_search requires data_params.cycle_id.")
+    cycle_id = int(cycle_id)
+
+    nia_search_cfg = dict(config.get("nia_search") or {})
+    warm_cfg = dict(nia_search_cfg.get("warm_start") or {})
+    if not bool(warm_cfg.get("enabled", False)):
+        Log.warning(
+            "WARMSTART_MODE warm_start.enabled=false in config; "
+            "enabling warm-start automatically for this run."
+        )
+    warm_cfg["enabled"] = True
+    nia_search_cfg["warm_start"] = warm_cfg
+    config["nia_search"] = nia_search_cfg
+
+    if cycle_id == 0:
+        Log.info(
+            "WARMSTART_MODE cycle_id=00 uses random initialization by design."
+        )
+    else:
+        Log.info(
+            f"WARMSTART_MODE cycle_id={cycle_id:02d} "
+            "uses warm-start search with previous-cycle anchor when available."
+        )
+    solve_architecture_problem()
+
+
 def _export_cycle_artifacts(
         export_dir: Path,
         model: RNNVAE,
@@ -369,11 +561,16 @@ def _export_cycle_artifacts(
     workflow_mode = str((config.get("workflow") or {}).get("mode", "")).strip().lower() or None
     seed_source = (config.get("exp_params") or {}).get("manual_seed")
     source_cycle = search_result.get("source_cycle_id")
+    search_init_mode = search_result.get("init_mode")
+    warm_start_payload = search_result.get("warm_start")
     provenance = {
         "experiment_mode": workflow_mode,
         "source_cycle": source_cycle,
         "seed_source": seed_source,
+        "search_init_mode": search_init_mode,
     }
+    if isinstance(warm_start_payload, dict):
+        provenance["warm_start"] = _as_jsonable(warm_start_payload)
     metadata = {
         "schema_version": "1.0",
         "dataset_name": data_params.get("dataset_name"),
@@ -564,6 +761,8 @@ class RNNVAEArchitectureMultiObj(Problem):
 
             if value is None or value == PENALTY:
                 continue
+            if isinstance(value, (float, np.floating)) and not math.isfinite(float(value)):
+                continue
             metrics.append(f"{metric_key}={self._format_metric(value)}")
 
         return metrics
@@ -646,11 +845,13 @@ class RNNVAEArchitectureMultiObj(Problem):
                         complexity=complexity
                     )
                 else:
-                    status = "trained"
-                    self.stats["trained"] += 1
+                    trainer = None
+                    experiment = None
+                    start_time = None
+                    end_time = None
                     experiment = RNNVAExperiment(model, self.dataset_name, "NSGA2", **self.config)
                     trainer = Trainer(
-                        enable_progress_bar=True,
+                        enable_progress_bar=False,
                         accelerator="gpu" if torch.cuda.is_available() else "cpu",
                         devices=1,
                         default_root_dir=path,
@@ -660,33 +861,74 @@ class RNNVAEArchitectureMultiObj(Problem):
                         **self.config['trainer_params']
                     )
 
-                    start_time = datetime.now()
-                    trainer.fit(experiment, datamodule=self.datamodule)
-                    trainer.test(experiment, datamodule=self.datamodule)
-                    end_time = datetime.now()
-                    duration = (end_time - start_time).total_seconds()
+                    try:
+                        start_time = datetime.now()
+                        trainer.fit(experiment, datamodule=self.datamodule)
+                        trainer.test(experiment, datamodule=self.datamodule)
+                        end_time = datetime.now()
+                        duration = (end_time - start_time).total_seconds()
 
-                    fitness, error, complexity = calculate_fitness(
-                        model,
-                        experiment,
-                        self.config['data_params']['seq_len']
-                    )
-                    metric_parts = self._selected_metrics(experiment)
+                        fitness, error, complexity = calculate_fitness(
+                            model,
+                            experiment,
+                            self.config['data_params']['seq_len']
+                        )
+                        metric_parts = self._selected_metrics(experiment)
 
-                    self.conn.save_model_and_entry(
-                        dataset_name=self.dataset_name,
-                        alg_name="NSGA2",
-                        iteration=self.iteration,
-                        solution=solution,
-                        error=error,
-                        model=model,
-                        experiment=experiment,
-                        fitness=fitness,
-                        complexity=complexity,
-                        start_time=start_time,
-                        end_time=end_time,
-                        duration=duration
-                    )
+                        if fitness >= PENALTY or error >= PENALTY or complexity >= PENALTY:
+                            status = "failed"
+                            reason = "penalty_fitness"
+                            self.stats["failed"] += 1
+                        else:
+                            status = "trained"
+                            self.stats["trained"] += 1
+
+                        self.conn.save_model_and_entry(
+                            dataset_name=self.dataset_name,
+                            alg_name="NSGA2",
+                            iteration=self.iteration,
+                            solution=solution,
+                            error=error,
+                            model=model,
+                            experiment=experiment,
+                            fitness=fitness,
+                            complexity=complexity,
+                            start_time=start_time,
+                            end_time=end_time,
+                            duration=duration
+                        )
+                    except Exception as e:
+                        end_time = datetime.now()
+                        if start_time is not None:
+                            duration = (end_time - start_time).total_seconds()
+                        status = "failed"
+                        reason = _short_exception_reason(e)
+                        self.stats["failed"] += 1
+                        fitness = PENALTY
+                        error = PENALTY
+                        complexity = PENALTY
+                        metric_parts = []
+                        Log.error(
+                            f"CANDIDATE_EVAL_FAILED iter={self.iteration} hash={model_hash} "
+                            f"cycle_id={self.config.get('data_params', {}).get('cycle_id')} "
+                            f"reason={reason}"
+                        )
+                        self.conn.save_model_and_entry(
+                            dataset_name=self.dataset_name,
+                            alg_name="NSGA2",
+                            iteration=self.iteration,
+                            solution=solution,
+                            error=error,
+                            model=model,
+                            experiment=None,
+                            fitness=fitness,
+                            complexity=complexity,
+                            start_time=start_time,
+                            end_time=end_time,
+                            duration=duration
+                        )
+                    finally:
+                        _cleanup_candidate_runtime(trainer=trainer, experiment=experiment, model=model)
 
             # Ensure that if any value is nan, we use the worst-case penalty.
             if np.isnan(error) or np.isnan(complexity):
@@ -748,16 +990,39 @@ def solve_architecture_problem():
         raise e
     termination = get_termination("time", max_time=max_time)
 
-    # Set up the NSGA-II algorithm with the population size from config.
-    algorithm = NSGA2(pop_size=config['nia_search']['population_size'])
+    population_size = int(config['nia_search']['population_size'])
+    warm_start = _resolve_warm_start_sampling(DIMENSIONALITY)
+    search_init_mode = warm_start["init_mode"]
+    seed_source = "random"
+    if warm_start["enabled"]:
+        algorithm = NSGA2(
+            pop_size=population_size,
+            sampling=warm_start["sampling"],
+        )
+        seed_source = f"cycle_{warm_start['source_cycle_id']:02d}"
+        details = warm_start["details"]
+        Log.info(
+            "WARMSTART_INIT "
+            f"cycle_id={int((config.get('data_params') or {}).get('cycle_id', -1)):02d} "
+            f"source_cycle={warm_start['source_cycle_id']:02d} "
+            f"carry_over={details['carry_over_count']} "
+            f"perturb={details['perturb_count']} "
+            f"random={details['random_count']} "
+            f"perturbation_strength={details['perturbation_strength']}"
+        )
+    else:
+        algorithm = NSGA2(pop_size=population_size)
+        if warm_start["reason"]:
+            Log.info(f"WARMSTART_FALLBACK reason={warm_start['reason']} init_mode=random")
 
     # Determine the number of parallel jobs (using CUDA if available).
     n_jobs = torch.cuda.device_count() if torch.cuda.is_available() else 1
 
     Log.info(
-        f"SEARCH_START algorithm=NSGA2 population_size={config['nia_search']['population_size']} "
+        f"SEARCH_START algorithm=NSGA2 population_size={population_size} "
         f"time_limit={time_str} time_limit_seconds={max_time} n_jobs={n_jobs} "
-        f"metrics={config['nia_search'].get('metrics')}"
+        f"metrics={config['nia_search'].get('metrics')} "
+        f"search_init_mode={search_init_mode} seed_source={seed_source}"
     )
     res = minimize(
         problem,
@@ -789,6 +1054,15 @@ def solve_architecture_problem():
         "best_solution": _as_jsonable(best_solution),
         "time_limit": time_str,
         "time_limit_seconds": max_time,
+        "init_mode": search_init_mode,
+        "seed_source": seed_source,
+        "warm_start": _as_jsonable(warm_start["details"]),
+        "source_cycle_id": warm_start.get("source_cycle_id"),
+        "source_cycle_key": (
+            f"{int(warm_start['source_cycle_id']):02d}"
+            if warm_start.get("source_cycle_id") is not None
+            else None
+        ),
     }
 
     final_result = _run_final_training(best_solution)

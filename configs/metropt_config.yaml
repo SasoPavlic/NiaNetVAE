@@ -31,7 +31,7 @@ data_params:
   # Regime: "single" or "per_maint"
   regime: "per_maint"
   # Used only when regime="per_maint"
-  cycle_id: 1
+  cycle_id: 0
 
   # Sliding window stride to reduce window explosion.
   stride: 1
