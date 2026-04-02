@@ -6,11 +6,7 @@ import torch
 
 from log import Log
 
-
-def _runtime():
-    import nianetvae.rnn_vae_architecture_search as search
-
-    return search
+DEFAULT_PENALTY = int(9e10)
 
 
 def _safe_float(value) -> float | None:
@@ -22,8 +18,7 @@ def _safe_float(value) -> float | None:
 
 
 def _resolve_objective_contract(cfg: dict | None = None) -> dict:
-    runtime = _runtime()
-    cfg = cfg or runtime.config or {}
+    cfg = cfg or {}
     objectives = dict(cfg.get("objectives") or {})
     error_metric = str(((objectives.get("error") or {}).get("metric") or "SMAPE")).strip().upper()
     efficiency_metric = str(((objectives.get("efficiency") or {}).get("metric") or "macs")).strip().lower()
@@ -35,18 +30,22 @@ def _resolve_objective_contract(cfg: dict | None = None) -> dict:
     }
 
 
-def _penalty_objective_bundle(reason: str, objective_contract: dict | None = None) -> dict:
-    runtime = _runtime()
-    penalty = float(getattr(runtime, "PENALTY", int(9e10)))
+def _penalty_objective_bundle(
+    reason: str,
+    objective_contract: dict | None = None,
+    cfg: dict | None = None,
+    penalty: int | float = DEFAULT_PENALTY,
+) -> dict:
+    penalty_value = float(penalty)
     return {
         "valid": False,
         "reason": reason,
-        "objective_contract": objective_contract or _resolve_objective_contract(),
-        "obj_error": penalty,
-        "obj_efficiency": penalty,
-        "obj_pdm": penalty,
+        "objective_contract": objective_contract or _resolve_objective_contract(cfg),
+        "obj_error": penalty_value,
+        "obj_efficiency": penalty_value,
+        "obj_pdm": penalty_value,
         "pdm_signal_quality": None,
-        "fitness": penalty,
+        "fitness": penalty_value,
     }
 
 
@@ -204,7 +203,9 @@ def calculate_objective_bundle(
     seq_len: int,
     n_features: int,
     cfg: dict | None = None,
+    penalty: int | float = DEFAULT_PENALTY,
 ) -> dict:
+    cfg = cfg or {}
     objective_contract = _resolve_objective_contract(cfg)
     metrics_payload = metrics_payload or {}
     anomaly_metrics = anomaly_metrics or {}
@@ -215,6 +216,7 @@ def calculate_objective_bundle(
         return _penalty_objective_bundle(
             reason=f"missing_or_invalid_error_metric:{error_metric}",
             objective_contract=objective_contract,
+            penalty=penalty,
         )
 
     obj_efficiency, eff_reason = _compute_efficiency_objective(
@@ -232,6 +234,7 @@ def calculate_objective_bundle(
         return _penalty_objective_bundle(
             reason=eff_reason or "invalid_efficiency_objective",
             objective_contract=objective_contract,
+            penalty=penalty,
         )
 
     pdm_signal_quality = _safe_float(anomaly_metrics.get("pr_auc_mean"))
@@ -243,6 +246,7 @@ def calculate_objective_bundle(
         return _penalty_objective_bundle(
             reason="missing_or_invalid_pdm_signal_quality",
             objective_contract=objective_contract,
+            penalty=penalty,
         )
 
     obj_pdm = _safe_float(1.0 - pdm_signal_quality)
@@ -250,6 +254,7 @@ def calculate_objective_bundle(
         return _penalty_objective_bundle(
             reason="invalid_obj_pdm",
             objective_contract=objective_contract,
+            penalty=penalty,
         )
 
     fitness = _safe_float(obj_error + obj_efficiency)
@@ -257,6 +262,7 @@ def calculate_objective_bundle(
         return _penalty_objective_bundle(
             reason="invalid_compatibility_fitness",
             objective_contract=objective_contract,
+            penalty=penalty,
         )
 
     return {
@@ -267,26 +273,41 @@ def calculate_objective_bundle(
         "obj_efficiency": float(obj_efficiency),
         "obj_pdm": float(obj_pdm),
         "pdm_signal_quality": float(pdm_signal_quality),
-        # Compatibility fields retained until C13.5.
+        # Compatibility fields retained until winner selector migration finalization.
         "fitness": float(fitness),
     }
 
 
-def calculate_objective_bundle_from_experiment(model, experiment, seq_len: int, n_features: int, cfg: dict | None = None):
+def calculate_objective_bundle_from_experiment(
+    model,
+    experiment,
+    seq_len: int,
+    n_features: int,
+    cfg: dict | None = None,
+    penalty: int | float = DEFAULT_PENALTY,
+):
+    cfg = cfg or {}
+    objective_contract = _resolve_objective_contract(cfg)
     if experiment is None or getattr(experiment, "metrics", None) is None:
-        return _penalty_objective_bundle("missing_experiment_metrics", objective_contract=_resolve_objective_contract(cfg))
+        return _penalty_objective_bundle(
+            "missing_experiment_metrics",
+            objective_contract=objective_contract,
+            penalty=penalty,
+        )
 
     try:
         if not experiment.metrics.are_metrics_complete():
             return _penalty_objective_bundle(
                 reason="incomplete_metrics",
-                objective_contract=_resolve_objective_contract(cfg),
+                objective_contract=objective_contract,
+                penalty=penalty,
             )
         metrics_payload = experiment.metrics.compute()
     except Exception as exc:
         return _penalty_objective_bundle(
             reason=f"metrics_compute_failed:{exc.__class__.__name__}",
-            objective_contract=_resolve_objective_contract(cfg),
+            objective_contract=objective_contract,
+            penalty=penalty,
         )
 
     anomaly_metrics = getattr(experiment, "anomaly_metrics", {}) or {}
@@ -297,10 +318,18 @@ def calculate_objective_bundle_from_experiment(model, experiment, seq_len: int, 
         seq_len=seq_len,
         n_features=n_features,
         cfg=cfg,
+        penalty=penalty,
     )
 
 
-def calculate_objective_bundle_from_cached_row(model, cached_row, seq_len: int, n_features: int, cfg: dict | None = None):
+def calculate_objective_bundle_from_cached_row(
+    model,
+    cached_row,
+    seq_len: int,
+    n_features: int,
+    cfg: dict | None = None,
+    penalty: int | float = DEFAULT_PENALTY,
+):
     return calculate_objective_bundle(
         model=model,
         metrics_payload=_metrics_payload_from_cached_entry(cached_row),
@@ -308,4 +337,5 @@ def calculate_objective_bundle_from_cached_row(model, cached_row, seq_len: int, 
         seq_len=seq_len,
         n_features=n_features,
         cfg=cfg,
+        penalty=penalty,
     )

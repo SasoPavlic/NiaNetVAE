@@ -7,18 +7,11 @@ from log import Log
 from .runtime_artifacts import _as_jsonable, _resolve_export_dir
 
 
-def _runtime():
-    import nianetvae.rnn_vae_architecture_search as search
-
-    return search
-
-
-def _resolve_finetune_policy() -> dict:
-    runtime = _runtime()
-    workflow = runtime.config.get("workflow") or {}
+def _resolve_finetune_policy(config: dict) -> dict:
+    workflow = config.get("workflow") or {}
     finetune_cfg = workflow.get("finetune") or {}
-    exp_params = runtime.config.get("exp_params") or {}
-    trainer_params = runtime.config.get("trainer_params") or {}
+    exp_params = config.get("exp_params") or {}
+    trainer_params = config.get("trainer_params") or {}
 
     base_lr = float(exp_params.get("learning_rate", 0.01))
     lr_scale = float(finetune_cfg.get("learning_rate_scale", 0.1))
@@ -59,20 +52,19 @@ def _resolve_finetune_policy() -> dict:
     }
 
 
-def _resolve_cycle_export_dir(cycle_id: int):
-    runtime = _runtime()
+def _resolve_cycle_export_dir(cycle_id: int, config: dict, run_uuid: str | None = None):
     cfg = {
-        "logging_params": dict(runtime.config.get("logging_params", {})),
-        "data_params": dict(runtime.config.get("data_params", {})),
+        "logging_params": dict(config.get("logging_params", {})),
+        "data_params": dict(config.get("data_params", {})),
     }
     cfg["data_params"]["regime"] = "per_maint"
     cfg["data_params"]["cycle_id"] = int(cycle_id)
-    return _resolve_export_dir(cfg)
+    return _resolve_export_dir(cfg, run_uuid=run_uuid)
 
 
-def _find_latest_trained_cycle_artifacts_before(cycle_id: int):
+def _find_latest_trained_cycle_artifacts_before(cycle_id: int, config: dict, run_uuid: str | None = None):
     for source_cycle_id in range(int(cycle_id) - 1, -1, -1):
-        source_cycle_dir = _resolve_cycle_export_dir(source_cycle_id)
+        source_cycle_dir = _resolve_cycle_export_dir(source_cycle_id, config=config, run_uuid=run_uuid)
         source_weights = source_cycle_dir / "model.pt"
         source_meta = source_cycle_dir / "model_meta.json"
         if source_weights.exists() and source_meta.exists():
@@ -80,15 +72,19 @@ def _find_latest_trained_cycle_artifacts_before(cycle_id: int):
     return None
 
 
-def _resolve_warm_start_sampling(dimensionality: int, effective_population: int):
-    runtime = _runtime()
-    nia_search = runtime.config.get("nia_search") or {}
+def _resolve_warm_start_sampling(
+    dimensionality: int,
+    effective_population: int,
+    config: dict,
+    run_uuid: str | None = None,
+):
+    nia_search = config.get("nia_search") or {}
     warm_cfg = nia_search.get("warm_start") or {}
     pop_size = int(effective_population)
-    data_params = runtime.config.get("data_params") or {}
+    data_params = config.get("data_params") or {}
     regime = str(data_params.get("regime", "")).strip().lower()
     cycle_id = data_params.get("cycle_id")
-    base_seed = int((runtime.config.get("exp_params") or {}).get("manual_seed", 42))
+    base_seed = int((config.get("exp_params") or {}).get("manual_seed", 42))
 
     result = {
         "enabled": False,
@@ -123,7 +119,7 @@ def _resolve_warm_start_sampling(dimensionality: int, effective_population: int)
         result["reason"] = f"cycle_{cycle_id:02d}_random_init"
         return result
 
-    previous_source = _find_latest_trained_cycle_artifacts_before(cycle_id)
+    previous_source = _find_latest_trained_cycle_artifacts_before(cycle_id, config=config, run_uuid=run_uuid)
     if previous_source is None:
         result["reason"] = f"no_previous_trained_cycle_before_{cycle_id:02d}"
         return result
@@ -214,9 +210,15 @@ def _resolve_warm_start_sampling(dimensionality: int, effective_population: int)
     return result
 
 
-def export_skipped_non_trainable_cycle(reason: str, detail: str = "", source: str = "runtime"):
-    runtime = _runtime()
-    data_params = runtime.config.get("data_params", {})
+def export_skipped_non_trainable_cycle(
+    reason: str,
+    detail: str = "",
+    source: str = "runtime",
+    *,
+    config: dict,
+    run_uuid: str,
+):
+    data_params = config.get("data_params", {})
     cycle_id = data_params.get("cycle_id")
     if cycle_id is None:
         return
@@ -224,15 +226,15 @@ def export_skipped_non_trainable_cycle(reason: str, detail: str = "", source: st
     if cycle_id <= 0:
         return
 
-    export_enabled = bool(runtime.config.get("logging_params", {}).get("export_enabled", False))
+    export_enabled = bool(config.get("logging_params", {}).get("export_enabled", False))
     if not export_enabled:
         return
 
-    export_dir = _resolve_export_dir(runtime.config)
+    export_dir = _resolve_export_dir(config, run_uuid=run_uuid)
     export_dir.mkdir(parents=True, exist_ok=True)
     status_path = export_dir / "cycle_status.json"
-    workflow_mode = str((runtime.config.get("workflow") or {}).get("mode", "")).strip().lower() or None
-    seed_source = (runtime.config.get("exp_params") or {}).get("manual_seed")
+    workflow_mode = str((config.get("workflow") or {}).get("mode", "")).strip().lower() or None
+    seed_source = (config.get("exp_params") or {}).get("manual_seed")
     payload = {
         "schema_version": "1.0",
         "status": "skipped_non_trainable",
@@ -242,7 +244,7 @@ def export_skipped_non_trainable_cycle(reason: str, detail: str = "", source: st
         "reason": reason,
         "detail": detail,
         "source": source,
-        "run_uuid": runtime.RUN_UUID,
+        "run_uuid": run_uuid,
         "created_at": datetime.now().isoformat(),
         "provenance": {
             "experiment_mode": workflow_mode,

@@ -8,15 +8,8 @@ from .objective_engine import _safe_float
 from .runtime_artifacts import _as_jsonable
 
 
-def _runtime():
-    import nianetvae.rnn_vae_architecture_search as search
-
-    return search
-
-
 def _resolve_winner_selection_contract(cfg: dict | None = None) -> dict:
-    runtime = _runtime()
-    cfg = cfg or runtime.config or {}
+    cfg = cfg or {}
     objectives = dict(cfg.get("objectives") or {})
     selection_cfg = dict(objectives.get("selection") or {})
 
@@ -129,10 +122,13 @@ def _pareto_mask_minimize(objectives: np.ndarray) -> np.ndarray:
     return keep
 
 
-def _select_deterministic_pareto_winner(candidates_df, selection_contract: dict):
-    runtime = _runtime()
-    penalty = float(getattr(runtime, "PENALTY", int(9e10)))
-    dataset_name = str(getattr(runtime, "dataset_name", "unknown_dataset"))
+def _select_deterministic_pareto_winner(
+    candidates_df,
+    selection_contract: dict,
+    dataset_name: str,
+    penalty: int | float,
+):
+    penalty_value = float(penalty)
 
     if candidates_df is None:
         raise ValueError("Winner selection failed: no candidate rows were returned from DB.")
@@ -156,7 +152,7 @@ def _select_deterministic_pareto_winner(candidates_df, selection_contract: dict)
         solution = _parse_solution_array(row.get("solution_array"))
         if obj_error is None or obj_efficiency is None or obj_pdm is None or solution is None:
             continue
-        if obj_error >= penalty or obj_efficiency >= penalty or obj_pdm >= penalty:
+        if obj_error >= penalty_value or obj_efficiency >= penalty_value or obj_pdm >= penalty_value:
             continue
         valid.append(
             {

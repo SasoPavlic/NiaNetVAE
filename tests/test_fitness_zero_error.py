@@ -5,7 +5,10 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-import nianetvae.rnn_vae_architecture_search as search
+from nianetvae.search.objective_engine import (
+    DEFAULT_PENALTY,
+    calculate_objective_bundle_from_experiment,
+)
 
 
 class _DummyMetrics:
@@ -53,7 +56,7 @@ def test_calculate_fitness_zero_error_is_valid():
     )
     model = _TinyModel()
 
-    bundle = search.calculate_objective_bundle_from_experiment(
+    bundle = calculate_objective_bundle_from_experiment(
         model=model,
         experiment=experiment,
         seq_len=20,
@@ -64,7 +67,7 @@ def test_calculate_fitness_zero_error_is_valid():
     assert bundle["obj_error"] == pytest.approx(0.0)
     assert bundle["obj_efficiency"] > 0
     assert bundle["fitness"] == pytest.approx(bundle["obj_error"] + bundle["obj_efficiency"])
-    assert bundle["fitness"] != search.PENALTY
+    assert bundle["fitness"] != DEFAULT_PENALTY
 
 
 def test_calculate_fitness_uses_raw_smape_value():
@@ -74,7 +77,7 @@ def test_calculate_fitness_uses_raw_smape_value():
     )
     model = _TinyModel()
 
-    bundle = search.calculate_objective_bundle_from_experiment(
+    bundle = calculate_objective_bundle_from_experiment(
         model=model,
         experiment=experiment,
         seq_len=20,
@@ -94,7 +97,7 @@ def test_calculate_fitness_penalizes_when_smape_missing():
     )
     model = _TinyModel()
 
-    bundle = search.calculate_objective_bundle_from_experiment(
+    bundle = calculate_objective_bundle_from_experiment(
         model=model,
         experiment=experiment,
         seq_len=20,
@@ -102,6 +105,6 @@ def test_calculate_fitness_penalizes_when_smape_missing():
         cfg=_objective_cfg(error_metric="SMAPE"),
     )
 
-    assert bundle["fitness"] == search.PENALTY
-    assert bundle["obj_error"] == search.PENALTY
-    assert bundle["obj_efficiency"] == search.PENALTY
+    assert bundle["fitness"] == DEFAULT_PENALTY
+    assert bundle["obj_error"] == DEFAULT_PENALTY
+    assert bundle["obj_efficiency"] == DEFAULT_PENALTY

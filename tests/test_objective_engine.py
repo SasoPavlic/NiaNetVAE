@@ -8,9 +8,10 @@ import pandas as pd
 import pytest
 import torch
 
-import nianetvae.rnn_vae_architecture_search as search
 import nianetvae.search.cycle_warmstart as cycle_warmstart
 import nianetvae.search.objective_engine as objective_engine
+import nianetvae.search.runner as runner_module
+import nianetvae.search.winner_selection as winner_selection
 
 
 class _TinyModel(torch.nn.Module):
@@ -63,7 +64,7 @@ def _cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params") -> dict
 
 def test_objective_bundle_uses_selected_raw_error_metric():
     model = _TinyModel()
-    bundle = search.calculate_objective_bundle(
+    bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"RMSE": 2.75},
         anomaly_metrics={"pr_auc_mean": 0.40},
@@ -80,7 +81,7 @@ def test_objective_bundle_uses_selected_raw_error_metric():
 
 def test_objective_bundle_computes_obj_pdm_from_pr_auc():
     model = _TinyModel()
-    bundle = search.calculate_objective_bundle(
+    bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
         anomaly_metrics={"pr_auc_mean": 0.83},
@@ -96,7 +97,7 @@ def test_objective_bundle_computes_obj_pdm_from_pr_auc():
 
 def test_objective_bundle_penalizes_missing_pr_auc():
     model = _TinyModel()
-    bundle = search.calculate_objective_bundle(
+    bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
         anomaly_metrics={},
@@ -106,13 +107,13 @@ def test_objective_bundle_penalizes_missing_pr_auc():
     )
 
     assert bundle["valid"] is False
-    assert bundle["obj_pdm"] == search.PENALTY
+    assert bundle["obj_pdm"] == objective_engine.DEFAULT_PENALTY
     assert bundle["reason"] == "missing_or_invalid_pdm_signal_quality"
 
 
 def test_efficiency_params_backend_returns_finite_positive():
     model = _TinyModel()
-    value, reason = search._compute_efficiency_objective(
+    value, reason = objective_engine._compute_efficiency_objective(
         model=model,
         metric_name="params",
         seq_len=16,
@@ -131,7 +132,7 @@ def test_efficiency_macs_backend_penalizes_with_reason(monkeypatch):
         "_estimate_model_macs",
         lambda *args, **kwargs: (None, "macs_backend_unavailable"),
     )
-    bundle = search.calculate_objective_bundle(
+    bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
         anomaly_metrics={"pr_auc_mean": 0.5},
@@ -141,7 +142,7 @@ def test_efficiency_macs_backend_penalizes_with_reason(monkeypatch):
     )
 
     assert bundle["valid"] is False
-    assert bundle["obj_efficiency"] == search.PENALTY
+    assert bundle["obj_efficiency"] == objective_engine.DEFAULT_PENALTY
     assert bundle["reason"] == "macs_backend_unavailable"
 
 
@@ -152,7 +153,7 @@ def test_efficiency_latency_backend_penalizes_with_reason(monkeypatch):
         "_estimate_model_latency_ms",
         lambda *args, **kwargs: (None, "latency_backend_unavailable"),
     )
-    bundle = search.calculate_objective_bundle(
+    bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
         anomaly_metrics={"pr_auc_mean": 0.5},
@@ -162,7 +163,7 @@ def test_efficiency_latency_backend_penalizes_with_reason(monkeypatch):
     )
 
     assert bundle["valid"] is False
-    assert bundle["obj_efficiency"] == search.PENALTY
+    assert bundle["obj_efficiency"] == objective_engine.DEFAULT_PENALTY
     assert bundle["reason"] == "latency_backend_unavailable"
 
 
@@ -171,12 +172,17 @@ def test_problem_initializes_with_three_objectives(tmp_path):
         def get_entries(self, hash_id, dataset_name):
             return pd.DataFrame()
 
-    problem = search.RNNVAEArchitectureMultiObj(
-        dimension=7,
+    ctx = runner_module.SearchRuntimeContext(
+        run_uuid="test-run",
         config={**_cfg(), "logging_params": {"save_dir": str(tmp_path)}},
         conn=_DummyConn(),
         datamodule=SimpleNamespace(),
         dataset_name="MetroPT_cycle00",
+    )
+    runner = runner_module.SearchRunner(ctx)
+    problem = runner_module.RNNVAEArchitectureMultiObj(
+        dimension=7,
+        runner=runner,
     )
 
     assert problem.n_obj == 3
@@ -230,14 +236,19 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
         def save_model_and_entry(self, **kwargs):
             return None
 
-    monkeypatch.setattr(search, "RNNVAE", _CachedModel)
+    monkeypatch.setattr(runner_module, "RNNVAE", _CachedModel)
     cfg = {**_cfg(), "logging_params": {"save_dir": str(tmp_path)}}
-    problem = search.RNNVAEArchitectureMultiObj(
-        dimension=7,
+    ctx = runner_module.SearchRuntimeContext(
+        run_uuid="test-run",
         config=cfg,
         conn=_DummyConn(),
         datamodule=SimpleNamespace(),
         dataset_name="MetroPT_cycle00",
+    )
+    runner = runner_module.SearchRunner(ctx)
+    problem = runner_module.RNNVAEArchitectureMultiObj(
+        dimension=7,
+        runner=runner,
     )
 
     out = {}
@@ -257,26 +268,29 @@ def test_warm_start_sampling_uses_effective_population(monkeypatch, tmp_path):
     monkeypatch.setattr(
         cycle_warmstart,
         "_find_latest_trained_cycle_artifacts_before",
-        lambda cycle_id: (cycle_id - 1, tmp_path, weights_path, meta_path),
-    )
-    monkeypatch.setattr(
-        search,
-        "config",
-        {
-            "nia_search": {
-                "warm_start": {
-                    "enabled": True,
-                    "carry_over_ratio": 0.10,
-                    "perturb_ratio": 0.40,
-                    "perturbation_strength": 0.08,
-                }
-            },
-            "data_params": {"regime": "per_maint", "cycle_id": 2},
-            "exp_params": {"manual_seed": 42},
-        },
+        lambda cycle_id, config, run_uuid=None: (cycle_id - 1, tmp_path, weights_path, meta_path),
     )
 
-    out = search._resolve_warm_start_sampling(dimensionality=7, effective_population=21)
+    cfg = {
+        "nia_search": {
+            "warm_start": {
+                "enabled": True,
+                "carry_over_ratio": 0.10,
+                "perturb_ratio": 0.40,
+                "perturbation_strength": 0.08,
+            }
+        },
+        "data_params": {"regime": "per_maint", "cycle_id": 2},
+        "exp_params": {"manual_seed": 42},
+        "logging_params": {"save_dir": str(tmp_path)},
+    }
+
+    out = cycle_warmstart._resolve_warm_start_sampling(
+        dimensionality=7,
+        effective_population=21,
+        config=cfg,
+        run_uuid="test-run",
+    )
 
     assert out["enabled"] is True
     assert out["sampling"].shape == (21, 7)
@@ -286,17 +300,18 @@ def test_warm_start_sampling_uses_effective_population(monkeypatch, tmp_path):
 
 
 def test_warm_start_cycle0_remains_random_init(monkeypatch):
-    monkeypatch.setattr(
-        search,
-        "config",
-        {
-            "nia_search": {"warm_start": {"enabled": True}},
-            "data_params": {"regime": "per_maint", "cycle_id": 0},
-            "exp_params": {"manual_seed": 42},
-        },
-    )
+    cfg = {
+        "nia_search": {"warm_start": {"enabled": True}},
+        "data_params": {"regime": "per_maint", "cycle_id": 0},
+        "exp_params": {"manual_seed": 42},
+    }
 
-    out = search._resolve_warm_start_sampling(dimensionality=7, effective_population=21)
+    out = cycle_warmstart._resolve_warm_start_sampling(
+        dimensionality=7,
+        effective_population=21,
+        config=cfg,
+        run_uuid="test-run",
+    )
 
     assert out["enabled"] is False
     assert out["init_mode"] == "random"
@@ -336,17 +351,17 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
         captured["termination"] = termination
         return SimpleNamespace()
 
-    monkeypatch.setattr(search, "NSGA3", _DummyAlgorithm)
-    monkeypatch.setattr(search, "minimize", _fake_minimize)
+    monkeypatch.setattr(runner_module, "NSGA3", _DummyAlgorithm)
+    monkeypatch.setattr(runner_module, "minimize", _fake_minimize)
     monkeypatch.setattr(
-        search,
+        runner_module,
         "get_reference_directions",
         lambda name, n_obj, n_partitions: np.zeros((21, 3), dtype=float),
     )
     monkeypatch.setattr(
-        search,
+        runner_module,
         "_resolve_warm_start_sampling",
-        lambda dimensionality, effective_population: {
+        lambda dimensionality, effective_population, config, run_uuid=None: {
             "enabled": False,
             "sampling": None,
             "init_mode": "random",
@@ -362,13 +377,10 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
             },
         },
     )
-    monkeypatch.setattr(search, "conn", _DummyConn())
-    monkeypatch.setattr(search, "datamodule", SimpleNamespace())
-    monkeypatch.setattr(search, "dataset_name", "MetroPT_cycle00")
     monkeypatch.setattr(
-        search,
+        runner_module,
         "_run_final_training",
-        lambda best_solution: {
+        lambda best_solution, **kwargs: {
             "model": SimpleNamespace(hash_id="winner-hash", state_dict=lambda: {}),
             "started_at": "2026-04-02T12:00:00",
             "ended_at": "2026-04-02T12:00:01",
@@ -379,24 +391,29 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
             "obj_pdm": 0.2,
             "pdm_signal_quality": 0.8,
             "objective_reason": None,
-            "objective_contract": search._resolve_objective_contract(_cfg()),
+            "objective_contract": objective_engine._resolve_objective_contract(_cfg()),
             "metrics": {},
             "anomaly_metrics": {"pr_auc_mean": 0.8},
         },
     )
-    monkeypatch.setattr(search.torch, "save", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        search,
-        "config",
-        {
-            "nia_search": {"time": "00:00:05", "metrics": ["SMAPE"], "nsga3": {"n_partitions": 5}},
-            "exp_params": {"manual_seed": 42},
-            "data_params": {"cycle_id": 0, "regime": "per_maint"},
-            "logging_params": {"save_dir": str(tmp_path), "export_enabled": False},
-        },
-    )
+    monkeypatch.setattr(runner_module.torch, "save", lambda *args, **kwargs: None)
 
-    search.solve_architecture_problem()
+    cfg = {
+        "nia_search": {"time": "00:00:05", "metrics": ["SMAPE"], "nsga3": {"n_partitions": 5}},
+        "exp_params": {"manual_seed": 42},
+        "data_params": {"cycle_id": 0, "regime": "per_maint"},
+        "logging_params": {"save_dir": str(tmp_path), "export_enabled": False},
+        "objectives": _cfg()["objectives"],
+    }
+    ctx = runner_module.SearchRuntimeContext(
+        run_uuid="test-run",
+        config=cfg,
+        conn=_DummyConn(),
+        datamodule=SimpleNamespace(),
+        dataset_name="MetroPT_cycle00",
+    )
+    runner = runner_module.SearchRunner(ctx)
+    runner.solve_architecture_problem()
 
     assert isinstance(captured["algorithm"], _DummyAlgorithm)
     assert captured["ref_dirs"].shape == (21, 3)
@@ -435,9 +452,11 @@ def test_select_deterministic_pareto_winner_prefers_lower_pdm_on_tie():
         "weights": {"error": 0.5, "efficiency": 0.0, "pdm": 0.5},
         "weights_normalized": {"error": 0.5, "efficiency": 0.0, "pdm": 0.5},
     }
-    selected = search._select_deterministic_pareto_winner(
+    selected = winner_selection._select_deterministic_pareto_winner(
         candidates_df=df,
         selection_contract=tie_contract,
+        dataset_name="MetroPT_cycle00",
+        penalty=objective_engine.DEFAULT_PENALTY,
     )
 
     assert selected["selected_hash"] == "b"
@@ -483,9 +502,11 @@ def test_select_deterministic_pareto_winner_deduplicates_by_hash():
         ]
     )
 
-    selected = search._select_deterministic_pareto_winner(
+    selected = winner_selection._select_deterministic_pareto_winner(
         candidates_df=df,
-        selection_contract=search._resolve_winner_selection_contract(_cfg()),
+        selection_contract=winner_selection._resolve_winner_selection_contract(_cfg()),
+        dataset_name="MetroPT_cycle00",
+        penalty=objective_engine.DEFAULT_PENALTY,
     )
 
     assert selected["deduplicated_candidate_count"] == 2
@@ -499,18 +520,20 @@ def test_select_deterministic_pareto_winner_fails_fast_on_empty_valid_pool():
                 "id": 1,
                 "hash_id": "bad",
                 "solution_array": json.dumps([0.1] * 7),
-                "error": float(search.PENALTY),
-                "complexity": float(search.PENALTY),
+                "error": float(objective_engine.DEFAULT_PENALTY),
+                "complexity": float(objective_engine.DEFAULT_PENALTY),
                 "pr_auc_mean": None,
                 "algorithm_name": "NSGA3",
                 "timestamp": "2026-04-02 12:00:00",
-                "fitness": float(search.PENALTY),
+                "fitness": float(objective_engine.DEFAULT_PENALTY),
             }
         ]
     )
 
     with pytest.raises(ValueError, match="no valid objective candidates"):
-        search._select_deterministic_pareto_winner(
+        winner_selection._select_deterministic_pareto_winner(
             candidates_df=df,
-            selection_contract=search._resolve_winner_selection_contract(_cfg()),
+            selection_contract=winner_selection._resolve_winner_selection_contract(_cfg()),
+            dataset_name="MetroPT_cycle00",
+            penalty=objective_engine.DEFAULT_PENALTY,
         )

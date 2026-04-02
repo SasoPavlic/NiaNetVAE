@@ -46,7 +46,7 @@ Usage examples can be found [here](nianetcae/experiments). Currently, there is a
 2. Modify the parameters in [main_config.py](configs/main_config.yaml)
 2. Adjust the dataloader logic in [dataloaders](nianetvae/dataloaders) folder.
 3. Specify the search space in [rnn_vae.py](nianetvae/models/rnn_vae.py) from your problem domain.
-3. Redesign the fitness function in [rnn_vae_architecture_search.py](nianetvae/rnn_vae_architecture_search.py) based on your optimization.
+3. Redesign objective/search behavior in [runner.py](nianetvae/search/runner.py) and [objective_engine.py](nianetvae/search/objective_engine.py) based on your optimization.
 
 ##### Changing dataset:
 

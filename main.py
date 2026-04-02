@@ -7,7 +7,6 @@ import torch
 import yaml
 from lightning.pytorch import seed_everything
 
-import nianetvae
 from log import Log
 from nianetvae.dataloaders.kpi_dataloader import KPIDataLoader
 from nianetvae.dataloaders.nab_dataloader import NABDataLoader
@@ -18,12 +17,8 @@ from nianetvae.dataloaders.ucr_dataloader import UCRDataLoader
 from nianetvae.dataloaders.wadi_dataloader import WADIDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.dataloaders.metropt_dataloader import MetroPTDataLoader
+from nianetvae.search.runner import SearchRunner, SearchRuntimeContext
 from nianetvae.storage.experiment_storage import get_db_connector
-from nianetvae.rnn_vae_architecture_search import (
-    solve_architecture_problem,
-    run_per_maint_finetune_cycle,
-    run_per_maint_warmstart_cycle,
-)
 import nianetvae.experiments.metrics_evaluation
 
 ALLOWED_WORKFLOW_MODES = {"baseline_search", "per_maint_finetune", "per_maint_warmstart_search"}
@@ -519,12 +514,16 @@ if __name__ == '__main__':
 
     conn = get_db_connector(config, "solutions")
     seed_everything(config['exp_params']['manual_seed'], True)
-    nianetvae.rnn_vae_architecture_search.RUN_UUID = RUN_UUID
-    nianetvae.rnn_vae_architecture_search.config = config
-    nianetvae.rnn_vae_architecture_search.conn = conn
-    nianetvae.rnn_vae_architecture_search.dataset_name = db_dataset_name
 
     datamodule = select_dataloader(config)
+    runtime_ctx = SearchRuntimeContext(
+        run_uuid=RUN_UUID,
+        config=config,
+        conn=conn,
+        datamodule=datamodule,
+        dataset_name=db_dataset_name,
+    )
+    runner = SearchRunner(runtime_ctx)
     try:
         datamodule.setup()
     except Exception as exc:
@@ -546,7 +545,7 @@ if __name__ == '__main__':
                 f"PER_MAINT_SKIP mode={workflow_mode} cycle_id={finetune_cycle_id:02d} "
                 f"reason=non_trainable_cycle detail={detail}"
             )
-            nianetvae.rnn_vae_architecture_search.export_skipped_non_trainable_cycle(
+            runner.export_skipped_non_trainable_cycle(
                 reason="non_trainable_cycle",
                 detail=detail,
                 source="datamodule.setup",
@@ -562,17 +561,15 @@ if __name__ == '__main__':
     if hasattr(datamodule, "n_features") and getattr(datamodule, "n_features"):
         config["data_params"]["n_features"] = int(getattr(datamodule, "n_features"))
 
-    nianetvae.rnn_vae_architecture_search.datamodule = datamodule
-
     if workflow_mode == "baseline_search":
         metrics = args.metrics if args.metrics else config['nia_search']['metrics']
         config['nia_search']['metrics'] = metrics
-        solve_architecture_problem()
+        runner.solve_architecture_problem()
     elif workflow_mode == "per_maint_finetune":
-        run_per_maint_finetune_cycle()
+        runner.run_per_maint_finetune_cycle()
     elif workflow_mode == "per_maint_warmstart_search":
         metrics = args.metrics if args.metrics else config['nia_search']['metrics']
         config['nia_search']['metrics'] = metrics
-        run_per_maint_warmstart_cycle()
+        runner.run_per_maint_warmstart_cycle()
 
     Log.info(f"RUN_END run_uuid={RUN_UUID} ended_at={datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

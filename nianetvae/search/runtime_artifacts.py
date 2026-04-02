@@ -13,12 +13,6 @@ from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
 from nianetvae.models.rnn_vae import RNNVAE
 
 
-def _runtime():
-    import nianetvae.rnn_vae_architecture_search as search
-
-    return search
-
-
 def _as_jsonable(value):
     if isinstance(value, (np.integer,)):
         return int(value)
@@ -49,8 +43,7 @@ def _get_git_ref() -> str | None:
         return None
 
 
-def _resolve_export_dir(cfg: dict) -> Path:
-    runtime = _runtime()
+def _resolve_export_dir(cfg: dict, run_uuid: str | None = None) -> Path:
     logging_params = cfg.get("logging_params", {})
     export_root = logging_params.get("model_export_dir", "logs/per_maint_models")
     dataset = str(cfg.get("data_params", {}).get("dataset_name", "dataset")).strip() or "dataset"
@@ -64,13 +57,16 @@ def _resolve_export_dir(cfg: dict) -> Path:
             cycle_dir = f"cycle_{cycle_id}"
         return Path(export_root) / dataset / cycle_dir
 
-    run_label = runtime.RUN_UUID or datetime.now().strftime("%Y%m%d%H%M%S")
+    run_label = run_uuid or datetime.now().strftime("%Y%m%d%H%M%S")
     return Path(export_root) / dataset / f"run_{run_label}"
 
 
-def _build_final_trainer(default_root_dir: str, trainer_params_override: dict | None = None):
-    runtime = _runtime()
-    trainer_params = dict(runtime.config.get('trainer_params', {}))
+def _build_final_trainer(
+    config: dict,
+    default_root_dir: str,
+    trainer_params_override: dict | None = None,
+):
+    trainer_params = dict(config.get('trainer_params', {}))
     if trainer_params_override:
         trainer_params.update(trainer_params_override)
     return Trainer(
@@ -116,19 +112,23 @@ def _short_exception_reason(exc: Exception) -> str:
 
 
 def _run_training_with_model(
-        model: RNNVAE,
-        algorithm_name: str,
-        learning_rate: float | None = None,
-        trainer_params_override: dict | None = None,
+    model: RNNVAE,
+    algorithm_name: str,
+    *,
+    config: dict,
+    dataset_name: str,
+    datamodule,
+    penalty: int | float,
+    learning_rate: float | None = None,
+    trainer_params_override: dict | None = None,
 ):
-    runtime = _runtime()
     from .objective_engine import calculate_objective_bundle
 
-    final_root = runtime.config['logging_params']['save_dir']
-    experiment = RNNVAExperiment(model, runtime.dataset_name, algorithm_name, **runtime.config)
+    final_root = config['logging_params']['save_dir']
+    experiment = RNNVAExperiment(model, dataset_name, algorithm_name, **config)
     if learning_rate is not None:
         experiment.learning_rate = float(learning_rate)
-    effective_trainer_params = dict(runtime.config.get("trainer_params", {}))
+    effective_trainer_params = dict(config.get("trainer_params", {}))
     if trainer_params_override:
         effective_trainer_params.update(trainer_params_override)
     Log.info(
@@ -139,13 +139,14 @@ def _run_training_with_model(
         f"max_epochs={effective_trainer_params.get('max_epochs')}"
     )
     trainer = _build_final_trainer(
+        config=config,
         default_root_dir=final_root,
         trainer_params_override=trainer_params_override,
     )
 
     started_at = datetime.now()
-    trainer.fit(experiment, datamodule=runtime.datamodule)
-    trainer.test(experiment, datamodule=runtime.datamodule)
+    trainer.fit(experiment, datamodule=datamodule)
+    trainer.test(experiment, datamodule=datamodule)
     ended_at = datetime.now()
     duration_s = (ended_at - started_at).total_seconds()
 
@@ -159,9 +160,10 @@ def _run_training_with_model(
         model,
         metrics_payload=final_metrics,
         anomaly_metrics=anomaly_metrics,
-        seq_len=runtime.config['data_params']['seq_len'],
-        n_features=runtime.config['data_params']['n_features'],
-        cfg=runtime.config,
+        seq_len=config['data_params']['seq_len'],
+        n_features=config['data_params']['n_features'],
+        cfg=config,
+        penalty=penalty,
     )
     return {
         "model": model,
@@ -181,13 +183,26 @@ def _run_training_with_model(
     }
 
 
-def _run_final_training(best_solution):
-    runtime = _runtime()
-    seed_everything(runtime.config['exp_params']['manual_seed'], True)
-    model = RNNVAE(best_solution, **runtime.config)
+def _run_final_training(
+    best_solution,
+    *,
+    config: dict,
+    dataset_name: str,
+    datamodule,
+    penalty: int | float,
+):
+    seed_everything(config['exp_params']['manual_seed'], True)
+    model = RNNVAE(best_solution, **config)
     if not model.is_valid:
         raise ValueError("Best solution produced an invalid model during final training.")
-    return _run_training_with_model(model, "NSGA3")
+    return _run_training_with_model(
+        model,
+        "NSGA3",
+        config=config,
+        dataset_name=dataset_name,
+        datamodule=datamodule,
+        penalty=penalty,
+    )
 
 
 def _export_cycle_artifacts(
@@ -197,15 +212,18 @@ def _export_cycle_artifacts(
         best_algorithm,
         search_result: dict,
         final_result: dict,
+        *,
+        config: dict,
+        dataset_name: str,
+        run_uuid: str,
 ):
-    runtime = _runtime()
     export_dir.mkdir(parents=True, exist_ok=True)
     model_path = export_dir / "model.pt"
     torch.save(model.state_dict(), model_path)
 
-    data_params = runtime.config.get("data_params", {})
-    workflow_mode = str((runtime.config.get("workflow") or {}).get("mode", "")).strip().lower() or None
-    seed_source = (runtime.config.get("exp_params") or {}).get("manual_seed")
+    data_params = config.get("data_params", {})
+    workflow_mode = str((config.get("workflow") or {}).get("mode", "")).strip().lower() or None
+    seed_source = (config.get("exp_params") or {}).get("manual_seed")
     source_cycle = search_result.get("source_cycle_id")
     search_init_mode = search_result.get("init_mode")
     warm_start_payload = search_result.get("warm_start")
@@ -220,7 +238,7 @@ def _export_cycle_artifacts(
     metadata = {
         "schema_version": "1.0",
         "dataset_name": data_params.get("dataset_name"),
-        "db_dataset_name": runtime.dataset_name,
+        "db_dataset_name": dataset_name,
         "regime": data_params.get("regime"),
         "cycle_id": data_params.get("cycle_id"),
         "workflow_mode": workflow_mode,
@@ -238,7 +256,7 @@ def _export_cycle_artifacts(
         "train_phases": data_params.get("train_phases"),
         "test_phases": data_params.get("test_phases"),
         "created_at": datetime.now().isoformat(),
-        "run_uuid": runtime.RUN_UUID,
+        "run_uuid": run_uuid,
         "git_ref": _get_git_ref(),
         "weights_file": "model.pt",
         "provenance": provenance,
@@ -249,12 +267,12 @@ def _export_cycle_artifacts(
     summary = {
         "schema_version": "1.0",
         "created_at": datetime.now().isoformat(),
-        "run_uuid": runtime.RUN_UUID,
+        "run_uuid": run_uuid,
         "git_ref": _get_git_ref(),
         "algorithm": best_algorithm,
         "workflow_mode": workflow_mode,
         "dataset_name": data_params.get("dataset_name"),
-        "db_dataset_name": runtime.dataset_name,
+        "db_dataset_name": dataset_name,
         "regime": data_params.get("regime"),
         "cycle_id": data_params.get("cycle_id"),
         "provenance": provenance,

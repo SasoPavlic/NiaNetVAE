@@ -8,7 +8,7 @@
 
 ## Main Entry Points
 - `main.py`: config loading/merge, CLI overrides, dataloader selection, DB connector setup, search bootstrap.
-- `nianetvae/rnn_vae_architecture_search.py`: facade/orchestrator that exposes runtime entrypoints and coordinates NSGA3 search.
+- `nianetvae/search/runner.py`: typed runtime orchestrator (`SearchRunner`) for NSGA3 search/fine-tune/warm-start flows.
 - `nianetvae/search/`: split runtime helpers (`objective_engine.py`, `winner_selection.py`, `runtime_artifacts.py`, `cycle_warmstart.py`).
 - `nianetvae/tools/generate_cycle_manifest.py`: manifest generation from exported cycle artifacts.
 - `slurm_scripts/submit_per_maint_pipeline.sh`: HPC submission wrapper (array training + dependent manifest job).
@@ -18,7 +18,7 @@
 - Architecture gene mapping / model build: `nianetvae/models/rnn_vae.py`
 - Training/test runtime and metrics accumulation: `nianetvae/experiments/rnn_vae_experiment.py`
 - Fitness objective and search orchestration:
-  - facade: `nianetvae/rnn_vae_architecture_search.py`
+  - orchestrator: `nianetvae/search/runner.py`
   - objective engine: `nianetvae/search/objective_engine.py`
   - winner selection: `nianetvae/search/winner_selection.py`
   - runtime artifacts/export: `nianetvae/search/runtime_artifacts.py`
