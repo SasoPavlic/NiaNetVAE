@@ -9,9 +9,9 @@ nia_search:
     # For 3 objectives this is combinatorial:
     #   effective_population = (n_partitions + 2) * (n_partitions + 1) / 2
     # Default n_partitions=5 -> effective_population=21.
-    n_partitions: 5
+    n_partitions: 1
   # with safety buffer for queue jitter, export, and manifest generation.
-  time: "04:00:00"  # format: HH:MM:SS
+  time: "00:05:00"  # format: HH:MM:SS
   metrics:
     - SMAPE
   warm_start:

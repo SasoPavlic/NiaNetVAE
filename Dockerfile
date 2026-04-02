@@ -41,6 +41,7 @@ COPY nianetvae/dataloaders /app/nianetvae/dataloaders
 COPY nianetvae/experiments /app/nianetvae/experiments
 COPY nianetvae/models /app/nianetvae/models
 COPY nianetvae/tools /app/nianetvae/tools
+COPY nianetvae/search /app/nianetvae/search
 
 COPY nianetvae/__init__.py /app/nianetvae/__init__.py
 COPY nianetvae/rnn_vae_architecture_search.py /app/nianetvae/rnn_vae_architecture_search.py

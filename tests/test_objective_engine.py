@@ -9,6 +9,8 @@ import pytest
 import torch
 
 import nianetvae.rnn_vae_architecture_search as search
+import nianetvae.search.cycle_warmstart as cycle_warmstart
+import nianetvae.search.objective_engine as objective_engine
 
 
 class _TinyModel(torch.nn.Module):
@@ -125,7 +127,7 @@ def test_efficiency_params_backend_returns_finite_positive():
 def test_efficiency_macs_backend_penalizes_with_reason(monkeypatch):
     model = _TinyModel()
     monkeypatch.setattr(
-        search,
+        objective_engine,
         "_estimate_model_macs",
         lambda *args, **kwargs: (None, "macs_backend_unavailable"),
     )
@@ -146,7 +148,7 @@ def test_efficiency_macs_backend_penalizes_with_reason(monkeypatch):
 def test_efficiency_latency_backend_penalizes_with_reason(monkeypatch):
     model = _TinyModel()
     monkeypatch.setattr(
-        search,
+        objective_engine,
         "_estimate_model_latency_ms",
         lambda *args, **kwargs: (None, "latency_backend_unavailable"),
     )
@@ -253,7 +255,7 @@ def test_warm_start_sampling_uses_effective_population(monkeypatch, tmp_path):
     weights_path.write_bytes(b"dummy")
 
     monkeypatch.setattr(
-        search,
+        cycle_warmstart,
         "_find_latest_trained_cycle_artifacts_before",
         lambda cycle_id: (cycle_id - 1, tmp_path, weights_path, meta_path),
     )

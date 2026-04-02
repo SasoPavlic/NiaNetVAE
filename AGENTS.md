@@ -8,7 +8,8 @@
 
 ## Main Entry Points
 - `main.py`: config loading/merge, CLI overrides, dataloader selection, DB connector setup, search bootstrap.
-- `nianetvae/rnn_vae_architecture_search.py`: NSGA3 search loop, objective computation, final retraining, export.
+- `nianetvae/rnn_vae_architecture_search.py`: facade/orchestrator that exposes runtime entrypoints and coordinates NSGA3 search.
+- `nianetvae/search/`: split runtime helpers (`objective_engine.py`, `winner_selection.py`, `runtime_artifacts.py`, `cycle_warmstart.py`).
 - `nianetvae/tools/generate_cycle_manifest.py`: manifest generation from exported cycle artifacts.
 - `slurm_scripts/submit_per_maint_pipeline.sh`: HPC submission wrapper (array training + dependent manifest job).
 
@@ -16,7 +17,12 @@
 - Dataset loading + cycle segmentation: `nianetvae/dataloaders/metropt_dataloader.py`
 - Architecture gene mapping / model build: `nianetvae/models/rnn_vae.py`
 - Training/test runtime and metrics accumulation: `nianetvae/experiments/rnn_vae_experiment.py`
-- Fitness objective and search orchestration: `nianetvae/rnn_vae_architecture_search.py`
+- Fitness objective and search orchestration:
+  - facade: `nianetvae/rnn_vae_architecture_search.py`
+  - objective engine: `nianetvae/search/objective_engine.py`
+  - winner selection: `nianetvae/search/winner_selection.py`
+  - runtime artifacts/export: `nianetvae/search/runtime_artifacts.py`
+  - cycle warm-start/fine-tune helpers: `nianetvae/search/cycle_warmstart.py`
 - Persistence layer (SQLite/Postgres): `nianetvae/storage/experiment_storage.py`
 - Exported manifest tool: `nianetvae/tools/generate_cycle_manifest.py`
 

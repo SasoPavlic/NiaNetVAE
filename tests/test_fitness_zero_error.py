@@ -53,17 +53,18 @@ def test_calculate_fitness_zero_error_is_valid():
     )
     model = _TinyModel()
 
-    fitness, error, complexity = search.calculate_fitness(
-        model,
-        experiment,
+    bundle = search.calculate_objective_bundle_from_experiment(
+        model=model,
+        experiment=experiment,
         seq_len=20,
+        n_features=3,
         cfg=_objective_cfg(),
     )
 
-    assert error == pytest.approx(0.0)
-    assert complexity > 0
-    assert fitness == pytest.approx(error + complexity)
-    assert fitness != search.PENALTY
+    assert bundle["obj_error"] == pytest.approx(0.0)
+    assert bundle["obj_efficiency"] > 0
+    assert bundle["fitness"] == pytest.approx(bundle["obj_error"] + bundle["obj_efficiency"])
+    assert bundle["fitness"] != search.PENALTY
 
 
 def test_calculate_fitness_uses_raw_smape_value():
@@ -73,16 +74,17 @@ def test_calculate_fitness_uses_raw_smape_value():
     )
     model = _TinyModel()
 
-    fitness, error, complexity = search.calculate_fitness(
-        model,
-        experiment,
+    bundle = search.calculate_objective_bundle_from_experiment(
+        model=model,
+        experiment=experiment,
         seq_len=20,
+        n_features=3,
         cfg=_objective_cfg(),
     )
 
-    assert error == pytest.approx(1.23456789)
-    assert complexity > 0
-    assert fitness == pytest.approx(error + complexity)
+    assert bundle["obj_error"] == pytest.approx(1.23456789)
+    assert bundle["obj_efficiency"] > 0
+    assert bundle["fitness"] == pytest.approx(bundle["obj_error"] + bundle["obj_efficiency"])
 
 
 def test_calculate_fitness_penalizes_when_smape_missing():
@@ -92,13 +94,14 @@ def test_calculate_fitness_penalizes_when_smape_missing():
     )
     model = _TinyModel()
 
-    fitness, error, complexity = search.calculate_fitness(
-        model,
-        experiment,
+    bundle = search.calculate_objective_bundle_from_experiment(
+        model=model,
+        experiment=experiment,
         seq_len=20,
+        n_features=3,
         cfg=_objective_cfg(error_metric="SMAPE"),
     )
 
-    assert fitness == search.PENALTY
-    assert error == search.PENALTY
-    assert complexity == search.PENALTY
+    assert bundle["fitness"] == search.PENALTY
+    assert bundle["obj_error"] == search.PENALTY
+    assert bundle["obj_efficiency"] == search.PENALTY
