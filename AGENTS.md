@@ -8,7 +8,7 @@
 
 ## Main Entry Points
 - `main.py`: config loading/merge, CLI overrides, dataloader selection, DB connector setup, search bootstrap.
-- `nianetvae/rnn_vae_architecture_search.py`: NSGA2 search loop, fitness calculation, final retraining, export.
+- `nianetvae/rnn_vae_architecture_search.py`: NSGA3 search loop, objective computation, final retraining, export.
 - `nianetvae/tools/generate_cycle_manifest.py`: manifest generation from exported cycle artifacts.
 - `slurm_scripts/submit_per_maint_pipeline.sh`: HPC submission wrapper (array training + dependent manifest job).
 

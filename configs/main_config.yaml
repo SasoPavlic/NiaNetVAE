@@ -1,23 +1,17 @@
 # main_config.yaml
 nia_search:
-  population_size: 20
-  # Quick runtime estimate for MetroPT Experiment B full chain (cycles 0..21):
-  # estimated_total_hours ~= 1.1 + 15 * search_hours
-  # where:
-  # - 1.1h is empirical fixed overhead from the last successful run
-  # - 15 is the number of trainable cycles (the remaining 7 are alias / non-trainable)
-  #
-  # Examples:
-  # - search 00:40:00 -> ~11.1h total
-  # - search 01:05:00 -> ~17.4h total
-  # - search 02:45:00 -> ~42.4h total
-  #
-  # Rule for Slurm:
-  # sbatch_time_per_cycle ~= search_time + 00:30:00 buffer
-  #
-  # Current setting targets a Friday 10:30 -> Sunday 10:30 (~48h) window
+  nsga3:
+    # C13.4: NSGA-III sizing contract (no legacy population_size).
+    # Reference directions are generated as:
+    #   ref_dirs = get_reference_directions("das-dennis", 3, n_partitions)
+    # Effective population size is driven by reference-direction count:
+    #   effective_population = len(ref_dirs)
+    # For 3 objectives this is combinatorial:
+    #   effective_population = (n_partitions + 2) * (n_partitions + 1) / 2
+    # Default n_partitions=5 -> effective_population=21.
+    n_partitions: 5
   # with safety buffer for queue jitter, export, and manifest generation.
-  time: "02:45:00"  # format: HH:MM:SS
+  time: "04:00:00"  # format: HH:MM:SS
   metrics:
     - SMAPE
   warm_start:
@@ -27,11 +21,41 @@ nia_search:
     perturb_ratio: 0.40
     perturbation_strength: 0.08
 
+objectives:
+  # C13.1 objective contract lock (configuration + validation only).
+  # Objective semantics (for upcoming C13 implementation tasks):
+  # - obj_error: minimize selected reconstruction metric (single metric key).
+  # - obj_efficiency: minimize selected efficiency backend.
+  # - obj_pdm: minimize (1 - pdm_signal_quality), where pdm_signal_quality = AUPRC_premaint.
+  #
+  # PdM label semantics must match metropt-pdm-framework:
+  # - evaluate only operation phases 0/1
+  # - positive class = phase 1
+  # - phase 2 excluded
+  error:
+    metric: SMAPE        # allowed: MAE|MSE|RMSE|MAPE|RMAPE|SMAPE
+  efficiency:
+    metric: macs         # allowed: params|macs|latency_ms
+  pdm:
+    metric: auprc_premaint  # fixed allowed value in C13.1
+  selection:
+    # C13.5 deterministic winner-selection contract:
+    # - pool: DB rows scoped by dataset_name (cycle-level DB scope)
+    # - compute Pareto front on [obj_error, obj_efficiency, obj_pdm]
+    # - normalize objectives with min-max per Pareto pool
+    # - choose minimum weighted distance to ideal point (0,0,0)
+    # - tie-break: lower obj_pdm, then lower obj_error, then lower obj_efficiency
+    method: weighted_ideal_distance  # allowed: weighted_ideal_distance
+    weights:
+      error: 0.30
+      efficiency: 0.20
+      pdm: 0.50
+
 workflow:
   # Workflow switch:
   # - baseline_search: current architecture-search workflow (default)
   # - per_maint_finetune: Experiment A sequential fine-tune workflow
-  # - per_maint_warmstart_search: Experiment B warm-started NSGA2 per cycle
+  # - per_maint_warmstart_search: Experiment B warm-started NSGA3 per cycle
   mode: "per_maint_warmstart_search"
   finetune:
     # C5.3 controlled fine-tune defaults (used for cycle_id > 0)

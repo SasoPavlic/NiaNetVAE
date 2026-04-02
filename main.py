@@ -1,4 +1,5 @@
 import argparse
+import math
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,10 @@ from nianetvae.rnn_vae_architecture_search import (
 import nianetvae.experiments.metrics_evaluation
 
 ALLOWED_WORKFLOW_MODES = {"baseline_search", "per_maint_finetune", "per_maint_warmstart_search"}
+ALLOWED_ERROR_OBJECTIVE_METRICS = {"MAE", "MSE", "RMSE", "MAPE", "RMAPE", "SMAPE"}
+ALLOWED_EFFICIENCY_OBJECTIVE_METRICS = {"params", "macs", "latency_ms"}
+ALLOWED_PDM_OBJECTIVE_METRIC = "auprc_premaint"
+ALLOWED_SELECTION_METHODS = {"weighted_ideal_distance"}
 
 
 def _load_yaml_file(path: str) -> dict:
@@ -100,6 +105,7 @@ def _value_or_na(value):
 def _config_summary_line(config: dict) -> str:
     data_params = config.get("data_params", {})
     nia_search = config.get("nia_search", {})
+    nsga3_cfg = nia_search.get("nsga3") or {}
     logging_params = config.get("logging_params", {})
     trainer_params = config.get("trainer_params", {})
     workflow_mode = ((config.get("workflow") or {}).get("mode"))
@@ -114,9 +120,20 @@ def _config_summary_line(config: dict) -> str:
         f"n_features={_value_or_na(data_params.get('n_features'))}",
         f"min_epochs={_value_or_na(trainer_params.get('min_epochs'))}",
         f"max_epochs={_value_or_na(trainer_params.get('max_epochs'))}",
-        f"population_size={_value_or_na(nia_search.get('population_size'))}",
+        f"nsga3_n_partitions={_value_or_na(nsga3_cfg.get('n_partitions'))}",
+        f"nsga3_effective_population={_value_or_na(nsga3_cfg.get('effective_population'))}",
         f"time_limit={_value_or_na(nia_search.get('time'))}",
         f"metrics={_as_csv(nia_search.get('metrics'))}",
+        f"obj_error={_value_or_na(((config.get('objectives') or {}).get('error') or {}).get('metric'))}",
+        f"obj_efficiency={_value_or_na(((config.get('objectives') or {}).get('efficiency') or {}).get('metric'))}",
+        f"obj_pdm={_value_or_na(((config.get('objectives') or {}).get('pdm') or {}).get('metric'))}",
+        f"winner_selection={_value_or_na((((config.get('objectives') or {}).get('selection') or {}).get('method')))}",
+        "winner_weights="
+        f"{_value_or_na(((((config.get('objectives') or {}).get('selection') or {}).get('weights') or {}).get('error')))}"
+        "/"
+        f"{_value_or_na(((((config.get('objectives') or {}).get('selection') or {}).get('weights') or {}).get('efficiency')))}"
+        "/"
+        f"{_value_or_na(((((config.get('objectives') or {}).get('selection') or {}).get('weights') or {}).get('pdm')))}",
         f"db_backend={_value_or_na(logging_params.get('db_backend', 'sqlite'))}",
     ]
     return " ".join(parts)
@@ -137,6 +154,219 @@ def _resolve_workflow_mode(config: dict) -> str:
     normalized_workflow["mode"] = mode
     config["workflow"] = normalized_workflow
     return mode
+
+
+def _resolve_nsga3_search_config(config: dict) -> dict:
+    """
+    C13.4 contract lock:
+    - NSGA-III only (Das-Dennis reference directions)
+    - no legacy nia_search.population_size
+    - required nia_search.nsga3.n_partitions >= 1
+    """
+    nia_search = dict(config.get("nia_search") or {})
+    if "population_size" in nia_search:
+        raise ValueError(
+            "Legacy config key nia_search.population_size is no longer supported in C13.4. "
+            "Use nia_search.nsga3.n_partitions for NSGA-III sizing."
+        )
+
+    nsga3_cfg = dict(nia_search.get("nsga3") or {})
+    if "n_partitions" not in nsga3_cfg:
+        raise ValueError(
+            "Missing required config key nia_search.nsga3.n_partitions for NSGA-III."
+        )
+    raw_partitions = nsga3_cfg.get("n_partitions")
+    try:
+        n_partitions = int(raw_partitions)
+    except Exception:
+        raise ValueError(
+            f"Invalid nia_search.nsga3.n_partitions={raw_partitions!r}. Expected integer >= 1."
+        ) from None
+    if n_partitions < 1:
+        raise ValueError(
+            f"Invalid nia_search.nsga3.n_partitions={raw_partitions!r}. Expected integer >= 1."
+        )
+
+    # For 3 objectives, Das-Dennis count is C(p+2, 2) = (p+2)*(p+1)/2.
+    effective_population = int((n_partitions + 2) * (n_partitions + 1) // 2)
+    normalized_nsga3_cfg = {
+        "n_partitions": n_partitions,
+        "effective_population": effective_population,
+    }
+    nia_search["nsga3"] = normalized_nsga3_cfg
+    config["nia_search"] = nia_search
+    return normalized_nsga3_cfg
+
+
+def _resolve_objective_contract(config: dict) -> dict:
+    """
+    C13.1 contract lock:
+      - obj_error: single selected reconstruction metric (min)
+      - obj_efficiency: selected efficiency backend (min)
+      - obj_pdm: 1 - AUPRC_premaint (min), with phase semantics implemented in C13.2
+    """
+    objectives = dict(config.get("objectives") or {})
+    error_cfg = dict(objectives.get("error") or {})
+    efficiency_cfg = dict(objectives.get("efficiency") or {})
+    pdm_cfg = dict(objectives.get("pdm") or {})
+
+    raw_error_metric = error_cfg.get("metric", "SMAPE")
+    error_metric = str(raw_error_metric).strip().upper() if raw_error_metric is not None else "SMAPE"
+    if error_metric not in ALLOWED_ERROR_OBJECTIVE_METRICS:
+        allowed = ", ".join(sorted(ALLOWED_ERROR_OBJECTIVE_METRICS))
+        raise ValueError(
+            f"Invalid objectives.error.metric={raw_error_metric!r}. Allowed values: {allowed}."
+        )
+
+    raw_efficiency_metric = efficiency_cfg.get("metric", "macs")
+    efficiency_metric = (
+        str(raw_efficiency_metric).strip().lower() if raw_efficiency_metric is not None else "macs"
+    )
+    if efficiency_metric not in ALLOWED_EFFICIENCY_OBJECTIVE_METRICS:
+        allowed = ", ".join(sorted(ALLOWED_EFFICIENCY_OBJECTIVE_METRICS))
+        raise ValueError(
+            f"Invalid objectives.efficiency.metric={raw_efficiency_metric!r}. "
+            f"Allowed values: {allowed}."
+        )
+
+    raw_pdm_metric = pdm_cfg.get("metric", ALLOWED_PDM_OBJECTIVE_METRIC)
+    pdm_metric = str(raw_pdm_metric).strip().lower() if raw_pdm_metric is not None else ALLOWED_PDM_OBJECTIVE_METRIC
+    if pdm_metric != ALLOWED_PDM_OBJECTIVE_METRIC:
+        raise ValueError(
+            f"Invalid objectives.pdm.metric={raw_pdm_metric!r}. "
+            f"Allowed value: {ALLOWED_PDM_OBJECTIVE_METRIC}."
+        )
+
+    normalized_contract = {
+        "error": {"metric": error_metric},
+        "efficiency": {"metric": efficiency_metric},
+        "pdm": {"metric": pdm_metric},
+    }
+    if "selection" in objectives:
+        normalized_contract["selection"] = dict(objectives.get("selection") or {})
+    config["objectives"] = normalized_contract
+    return normalized_contract
+
+
+def _resolve_winner_selection_contract(config: dict) -> dict:
+    objectives = dict(config.get("objectives") or {})
+    selection_cfg = dict(objectives.get("selection") or {})
+    raw_method = selection_cfg.get("method", "weighted_ideal_distance")
+    method = str(raw_method).strip().lower() if raw_method is not None else "weighted_ideal_distance"
+    if method not in ALLOWED_SELECTION_METHODS:
+        allowed = ", ".join(sorted(ALLOWED_SELECTION_METHODS))
+        raise ValueError(
+            f"Invalid objectives.selection.method={raw_method!r}. Allowed values: {allowed}."
+        )
+
+    raw_weights_cfg = dict(selection_cfg.get("weights") or {})
+    defaults = {"error": 0.30, "efficiency": 0.20, "pdm": 0.50}
+    resolved_weights = {}
+    for key in ("error", "efficiency", "pdm"):
+        raw_value = raw_weights_cfg.get(key, defaults[key])
+        try:
+            weight = float(raw_value)
+        except Exception:
+            raise ValueError(
+                f"Invalid objectives.selection.weights.{key}={raw_value!r}. Expected finite float >= 0."
+            ) from None
+        if not math.isfinite(weight):
+            raise ValueError(
+                f"Invalid objectives.selection.weights.{key}={raw_value!r}. Expected finite float >= 0."
+            )
+        if weight < 0:
+            raise ValueError(
+                f"Invalid objectives.selection.weights.{key}={raw_value!r}. Expected finite float >= 0."
+            )
+        resolved_weights[key] = weight
+
+    total = resolved_weights["error"] + resolved_weights["efficiency"] + resolved_weights["pdm"]
+    if total <= 0:
+        raise ValueError(
+            "Invalid objectives.selection.weights: sum(error, efficiency, pdm) must be > 0."
+        )
+    normalized_weights = {
+        "error": resolved_weights["error"] / total,
+        "efficiency": resolved_weights["efficiency"] / total,
+        "pdm": resolved_weights["pdm"] / total,
+    }
+
+    normalized_selection = {
+        "method": method,
+        "weights": resolved_weights,
+        "weights_normalized": normalized_weights,
+    }
+    objectives["selection"] = {
+        "method": method,
+        "weights": resolved_weights,
+    }
+    config["objectives"] = objectives
+    return normalized_selection
+
+
+def _objective_contract_line(contract: dict) -> str:
+    error_metric = ((contract.get("error") or {}).get("metric"))
+    efficiency_metric = ((contract.get("efficiency") or {}).get("metric"))
+    pdm_metric = ((contract.get("pdm") or {}).get("metric"))
+    return (
+        "OBJECTIVE_CONTRACT "
+        f"obj_error={_value_or_na(error_metric)} direction=min "
+        f"obj_efficiency={_value_or_na(efficiency_metric)} direction=min "
+        f"obj_pdm=1-{_value_or_na(pdm_metric)} direction=min "
+        "pdm_label_policy=phase0_or_phase1_positive_is_phase1_exclude_phase2 "
+        "pdm_eval_slice=test_only"
+    )
+
+
+def _winner_selection_contract_line(contract: dict) -> str:
+    method = contract.get("method")
+    weights = contract.get("weights_normalized") or {}
+    error_w = float(weights.get("error", 0.0))
+    efficiency_w = float(weights.get("efficiency", 0.0))
+    pdm_w = float(weights.get("pdm", 0.0))
+    return (
+        "WINNER_SELECTION_CONTRACT "
+        f"method={_value_or_na(method)} "
+        f"weights_normalized="
+        f"{error_w:.4f}/"
+        f"{efficiency_w:.4f}/"
+        f"{pdm_w:.4f} "
+        "pool=db_cycle_dataset_name pareto_front_only normalization=minmax_per_pool "
+        "tie_break=obj_pdm_then_obj_error_then_obj_efficiency_then_timestamp_then_id "
+        "empty_pool_policy=fail_fast"
+    )
+
+
+def _enforce_anomaly_metrics_enabled(config: dict) -> None:
+    """
+    C13.3 policy lock:
+    anomaly metrics are always enabled for search/runtime objective computation.
+    """
+    data_params = config.get("data_params") or {}
+    if "compute_anomaly_metrics" in data_params:
+        # Legacy compatibility: remove old dataset-level toggle to avoid conflicting semantics.
+        data_params = dict(data_params)
+        data_params.pop("compute_anomaly_metrics", None)
+        config["data_params"] = data_params
+
+    exp_params = dict(config.get("exp_params") or {})
+    exp_params["compute_anomaly_metrics"] = True
+    config["exp_params"] = exp_params
+
+
+def _validate_pdm_objective_scope(config: dict) -> None:
+    pdm_metric = str((((config.get("objectives") or {}).get("pdm") or {}).get("metric") or "").strip()).lower()
+    if pdm_metric != ALLOWED_PDM_OBJECTIVE_METRIC:
+        return
+
+    data_params = config.get("data_params") or {}
+    dataset_name = str(data_params.get("dataset_name") or "").strip().lower()
+    regime = str(data_params.get("regime") or "").strip().lower()
+    if dataset_name != "metropt" or regime != "per_maint":
+        raise ValueError(
+            "objectives.pdm.metric='auprc_premaint' requires "
+            "data_params.dataset_name='MetroPT' and data_params.regime='per_maint'."
+        )
 
 
 def _is_non_trainable_cycle_error(exc: Exception) -> bool:
@@ -214,18 +444,13 @@ if __name__ == '__main__':
         config['data_params']['cycle_id'] = int(args.cycle_id)
         config['data_params']['regime'] = "per_maint"
 
-    # Optional: allow dataset configs to control anomaly-metrics computation without overriding exp_params.
-    # This keeps dataset configs "data_params-only" while still enabling MetroPT-style runs that do not
-    # have ground-truth anomaly labels.
-    if "compute_anomaly_metrics" in config.get("data_params", {}):
-        config.setdefault("exp_params", {})
-        compute_flag = config["data_params"].get("compute_anomaly_metrics")
-        config["exp_params"]["compute_anomaly_metrics"] = bool(compute_flag)
-        # Avoid passing this key into dataloaders (even though most accept **kwargs).
-        config["data_params"].pop("compute_anomaly_metrics", None)
+    _enforce_anomaly_metrics_enabled(config)
 
     try:
         workflow_mode = _resolve_workflow_mode(config)
+        _resolve_nsga3_search_config(config)
+        objective_contract = _resolve_objective_contract(config)
+        winner_selection_contract = _resolve_winner_selection_contract(config)
     except ValueError as exc:
         _err(str(exc))
         exit(1)
@@ -249,6 +474,12 @@ if __name__ == '__main__':
             db_dataset_name = f"{base_dataset_name}_cycle{cid:02d}"
         except Exception:
             db_dataset_name = base_dataset_name
+
+    try:
+        _validate_pdm_objective_scope(config)
+    except ValueError as exc:
+        _err(str(exc))
+        exit(1)
 
     if workflow_mode in {"per_maint_finetune", "per_maint_warmstart_search"}:
         if regime != "per_maint":
@@ -283,6 +514,8 @@ if __name__ == '__main__':
         f"cuda_available={str(cuda_available).lower()}"
     )
     Log.info(_config_summary_line(config))
+    Log.info(_objective_contract_line(objective_contract))
+    Log.info(_winner_selection_contract_line(winner_selection_contract))
 
     conn = get_db_connector(config, "solutions")
     seed_everything(config['exp_params']['manual_seed'], True)

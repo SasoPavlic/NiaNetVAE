@@ -6,7 +6,9 @@
 # Per-maint cycle semantics (cycle_id = j, 1-based by Davari order #1..#21):
 #   post_train  = [end_j, min(end_j + post_train_minutes, start_{j+1}))
 #   after_maint = [end(post_train), start_{j+1})  (or until end of data if j is the last window)
-#   Train phases: {0,1}; Test phases: {0}; phase 2 is excluded everywhere.
+#   Train phases: {0,1}; Test phases: {0,1}; phase 2 is excluded everywhere.
+#   PdM objective labels are computed on test windows using end-anchor phase:
+#     target=1 iff operation_phase(anchor)==1, else 0.
 
 data_params:
   dataset_name: "MetroPT"
@@ -15,10 +17,6 @@ data_params:
   seq_len: 200
   # Placeholder; this will be overwritten at runtime based on engineered rolling features.
   n_features: 96
-
-  # Disable anomaly metrics for MetroPT runs (no ground-truth labels in this integration).
-  # This value is mapped into `exp_params.compute_anomaly_metrics` by main.py.
-  compute_anomaly_metrics: false
 
   # Feature engineering (must match metropt-pdm-framework).
   rolling_window: "60s"
@@ -42,4 +40,4 @@ data_params:
 
   # Phase filters (0=normal,1=pre-maint,2=maintenance)
   train_phases: [0, 1]
-  test_phases: [0]
+  test_phases: [0, 1]

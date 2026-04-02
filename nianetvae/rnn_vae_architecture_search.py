@@ -2,6 +2,7 @@ import json
 import gc
 import math
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -9,10 +10,11 @@ import numpy as np
 import torch
 from lightning.pytorch import seed_everything
 from lightning.pytorch import Trainer
-from pymoo.algorithms.moo.nsga2 import NSGA2
+from pymoo.algorithms.moo.nsga3 import NSGA3
 from pymoo.core.problem import Problem
 from pymoo.optimize import minimize
 from pymoo.termination import get_termination
+from pymoo.util.ref_dirs import get_reference_directions
 
 from log import Log
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
@@ -158,10 +160,13 @@ def _run_training_with_model(
     except Exception:
         final_metrics = {}
     anomaly_metrics = getattr(experiment, "anomaly_metrics", {}) or {}
-    fitness, error, complexity = calculate_fitness(
+    objective_bundle = calculate_objective_bundle(
         model,
-        experiment,
-        config['data_params']['seq_len']
+        metrics_payload=final_metrics,
+        anomaly_metrics=anomaly_metrics,
+        seq_len=config['data_params']['seq_len'],
+        n_features=config['data_params']['n_features'],
+        cfg=config,
     )
     return {
         "model": model,
@@ -169,9 +174,13 @@ def _run_training_with_model(
         "started_at": started_at,
         "ended_at": ended_at,
         "duration_s": duration_s,
-        "fitness": fitness,
-        "error": error,
-        "complexity": complexity,
+        "fitness": objective_bundle["fitness"],
+        "error": objective_bundle["obj_error"],
+        "complexity": objective_bundle["obj_efficiency"],
+        "obj_pdm": objective_bundle["obj_pdm"],
+        "pdm_signal_quality": objective_bundle["pdm_signal_quality"],
+        "objective_reason": objective_bundle.get("reason"),
+        "objective_contract": objective_bundle.get("objective_contract"),
         "metrics": final_metrics,
         "anomaly_metrics": anomaly_metrics,
     }
@@ -182,7 +191,7 @@ def _run_final_training(best_solution):
     model = RNNVAE(best_solution, **config)
     if not model.is_valid:
         raise ValueError("Best solution produced an invalid model during final training.")
-    return _run_training_with_model(model, "NSGA2")
+    return _run_training_with_model(model, "NSGA3")
 
 
 def _resolve_finetune_policy() -> dict:
@@ -250,10 +259,10 @@ def _find_latest_trained_cycle_artifacts_before(cycle_id: int):
     return None
 
 
-def _resolve_warm_start_sampling(dimensionality: int):
+def _resolve_warm_start_sampling(dimensionality: int, effective_population: int):
     nia_search = config.get("nia_search") or {}
     warm_cfg = nia_search.get("warm_start") or {}
-    pop_size = int(nia_search.get("population_size", 0))
+    pop_size = int(effective_population)
     data_params = config.get("data_params") or {}
     regime = str(data_params.get("regime", "")).strip().lower()
     cycle_id = data_params.get("cycle_id")
@@ -267,6 +276,7 @@ def _resolve_warm_start_sampling(dimensionality: int):
         "reason": None,
         "details": {
             "enabled": False,
+            "population_size": pop_size,
             "carry_over_count": 0,
             "perturb_count": 0,
             "random_count": pop_size,
@@ -371,6 +381,7 @@ def _resolve_warm_start_sampling(dimensionality: int):
         "details": {
             "enabled": True,
             "source_cycle_id": int(source_cycle_id),
+            "population_size": pop_size,
             "carry_over_count": int(carry_count),
             "perturb_count": int(perturb_count),
             "random_count": int(random_count),
@@ -612,6 +623,7 @@ def _export_cycle_artifacts(
         "regime": data_params.get("regime"),
         "cycle_id": data_params.get("cycle_id"),
         "provenance": provenance,
+        "winner_selection": search_result.get("winner_selection"),
         "search": search_result,
         "final_training": {
             "started_at": final_result["started_at"],
@@ -620,6 +632,10 @@ def _export_cycle_artifacts(
             "fitness": final_result["fitness"],
             "error": final_result["error"],
             "complexity": final_result["complexity"],
+            "obj_pdm": final_result.get("obj_pdm"),
+            "pdm_signal_quality": final_result.get("pdm_signal_quality"),
+            "objective_reason": final_result.get("objective_reason"),
+            "objective_contract": final_result.get("objective_contract"),
             "metrics": final_result["metrics"],
             "anomaly_metrics": final_result["anomaly_metrics"],
         },
@@ -633,86 +649,562 @@ def _export_cycle_artifacts(
     return model_path, meta_path, summary_path
 
 
-def calculate_fitness(model, experiment, seq_len):
-    """
-    Calculate fitness from raw SMAPE and model complexity.
+def _resolve_objective_contract(cfg: dict | None = None) -> dict:
+    cfg = cfg or config or {}
+    objectives = dict(cfg.get("objectives") or {})
+    error_metric = str(((objectives.get("error") or {}).get("metric") or "SMAPE")).strip().upper()
+    efficiency_metric = str(((objectives.get("efficiency") or {}).get("metric") or "macs")).strip().lower()
+    pdm_metric = str(((objectives.get("pdm") or {}).get("metric") or "auprc_premaint")).strip().lower()
+    return {
+        "error_metric": error_metric,
+        "efficiency_metric": efficiency_metric,
+        "pdm_metric": pdm_metric,
+    }
 
-    Args:
-        model: The model being evaluated.
-        experiment: The experiment object containing metrics.
-        seq_len: Sequence length of the dataset.
 
-    Returns:
-        fitness: The computed combined fitness value (error + complexity).
-        error: The computed error term.
-        complexity: The computed complexity term.
-    """
-    # Check if metrics are complete
-    if not experiment.metrics.are_metrics_complete():
-        Log.error("Some metric values are still None. Fitness function is waiting for metrics data.")
-        return int(9e10), int(9e10), int(9e10)
+def _resolve_winner_selection_contract(cfg: dict | None = None) -> dict:
+    cfg = cfg or config or {}
+    objectives = dict(cfg.get("objectives") or {})
+    selection_cfg = dict(objectives.get("selection") or {})
 
-    # Fetch raw metrics.
+    method = str(selection_cfg.get("method", "weighted_ideal_distance")).strip().lower()
+    if method != "weighted_ideal_distance":
+        raise ValueError(
+            f"Unsupported objectives.selection.method={method!r}. "
+            "Allowed value: weighted_ideal_distance."
+        )
+
+    default_weights = {"error": 0.30, "efficiency": 0.20, "pdm": 0.50}
+    raw_weights_cfg = dict(selection_cfg.get("weights") or {})
+    resolved_weights = {}
+    for key in ("error", "efficiency", "pdm"):
+        raw_value = raw_weights_cfg.get(key, default_weights[key])
+        try:
+            value = float(raw_value)
+        except Exception:
+            raise ValueError(
+                f"Invalid objectives.selection.weights.{key}={raw_value!r}. Expected finite float >= 0."
+            ) from None
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(
+                f"Invalid objectives.selection.weights.{key}={raw_value!r}. Expected finite float >= 0."
+            )
+        resolved_weights[key] = value
+
+    total = resolved_weights["error"] + resolved_weights["efficiency"] + resolved_weights["pdm"]
+    if total <= 0:
+        raise ValueError(
+            "Invalid objectives.selection.weights: sum(error, efficiency, pdm) must be > 0."
+        )
+    weights_normalized = {
+        "error": resolved_weights["error"] / total,
+        "efficiency": resolved_weights["efficiency"] / total,
+        "pdm": resolved_weights["pdm"] / total,
+    }
+    return {
+        "method": method,
+        "weights": resolved_weights,
+        "weights_normalized": weights_normalized,
+    }
+
+
+def _parse_solution_array(raw_value):
+    if raw_value is None:
+        return None
+    parsed = None
+    if isinstance(raw_value, str):
+        try:
+            parsed = json.loads(raw_value)
+        except Exception:
+            return None
+    else:
+        parsed = raw_value
+
     try:
-        raw_metrics = experiment.metrics.compute()
-        Log.debug(f"Raw metrics: {raw_metrics}")
-    except Exception as e:
-        Log.error(f"Error computing metrics: {e}")
-        return int(9e10), int(9e10), int(9e10)
-
-    smape = raw_metrics.get("SMAPE")
-    if smape is None:
-        Log.error("SMAPE metric is missing in computed metrics; cannot evaluate fitness.")
-        return int(9e10), int(9e10), int(9e10)
-
-    try:
-        smape_value = float(smape)
+        arr = np.asarray(parsed, dtype=float)
     except Exception:
-        Log.error(f"SMAPE value is not numeric: {smape}")
-        return int(9e10), int(9e10), int(9e10)
+        return None
+    if arr.size == 0:
+        return None
+    if not np.isfinite(arr).all():
+        return None
+    return arr
 
-    if not math.isfinite(smape_value):
-        Log.error(f"Invalid non-finite SMAPE value: {smape_value}")
-        return int(9e10), int(9e10), int(9e10)
 
-    # Complexity calculation
-    def normalize_complexity(value, max_bound):
-        return value / max_bound
+def _parse_timestamp_sort_key(raw_value):
+    if raw_value is None:
+        return float("inf")
+    if isinstance(raw_value, datetime):
+        dt = raw_value
+    else:
+        text = str(raw_value).strip()
+        if not text:
+            return float("inf")
+        dt = None
+        try:
+            dt = datetime.fromisoformat(text)
+        except Exception:
+            dt = None
+        if dt is None:
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+                try:
+                    dt = datetime.strptime(text, fmt)
+                    break
+                except Exception:
+                    dt = None
+    if dt is None:
+        return float("inf")
+    try:
+        return float(dt.timestamp())
+    except Exception:
+        return float("inf")
 
-    encoding_complexity = normalize_complexity(len(model.encoding_layers), seq_len)
-    decoding_complexity = normalize_complexity(len(model.decoding_layers), seq_len)
-    bottleneck_complexity = normalize_complexity(model.bottleneck_size, seq_len)
 
-    max_possible_complexity = 3.0  # Sum of all normalized components
-    complexity = int(
-        round((encoding_complexity + decoding_complexity + bottleneck_complexity) / max_possible_complexity, 6)
-        * 1000000
+def _pareto_mask_minimize(objectives: np.ndarray) -> np.ndarray:
+    count = int(objectives.shape[0])
+    keep = np.ones(count, dtype=bool)
+    for i in range(count):
+        if not keep[i]:
+            continue
+        for j in range(count):
+            if i == j:
+                continue
+            dominates = np.all(objectives[j] <= objectives[i]) and np.any(objectives[j] < objectives[i])
+            if dominates:
+                keep[i] = False
+                break
+    return keep
+
+
+def _select_deterministic_pareto_winner(candidates_df, selection_contract: dict):
+    if candidates_df is None:
+        raise ValueError("Winner selection failed: no candidate rows were returned from DB.")
+
+    try:
+        records = candidates_df.to_dict(orient="records")
+    except Exception:
+        records = []
+    candidate_count = len(records)
+    if candidate_count == 0:
+        raise ValueError(
+            f"Winner selection failed for {dataset_name}: no DB candidates found in cycle-scoped pool."
+        )
+
+    valid = []
+    for row in records:
+        obj_error = _safe_float(row.get("error"))
+        obj_efficiency = _safe_float(row.get("complexity"))
+        pr_auc_mean = _safe_float(row.get("pr_auc_mean"))
+        obj_pdm = _safe_float(1.0 - pr_auc_mean) if pr_auc_mean is not None else None
+        solution = _parse_solution_array(row.get("solution_array"))
+        if obj_error is None or obj_efficiency is None or obj_pdm is None or solution is None:
+            continue
+        if obj_error >= PENALTY or obj_efficiency >= PENALTY or obj_pdm >= PENALTY:
+            continue
+        valid.append(
+            {
+                "id": int(row.get("id")) if row.get("id") is not None else int(9e18),
+                "hash_id": str(row.get("hash_id", "")),
+                "algorithm_name": str(row.get("algorithm_name", "NSGA3")),
+                "timestamp_sort_key": _parse_timestamp_sort_key(row.get("timestamp")),
+                "obj_error": float(obj_error),
+                "obj_efficiency": float(obj_efficiency),
+                "obj_pdm": float(obj_pdm),
+                "pdm_signal_quality": float(pr_auc_mean),
+                "solution": solution,
+            }
+        )
+
+    if not valid:
+        raise ValueError(
+            f"Winner selection failed for {dataset_name}: no valid objective candidates after filtering."
+        )
+
+    def _tie_break_key(item):
+        return (
+            float(item["obj_pdm"]),
+            float(item["obj_error"]),
+            float(item["obj_efficiency"]),
+            float(item["timestamp_sort_key"]),
+            int(item["id"]),
+        )
+
+    dedup = {}
+    for item in valid:
+        key = item["hash_id"]
+        if key not in dedup or _tie_break_key(item) < _tie_break_key(dedup[key]):
+            dedup[key] = item
+    deduped = list(dedup.values())
+    if not deduped:
+        raise ValueError(
+            f"Winner selection failed for {dataset_name}: no candidates after hash de-duplication."
+        )
+
+    objective_matrix = np.array(
+        [[row["obj_error"], row["obj_efficiency"], row["obj_pdm"]] for row in deduped],
+        dtype=float,
+    )
+    mask = _pareto_mask_minimize(objective_matrix)
+    pareto_rows = [deduped[i] for i in range(len(deduped)) if bool(mask[i])]
+    if not pareto_rows:
+        raise ValueError(
+            f"Winner selection failed for {dataset_name}: Pareto set is empty after filtering."
+        )
+
+    pareto_matrix = np.array(
+        [[row["obj_error"], row["obj_efficiency"], row["obj_pdm"]] for row in pareto_rows],
+        dtype=float,
+    )
+    mins = np.min(pareto_matrix, axis=0)
+    maxs = np.max(pareto_matrix, axis=0)
+    spans = maxs - mins
+    normalized = np.zeros_like(pareto_matrix, dtype=float)
+    positive_span = spans > 0
+    if np.any(positive_span):
+        normalized[:, positive_span] = (
+            (pareto_matrix[:, positive_span] - mins[positive_span]) / spans[positive_span]
+        )
+
+    weights = selection_contract["weights_normalized"]
+    distances = np.sqrt(
+        normalized[:, 0] ** 2 * float(weights["error"])
+        + normalized[:, 1] ** 2 * float(weights["efficiency"])
+        + normalized[:, 2] ** 2 * float(weights["pdm"])
+    )
+    best_distance = float(np.min(distances))
+    tie_indices = [i for i, d in enumerate(distances) if abs(float(d) - best_distance) <= 1e-12]
+    tied_rows = [pareto_rows[i] for i in tie_indices]
+    tied_rows.sort(key=_tie_break_key)
+    selected = tied_rows[0]
+
+    return {
+        "method": selection_contract["method"],
+        "weights": _as_jsonable(selection_contract["weights"]),
+        "weights_normalized": _as_jsonable(selection_contract["weights_normalized"]),
+        "candidate_count": int(candidate_count),
+        "valid_candidate_count": int(len(valid)),
+        "deduplicated_candidate_count": int(len(deduped)),
+        "pareto_candidate_count": int(len(pareto_rows)),
+        "selected_hash": selected["hash_id"],
+        "selected_id": int(selected["id"]),
+        "selected_algorithm": selected["algorithm_name"],
+        "selected_objectives": {
+            "obj_error": float(selected["obj_error"]),
+            "obj_efficiency": float(selected["obj_efficiency"]),
+            "obj_pdm": float(selected["obj_pdm"]),
+        },
+        "selected_pdm_signal_quality": float(selected["pdm_signal_quality"]),
+        "selected_distance": float(best_distance),
+        "selected_solution": _as_jsonable(selected["solution"]),
+    }
+
+
+def _safe_float(value) -> float | None:
+    try:
+        out = float(value)
+    except Exception:
+        return None
+    return out if math.isfinite(out) else None
+
+
+def _penalty_objective_bundle(reason: str, objective_contract: dict | None = None) -> dict:
+    return {
+        "valid": False,
+        "reason": reason,
+        "objective_contract": objective_contract or _resolve_objective_contract(),
+        "obj_error": float(PENALTY),
+        "obj_efficiency": float(PENALTY),
+        "obj_pdm": float(PENALTY),
+        "pdm_signal_quality": None,
+        "fitness": float(PENALTY),
+    }
+
+
+def _model_device(model) -> torch.device:
+    try:
+        return next(model.parameters()).device
+    except Exception:
+        return torch.device("cpu")
+
+
+def _model_forward(model, signal_batch: torch.Tensor):
+    try:
+        return model({"signal": signal_batch})
+    except Exception:
+        return model(signal_batch)
+
+
+def _estimate_model_macs(model, seq_len: int, n_features: int) -> tuple[float | None, str | None]:
+    was_training = bool(model.training) if hasattr(model, "training") else False
+    device = _model_device(model)
+    dummy_signal = torch.zeros((1, int(seq_len), int(n_features)), dtype=torch.float32, device=device)
+    try:
+        if hasattr(model, "eval"):
+            model.eval()
+        try:
+            from thop import profile as thop_profile
+
+            macs, _ = thop_profile(model, inputs=({"signal": dummy_signal},), verbose=False)
+            macs_value = _safe_float(macs)
+            if macs_value is not None and macs_value > 0:
+                return macs_value, None
+        except Exception:
+            pass
+
+        if not hasattr(torch, "profiler") or not hasattr(torch.profiler, "profile"):
+            return None, "macs_profiler_unavailable"
+        activities = [torch.profiler.ProfilerActivity.CPU]
+        if device.type == "cuda":
+            activities.append(torch.profiler.ProfilerActivity.CUDA)
+            torch.cuda.synchronize()
+        with torch.inference_mode():
+            with torch.profiler.profile(activities=activities, with_flops=True) as prof:
+                _model_forward(model, dummy_signal)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+
+        total_flops = 0.0
+        for event in prof.key_averages():
+            flops_value = _safe_float(getattr(event, "flops", None))
+            if flops_value is not None and flops_value > 0:
+                total_flops += flops_value
+        if total_flops <= 0:
+            return None, "macs_flops_not_reported"
+        return float(total_flops / 2.0), None
+    except Exception as exc:
+        return None, f"macs_estimation_failed:{exc.__class__.__name__}"
+    finally:
+        try:
+            if hasattr(model, "train"):
+                model.train(was_training)
+        except Exception:
+            pass
+
+
+def _estimate_model_latency_ms(
+    model,
+    seq_len: int,
+    n_features: int,
+    warmup_steps: int = 3,
+    measure_steps: int = 7,
+) -> tuple[float | None, str | None]:
+    was_training = bool(model.training) if hasattr(model, "training") else False
+    device = _model_device(model)
+    dummy_signal = torch.zeros((1, int(seq_len), int(n_features)), dtype=torch.float32, device=device)
+    try:
+        if hasattr(model, "eval"):
+            model.eval()
+        with torch.inference_mode():
+            for _ in range(max(1, int(warmup_steps))):
+                _model_forward(model, dummy_signal)
+                if device.type == "cuda":
+                    torch.cuda.synchronize()
+
+            durations_ms = []
+            for _ in range(max(1, int(measure_steps))):
+                if device.type == "cuda":
+                    torch.cuda.synchronize()
+                started = time.perf_counter()
+                _model_forward(model, dummy_signal)
+                if device.type == "cuda":
+                    torch.cuda.synchronize()
+                ended = time.perf_counter()
+                durations_ms.append((ended - started) * 1000.0)
+
+        if not durations_ms:
+            return None, "latency_no_samples"
+        latency_ms = _safe_float(float(np.median(np.asarray(durations_ms, dtype=np.float64))))
+        if latency_ms is None or latency_ms <= 0:
+            return None, "latency_non_finite"
+        return latency_ms, None
+    except Exception as exc:
+        return None, f"latency_estimation_failed:{exc.__class__.__name__}"
+    finally:
+        try:
+            if hasattr(model, "train"):
+                model.train(was_training)
+        except Exception:
+            pass
+
+
+def _compute_efficiency_objective(model, metric_name: str, seq_len: int, n_features: int) -> tuple[float | None, str | None]:
+    metric = str(metric_name).strip().lower()
+    if metric == "params":
+        try:
+            value = float(sum(int(p.numel()) for p in model.parameters()))
+        except Exception as exc:
+            return None, f"params_count_failed:{exc.__class__.__name__}"
+        if value <= 0 or not math.isfinite(value):
+            return None, "params_non_finite"
+        return value, None
+
+    if metric == "macs":
+        return _estimate_model_macs(model, seq_len=seq_len, n_features=n_features)
+
+    if metric == "latency_ms":
+        return _estimate_model_latency_ms(model, seq_len=seq_len, n_features=n_features)
+
+    return None, f"unsupported_efficiency_metric:{metric}"
+
+
+def _metrics_payload_from_cached_entry(entry: dict | None) -> dict:
+    entry = entry or {}
+    metric_keys = ("MAE", "MSE", "RMSE", "MAPE", "RMAPE", "SMAPE")
+    return {metric_key: entry.get(metric_key) for metric_key in metric_keys}
+
+
+def _anomaly_payload_from_cached_entry(entry: dict | None) -> dict:
+    entry = entry or {}
+    keys = (
+        "precision",
+        "recall",
+        "f1_score",
+        "pr_auc_mean",
+        "pr_auc_std",
+        "roc_auc_mean",
+        "roc_auc_std",
+    )
+    return {key: entry.get(key) for key in keys}
+
+
+def calculate_objective_bundle(
+    model,
+    metrics_payload: dict | None,
+    anomaly_metrics: dict | None,
+    seq_len: int,
+    n_features: int,
+    cfg: dict | None = None,
+) -> dict:
+    objective_contract = _resolve_objective_contract(cfg)
+    metrics_payload = metrics_payload or {}
+    anomaly_metrics = anomaly_metrics or {}
+
+    error_metric = objective_contract["error_metric"]
+    obj_error = _safe_float(metrics_payload.get(error_metric))
+    if obj_error is None:
+        return _penalty_objective_bundle(
+            reason=f"missing_or_invalid_error_metric:{error_metric}",
+            objective_contract=objective_contract,
+        )
+
+    obj_efficiency, eff_reason = _compute_efficiency_objective(
+        model=model,
+        metric_name=objective_contract["efficiency_metric"],
+        seq_len=int(seq_len),
+        n_features=int(n_features),
+    )
+    if obj_efficiency is None:
+        Log.warning(
+            "OBJECTIVE_EFFICIENCY_FALLBACK "
+            f"metric={objective_contract['efficiency_metric']} "
+            f"reason={eff_reason or 'invalid_efficiency_objective'} penalty=true"
+        )
+        return _penalty_objective_bundle(
+            reason=eff_reason or "invalid_efficiency_objective",
+            objective_contract=objective_contract,
+        )
+
+    pdm_signal_quality = _safe_float(anomaly_metrics.get("pr_auc_mean"))
+    if pdm_signal_quality is None:
+        Log.warning(
+            "OBJECTIVE_PDM_FALLBACK "
+            "metric=auprc_premaint reason=missing_or_invalid_pdm_signal_quality penalty=true"
+        )
+        return _penalty_objective_bundle(
+            reason="missing_or_invalid_pdm_signal_quality",
+            objective_contract=objective_contract,
+        )
+
+    obj_pdm = _safe_float(1.0 - pdm_signal_quality)
+    if obj_pdm is None:
+        return _penalty_objective_bundle(
+            reason="invalid_obj_pdm",
+            objective_contract=objective_contract,
+        )
+
+    fitness = _safe_float(obj_error + obj_efficiency)
+    if fitness is None:
+        return _penalty_objective_bundle(
+            reason="invalid_compatibility_fitness",
+            objective_contract=objective_contract,
+        )
+
+    return {
+        "valid": True,
+        "reason": None,
+        "objective_contract": objective_contract,
+        "obj_error": float(obj_error),
+        "obj_efficiency": float(obj_efficiency),
+        "obj_pdm": float(obj_pdm),
+        "pdm_signal_quality": float(pdm_signal_quality),
+        # Compatibility fields retained until C13.5.
+        "fitness": float(fitness),
+    }
+
+
+def calculate_objective_bundle_from_experiment(model, experiment, seq_len: int, n_features: int, cfg: dict | None = None):
+    if experiment is None or getattr(experiment, "metrics", None) is None:
+        return _penalty_objective_bundle("missing_experiment_metrics", objective_contract=_resolve_objective_contract(cfg))
+
+    try:
+        if not experiment.metrics.are_metrics_complete():
+            return _penalty_objective_bundle(
+                reason="incomplete_metrics",
+                objective_contract=_resolve_objective_contract(cfg),
+            )
+        metrics_payload = experiment.metrics.compute()
+    except Exception as exc:
+        return _penalty_objective_bundle(
+            reason=f"metrics_compute_failed:{exc.__class__.__name__}",
+            objective_contract=_resolve_objective_contract(cfg),
+        )
+
+    anomaly_metrics = getattr(experiment, "anomaly_metrics", {}) or {}
+    return calculate_objective_bundle(
+        model=model,
+        metrics_payload=metrics_payload,
+        anomaly_metrics=anomaly_metrics,
+        seq_len=seq_len,
+        n_features=n_features,
+        cfg=cfg,
     )
 
-    # Total fitness calculation
-    try:
-        error = int(round(smape_value, 6) * 1000000)
-        fitness = error + complexity
-        Log.debug(f"Calculated fitness: {fitness}, error: {error}, complexity: {complexity}")
 
-        if not math.isfinite(float(fitness)) or not math.isfinite(float(error)) or not math.isfinite(float(complexity)):
-            Log.error("Invalid fitness, error, or complexity value detected. Returning worst possible value.")
-            return int(9e10), int(9e10), int(9e10)
+def calculate_objective_bundle_from_cached_row(model, cached_row, seq_len: int, n_features: int, cfg: dict | None = None):
+    return calculate_objective_bundle(
+        model=model,
+        metrics_payload=_metrics_payload_from_cached_entry(cached_row),
+        anomaly_metrics=_anomaly_payload_from_cached_entry(cached_row),
+        seq_len=seq_len,
+        n_features=n_features,
+        cfg=cfg,
+    )
 
-    except Exception as e:
-        Log.error(f"Error during fitness calculation: {e}")
-        return int(9e10), int(9e10), int(9e10)
 
-    return fitness, error, complexity
+def calculate_fitness(model, experiment, seq_len, cfg: dict | None = None):
+    """
+    Compatibility wrapper retained for DB/export flow until C13.5.
+    Returns scalar compatibility fitness plus the first two objectives.
+    """
+    n_features = int(((cfg or config or {}).get("data_params") or {}).get("n_features", 1))
+    bundle = calculate_objective_bundle_from_experiment(
+        model=model,
+        experiment=experiment,
+        seq_len=int(seq_len),
+        n_features=n_features,
+        cfg=cfg or config,
+    )
+    return bundle["fitness"], bundle["obj_error"], bundle["obj_efficiency"]
 
 
 class RNNVAEArchitectureMultiObj(Problem):
     """
     This class defines the multiobjective problem for RNN-VAE architecture search.
-    The two objectives are:
+    The three objectives are:
       1. The error (from validation/test metrics)
-      2. The model complexity (based on the number of layers and bottleneck size)
-    Both are to be minimized.
+      2. The efficiency objective (params|macs|latency_ms)
+      3. The PdM objective (1 - AUPRC_premaint)
+    All are minimized.
     """
 
     def __init__(self, dimension, config, conn, datamodule, dataset_name):
@@ -724,7 +1216,7 @@ class RNNVAEArchitectureMultiObj(Problem):
         self.stats = {"trained": 0, "cached": 0, "invalid": 0, "failed": 0}
         self.best_fitness = None
         self.best_hash = None
-        super().__init__(n_var=dimension, n_obj=2, n_constr=0, xl=0, xu=1)
+        super().__init__(n_var=dimension, n_obj=3, n_constr=0, xl=0, xu=1)
 
     @staticmethod
     def _to_int(value, default=PENALTY):
@@ -775,6 +1267,8 @@ class RNNVAEArchitectureMultiObj(Problem):
             fitness,
             error,
             complexity,
+            obj_pdm,
+            pdm_signal_quality=None,
             duration_s=None,
             reason=None,
             metric_parts=None
@@ -787,7 +1281,12 @@ class RNNVAEArchitectureMultiObj(Problem):
             f"fitness={self._to_int(fitness)}",
             f"error={self._to_int(error)}",
             f"complexity={self._to_int(complexity)}",
+            f"obj_error={self._format_metric(error)}",
+            f"obj_efficiency={self._format_metric(complexity)}",
+            f"obj_pdm={self._format_metric(obj_pdm)}",
         ]
+        if pdm_signal_quality is not None:
+            parts.append(f"pdm_signal_quality={self._format_metric(pdm_signal_quality)}")
         if duration_s is not None:
             parts.append(f"duration_s={float(duration_s):.1f}")
         if reason:
@@ -804,6 +1303,8 @@ class RNNVAEArchitectureMultiObj(Problem):
             fitness = PENALTY
             error = PENALTY
             complexity = PENALTY
+            obj_pdm = PENALTY
+            pdm_signal_quality = None
             status = "failed"
             reason = None
             duration = None
@@ -817,26 +1318,42 @@ class RNNVAEArchitectureMultiObj(Problem):
             Path(path).mkdir(parents=True, exist_ok=True)
 
             if existing_entry.shape[0] > 0:
-                status = "cached"
-                self.stats["cached"] += 1
-                error = self._to_int(existing_entry['error'][0])
-                complexity = self._to_int(existing_entry['complexity'][0])
-                if 'fitness' in existing_entry.columns:
-                    fitness = self._to_int(existing_entry['fitness'][0])
+                cached_row = existing_entry.iloc[0].to_dict()
+                cached_bundle = calculate_objective_bundle_from_cached_row(
+                    model=model,
+                    cached_row=cached_row,
+                    seq_len=self.config['data_params']['seq_len'],
+                    n_features=self.config['data_params']['n_features'],
+                    cfg=self.config,
+                )
+                if cached_bundle.get("valid"):
+                    status = "cached"
+                    reason = None
+                    self.stats["cached"] += 1
+                    error = cached_bundle["obj_error"]
+                    complexity = cached_bundle["obj_efficiency"]
+                    obj_pdm = cached_bundle["obj_pdm"]
+                    pdm_signal_quality = cached_bundle.get("pdm_signal_quality")
+                    # Compatibility scalar remains in use until C13.5.
+                    fitness = cached_bundle["fitness"]
                 else:
-                    fitness = self._to_int(error + complexity)
-            else:
+                    # Cached entry does not satisfy the current objective contract; re-evaluate.
+                    reason = f"cached_objective_miss:{cached_bundle.get('reason') or 'invalid'}"
+                    existing_entry = existing_entry.iloc[0:0]
+
+            if existing_entry.shape[0] == 0:
                 # If the model configuration is invalid, assign worst values.
                 if not model.is_valid:
                     status = "invalid"
-                    reason = "invalid_architecture"
+                    reason = reason or "invalid_architecture"
                     self.stats["invalid"] += 1
                     error = PENALTY
                     complexity = PENALTY
+                    obj_pdm = PENALTY
                     fitness = PENALTY
                     self.conn.save_model_and_entry(
                         dataset_name=self.dataset_name,
-                        alg_name="NSGA2",
+                        alg_name="NSGA3",
                         iteration=self.iteration,
                         model=model,
                         fitness=PENALTY,
@@ -849,7 +1366,7 @@ class RNNVAEArchitectureMultiObj(Problem):
                     experiment = None
                     start_time = None
                     end_time = None
-                    experiment = RNNVAExperiment(model, self.dataset_name, "NSGA2", **self.config)
+                    experiment = RNNVAExperiment(model, self.dataset_name, "NSGA3", **self.config)
                     trainer = Trainer(
                         enable_progress_bar=False,
                         accelerator="gpu" if torch.cuda.is_available() else "cpu",
@@ -868,24 +1385,37 @@ class RNNVAEArchitectureMultiObj(Problem):
                         end_time = datetime.now()
                         duration = (end_time - start_time).total_seconds()
 
-                        fitness, error, complexity = calculate_fitness(
-                            model,
-                            experiment,
-                            self.config['data_params']['seq_len']
+                        objective_bundle = calculate_objective_bundle_from_experiment(
+                            model=model,
+                            experiment=experiment,
+                            seq_len=self.config['data_params']['seq_len'],
+                            n_features=self.config['data_params']['n_features'],
+                            cfg=self.config,
                         )
+                        error = objective_bundle["obj_error"]
+                        complexity = objective_bundle["obj_efficiency"]
+                        obj_pdm = objective_bundle["obj_pdm"]
+                        pdm_signal_quality = objective_bundle.get("pdm_signal_quality")
+                        # Compatibility scalar remains in use until C13.5.
+                        fitness = objective_bundle["fitness"]
                         metric_parts = self._selected_metrics(experiment)
 
-                        if fitness >= PENALTY or error >= PENALTY or complexity >= PENALTY:
+                        if not objective_bundle.get("valid"):
+                            status = "failed"
+                            reason = objective_bundle.get("reason") or "objective_bundle_invalid"
+                            self.stats["failed"] += 1
+                        elif fitness >= PENALTY or error >= PENALTY or complexity >= PENALTY or obj_pdm >= PENALTY:
                             status = "failed"
                             reason = "penalty_fitness"
                             self.stats["failed"] += 1
                         else:
                             status = "trained"
+                            reason = None
                             self.stats["trained"] += 1
 
                         self.conn.save_model_and_entry(
                             dataset_name=self.dataset_name,
-                            alg_name="NSGA2",
+                            alg_name="NSGA3",
                             iteration=self.iteration,
                             solution=solution,
                             error=error,
@@ -907,6 +1437,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                         fitness = PENALTY
                         error = PENALTY
                         complexity = PENALTY
+                        obj_pdm = PENALTY
+                        pdm_signal_quality = None
                         metric_parts = []
                         Log.error(
                             f"CANDIDATE_EVAL_FAILED iter={self.iteration} hash={model_hash} "
@@ -915,7 +1447,7 @@ class RNNVAEArchitectureMultiObj(Problem):
                         )
                         self.conn.save_model_and_entry(
                             dataset_name=self.dataset_name,
-                            alg_name="NSGA2",
+                            alg_name="NSGA3",
                             iteration=self.iteration,
                             solution=solution,
                             error=error,
@@ -931,10 +1463,12 @@ class RNNVAEArchitectureMultiObj(Problem):
                         _cleanup_candidate_runtime(trainer=trainer, experiment=experiment, model=model)
 
             # Ensure that if any value is nan, we use the worst-case penalty.
-            if np.isnan(error) or np.isnan(complexity):
+            if np.isnan(error) or np.isnan(complexity) or np.isnan(obj_pdm):
                 fitness = PENALTY
                 error = PENALTY
                 complexity = PENALTY
+                obj_pdm = PENALTY
+                pdm_signal_quality = None
                 status = "failed"
                 reason = "nan_objective"
                 self.stats["failed"] += 1
@@ -950,20 +1484,24 @@ class RNNVAEArchitectureMultiObj(Problem):
                 fitness=fitness,
                 error=error,
                 complexity=complexity,
+                obj_pdm=obj_pdm,
+                pdm_signal_quality=pdm_signal_quality,
                 duration_s=duration,
                 reason=reason,
                 metric_parts=metric_parts
             )
 
-            F.append([error, complexity])
+            F.append([error, complexity, obj_pdm])
         out["F"] = np.array(F)
 
 
 def solve_architecture_problem():
     """
-    Uses pymoo's NSGA-II to perform a multiobjective search for the optimal balance between
-    error and complexity. Optimizer settings (e.g., population size, termination criteria) are
-    taken from the configuration file.
+    Uses pymoo's NSGA-III to perform a three-objective search:
+      1) obj_error
+      2) obj_efficiency
+      3) obj_pdm
+    Objective contract and optimizer settings are taken from the configuration file.
     """
     DIMENSIONALITY = 7
 
@@ -990,13 +1528,20 @@ def solve_architecture_problem():
         raise e
     termination = get_termination("time", max_time=max_time)
 
-    population_size = int(config['nia_search']['population_size'])
-    warm_start = _resolve_warm_start_sampling(DIMENSIONALITY)
+    nsga3_cfg = dict((config.get("nia_search") or {}).get("nsga3") or {})
+    n_partitions = int(nsga3_cfg["n_partitions"])
+    ref_dirs = get_reference_directions("das-dennis", 3, n_partitions=n_partitions)
+    effective_population = int(ref_dirs.shape[0])
+
+    warm_start = _resolve_warm_start_sampling(
+        DIMENSIONALITY,
+        effective_population=effective_population,
+    )
     search_init_mode = warm_start["init_mode"]
     seed_source = "random"
     if warm_start["enabled"]:
-        algorithm = NSGA2(
-            pop_size=population_size,
+        algorithm = NSGA3(
+            ref_dirs=ref_dirs,
             sampling=warm_start["sampling"],
         )
         seed_source = f"cycle_{warm_start['source_cycle_id']:02d}"
@@ -1008,21 +1553,33 @@ def solve_architecture_problem():
             f"carry_over={details['carry_over_count']} "
             f"perturb={details['perturb_count']} "
             f"random={details['random_count']} "
-            f"perturbation_strength={details['perturbation_strength']}"
+            f"perturbation_strength={details['perturbation_strength']} "
+            f"effective_population={details.get('population_size')}"
         )
     else:
-        algorithm = NSGA2(pop_size=population_size)
+        algorithm = NSGA3(ref_dirs=ref_dirs)
         if warm_start["reason"]:
             Log.info(f"WARMSTART_FALLBACK reason={warm_start['reason']} init_mode=random")
 
     # Determine the number of parallel jobs (using CUDA if available).
     n_jobs = torch.cuda.device_count() if torch.cuda.is_available() else 1
+    objective_contract = _resolve_objective_contract(config)
+    selection_contract = _resolve_winner_selection_contract(config)
 
     Log.info(
-        f"SEARCH_START algorithm=NSGA2 population_size={population_size} "
+        f"SEARCH_START algorithm=NSGA3 n_partitions={n_partitions} "
+        f"ref_dirs={effective_population} effective_population={effective_population} "
         f"time_limit={time_str} time_limit_seconds={max_time} n_jobs={n_jobs} "
         f"metrics={config['nia_search'].get('metrics')} "
-        f"search_init_mode={search_init_mode} seed_source={seed_source}"
+        f"search_init_mode={search_init_mode} seed_source={seed_source} "
+        f"obj_error={objective_contract['error_metric']} "
+        f"obj_efficiency={objective_contract['efficiency_metric']} "
+        f"obj_pdm=1-{objective_contract['pdm_metric']} "
+        f"winner_selection={selection_contract['method']} "
+        f"winner_weights="
+        f"{selection_contract['weights_normalized']['error']:.4f}/"
+        f"{selection_contract['weights_normalized']['efficiency']:.4f}/"
+        f"{selection_contract['weights_normalized']['pdm']:.4f}"
     )
     res = minimize(
         problem,
@@ -1033,15 +1590,30 @@ def solve_architecture_problem():
         n_jobs=n_jobs
     )
 
-    # Retrieve the best solution from the database (using your existing criteria).
-    best_solution, best_algorithm = conn.best_results(dataset_name)
-    if best_solution is None:
-        Log.error(
-            f"SEARCH_DONE iterations={problem.iteration} trained={problem.stats['trained']} "
-            f"cached={problem.stats['cached']} invalid={problem.stats['invalid']} failed={problem.stats['failed']} "
-            "best_hash=None best_fitness=None no_solution=true"
-        )
-        return
+    candidate_rows = conn.get_cycle_candidates(dataset_name=dataset_name, algorithm_name="NSGA3")
+    winner_selection = _select_deterministic_pareto_winner(
+        candidates_df=candidate_rows,
+        selection_contract=selection_contract,
+    )
+    best_solution = np.asarray(winner_selection["selected_solution"], dtype=float)
+    best_algorithm = winner_selection["selected_algorithm"]
+
+    Log.info(
+        "WINNER_SELECTION "
+        f"dataset={dataset_name} method={winner_selection['method']} "
+        f"candidate_count={winner_selection['candidate_count']} "
+        f"valid_count={winner_selection['valid_candidate_count']} "
+        f"dedup_count={winner_selection['deduplicated_candidate_count']} "
+        f"pareto_count={winner_selection['pareto_candidate_count']} "
+        f"weights={winner_selection['weights_normalized']['error']:.4f}/"
+        f"{winner_selection['weights_normalized']['efficiency']:.4f}/"
+        f"{winner_selection['weights_normalized']['pdm']:.4f} "
+        f"selected_hash={winner_selection['selected_hash']} "
+        f"selected_obj_error={winner_selection['selected_objectives']['obj_error']:.4f} "
+        f"selected_obj_efficiency={winner_selection['selected_objectives']['obj_efficiency']:.4f} "
+        f"selected_obj_pdm={winner_selection['selected_objectives']['obj_pdm']:.4f} "
+        f"selected_distance={winner_selection['selected_distance']:.6f}"
+    )
 
     search_result = {
         "iterations": problem.iteration,
@@ -1049,11 +1621,15 @@ def solve_architecture_problem():
         "cached": problem.stats["cached"],
         "invalid": problem.stats["invalid"],
         "failed": problem.stats["failed"],
-        "best_hash": problem.best_hash,
-        "best_fitness": problem.best_fitness,
+        "best_hash": winner_selection["selected_hash"],
+        "best_fitness": winner_selection["selected_distance"],
         "best_solution": _as_jsonable(best_solution),
         "time_limit": time_str,
         "time_limit_seconds": max_time,
+        "algorithm": "NSGA3",
+        "n_partitions": n_partitions,
+        "ref_dirs": effective_population,
+        "effective_population": effective_population,
         "init_mode": search_init_mode,
         "seed_source": seed_source,
         "warm_start": _as_jsonable(warm_start["details"]),
@@ -1063,19 +1639,22 @@ def solve_architecture_problem():
             if warm_start.get("source_cycle_id") is not None
             else None
         ),
+        "winner_selection": _as_jsonable(
+            {k: v for k, v in winner_selection.items() if k != "selected_solution"}
+        ),
     }
 
     final_result = _run_final_training(best_solution)
     best_model = final_result["model"]
     model_file = (
         Path(config['logging_params']['save_dir'])
-        / f"{dataset_name}_NSGA2_{best_model.hash_id}.pt"
+        / f"{dataset_name}_NSGA3_{best_model.hash_id}.pt"
     )
     torch.save(best_model.state_dict(), model_file)
     Log.info(
         f"SEARCH_DONE iterations={problem.iteration} trained={problem.stats['trained']} "
         f"cached={problem.stats['cached']} invalid={problem.stats['invalid']} failed={problem.stats['failed']} "
-        f"best_hash={best_model.hash_id} best_fitness={problem.best_fitness}"
+        f"best_hash={best_model.hash_id} best_fitness={winner_selection['selected_distance']}"
     )
     Log.info(f"BEST_MODEL_SAVED path={model_file}")
 

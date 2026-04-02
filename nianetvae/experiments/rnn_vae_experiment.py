@@ -29,8 +29,9 @@ class RNNVAExperiment(LightningModule):
         self.val_loss = None
         self.test_loss = None
         self.metrics = EvaluationMetrics()
-        self.compute_anomaly_metrics = bool(kwargs.get('exp_params', {}).get('compute_anomaly_metrics', True))
-        self.anomaly_detection_metrics = AnomalyDetectionMetrics() if self.compute_anomaly_metrics else None
+        # C13.3 policy lock: anomaly metrics are always enabled because obj_pdm depends on them.
+        self.compute_anomaly_metrics = True
+        self.anomaly_detection_metrics = AnomalyDetectionMetrics()
         self.anomaly_metrics = {}
         try:
             self.hold_graph = self.params['retain_first_backpass']
@@ -126,13 +127,12 @@ class RNNVAExperiment(LightningModule):
 
         # TODO Check if the value of metric here is the same as it is in DB
         # Update anomaly detection metrics
-        if self.compute_anomaly_metrics and self.anomaly_detection_metrics is not None:
-            self.anomaly_detection_metrics.update(
-                predictions=results['reconstructed'],
-                targets=batch['signal'],
-                labels=batch['target'],
-                ts_ids=batch.get('ts_id', None)  # Pass ts_id if available
-            )
+        self.anomaly_detection_metrics.update(
+            predictions=results['reconstructed'],
+            targets=batch['signal'],
+            labels=batch['target'],
+            ts_ids=batch.get('ts_id', None)  # Pass ts_id if available
+        )
         # TODO When all dataloaders will return ts_id change to:
         # ts_ids = batch['ts_id']
 
@@ -140,11 +140,6 @@ class RNNVAExperiment(LightningModule):
         return self.results
 
     def on_test_end(self):
-        if not self.compute_anomaly_metrics or self.anomaly_detection_metrics is None:
-            self.anomaly_metrics = {}
-            Log.debug("Anomaly detection metrics are disabled (exp_params.compute_anomaly_metrics=false).")
-            return
-
         # Compute anomaly detection metrics
         self.anomaly_metrics = self.anomaly_detection_metrics.compute()
 

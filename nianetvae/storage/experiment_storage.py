@@ -262,6 +262,28 @@ class SQLiteConnector:
             if conn:
                 conn.close()
 
+    @_retry_db()
+    def get_cycle_candidates(self, dataset_name: str, algorithm_name: str = "NSGA3"):
+        conn = None
+        try:
+            conn = self._get_connection()
+            df = pd.read_sql_query(
+                f"SELECT id, hash_id, solution_array, error, complexity, pr_auc_mean, "
+                f"algorithm_name, timestamp, fitness "
+                f"FROM {self.table_name} "
+                f"WHERE dataset_name = ? AND algorithm_name = ? "
+                f"ORDER BY id ASC",
+                conn,
+                params=(dataset_name, algorithm_name),
+            )
+            return df
+        except Exception as e:
+            Log.error(f"Error fetching cycle candidates: {e}")
+            return pd.DataFrame()
+        finally:
+            if conn:
+                conn.close()
+
     def save_model_and_entry(
             self,
             dataset_name,
@@ -504,6 +526,28 @@ class PostgresConnector:
         except Exception as e:
             Log.error(f"Error fetching best results: {e}")
             return None, None
+        finally:
+            if conn:
+                conn.close()
+
+    @_retry_pg()
+    def get_cycle_candidates(self, dataset_name: str, algorithm_name: str = "NSGA3"):
+        conn = None
+        try:
+            conn = self._get_connection()
+            df = pd.read_sql_query(
+                f"SELECT id, hash_id, solution_array, error, complexity, pr_auc_mean, "
+                f"algorithm_name, timestamp, fitness "
+                f"FROM {self.table_name} "
+                f"WHERE dataset_name = %s AND algorithm_name = %s "
+                f"ORDER BY id ASC",
+                conn,
+                params=(dataset_name, algorithm_name),
+            )
+            return df
+        except Exception as e:
+            Log.error(f"Error fetching cycle candidates: {e}")
+            return pd.DataFrame()
         finally:
             if conn:
                 conn.close()

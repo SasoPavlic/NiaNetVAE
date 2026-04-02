@@ -11,14 +11,14 @@ This loader mirrors the MetroPT PdM framework's feature engineering and maintena
 Two regimes are supported:
   - regime="single"
       Train: baseline = first train_minutes from dataset start (inclusive cutoff), phases in train_phases.
-      Test:  (baseline_end, start_W1), phases in test_phases (typically {0}).
+      Test:  (baseline_end, start_W1), phases in test_phases (default {0,1}).
   - regime="per_maint"
       cycle_id=0 maps to pre_W1 (baseline-trained model tested on baseline_end..W1_start).
       cycle_id=1..21 maps to Davari window order (#1..#21).
       post_train = [end_j, min(end_j + post_train_minutes, start_{j+1}))
       after_maint = [end(post_train), start_{j+1})   (or until end of data if j is the last window)
       Train: baseline ∪ post_train, phases in train_phases (typically {0,1}).
-      Test:  after_maint, phases in test_phases (typically {0}).
+      Test:  after_maint, phases in test_phases (default {0,1}).
 
 An explicit goal is to prevent sequence windows from crossing gaps between disjoint time blocks. To achieve this,
 we build windows within each contiguous True-run of the selected masks (baseline/post-train/test) only.
@@ -220,7 +220,13 @@ def _segments_from_mask(values: np.ndarray, mask: np.ndarray) -> List[np.ndarray
 class MetroPTSegmentedSequenceDataset(Dataset):
     """Sliding-window dataset over multiple contiguous segments (no cross-gap windows)."""
 
-    def __init__(self, segments: List[np.ndarray], seq_len: int = 200, stride: int = 1) -> None:
+    def __init__(
+        self,
+        segments: List[np.ndarray],
+        phase_segments: Optional[List[np.ndarray]] = None,
+        seq_len: int = 200,
+        stride: int = 1,
+    ) -> None:
         if seq_len < 1:
             raise ValueError("seq_len must be >= 1.")
         if stride < 1:
@@ -229,9 +235,15 @@ class MetroPTSegmentedSequenceDataset(Dataset):
         self.stride = int(stride)
 
         self._segments: List[np.ndarray] = []
+        self._phase_segments: Optional[List[np.ndarray]] = [] if phase_segments is not None else None
         self._windows_per_segment: List[int] = []
+        self.window_positive_count = 0
+        self.window_negative_count = 0
 
-        for seg in segments or []:
+        if phase_segments is not None and len(phase_segments) != len(segments or []):
+            raise ValueError("phase_segments length must match segments length.")
+
+        for idx, seg in enumerate(segments or []):
             arr = np.asarray(seg, dtype=np.float32)
             if arr.ndim == 1:
                 arr = arr.reshape(-1, 1)
@@ -241,6 +253,16 @@ class MetroPTSegmentedSequenceDataset(Dataset):
             n = arr.shape[0]
             w = max(0, (n - self.seq_len) // self.stride + 1)
             self._windows_per_segment.append(int(w))
+            if self._phase_segments is not None:
+                phase_arr = np.asarray(phase_segments[idx], dtype=np.int8).reshape(-1)
+                if phase_arr.shape[0] != n:
+                    raise ValueError("Each phase segment must have the same row count as its signal segment.")
+                self._phase_segments.append(phase_arr)
+                if w > 0:
+                    anchors = np.arange(self.seq_len - 1, self.seq_len - 1 + w * self.stride, self.stride, dtype=np.int64)
+                    positives = int(np.sum(phase_arr[anchors] == 1))
+                    self.window_positive_count += positives
+                    self.window_negative_count += int(w - positives)
 
         self._cum_windows = np.cumsum(self._windows_per_segment, dtype=np.int64)
         self._total_windows = int(self._cum_windows[-1]) if self._cum_windows.size else 0
@@ -257,7 +279,13 @@ class MetroPTSegmentedSequenceDataset(Dataset):
         start = local * self.stride
         window = self._segments[seg_idx][start : start + self.seq_len]
         signal = torch.from_numpy(window).float()
-        return {"signal": signal, "target": 0, "ts_id": seg_idx}
+        operation_phase = 0
+        target = 0
+        if self._phase_segments is not None:
+            anchor = start + self.seq_len - 1
+            operation_phase = int(self._phase_segments[seg_idx][anchor])
+            target = 1 if operation_phase == 1 else 0
+        return {"signal": signal, "target": target, "operation_phase": operation_phase, "ts_id": seg_idx}
 
 
 class MetroPTDataLoader(BaseDataLoader):
@@ -282,7 +310,7 @@ class MetroPTDataLoader(BaseDataLoader):
         timestamp_col: Optional[str] = None,
         drop_unnamed_index: bool = True,
         train_phases: Optional[Sequence[int]] = (0, 1),
-        test_phases: Optional[Sequence[int]] = (0,),
+        test_phases: Optional[Sequence[int]] = (0, 1),
         **kwargs,
     ) -> None:
         super().__init__(
@@ -308,7 +336,7 @@ class MetroPTDataLoader(BaseDataLoader):
         self.timestamp_col = timestamp_col
         self.drop_unnamed_index = bool(drop_unnamed_index)
         self.train_phases = _as_int_list(train_phases, default=(0, 1))
-        self.test_phases = _as_int_list(test_phases, default=(0,))
+        self.test_phases = _as_int_list(test_phases, default=(0, 1))
 
         self.n_features: Optional[int] = None
         self.split_info: Dict[str, object] = {}
@@ -459,6 +487,9 @@ class MetroPTDataLoader(BaseDataLoader):
                 "baseline_rows_train_phase": int((pd.Series(baseline_mask, index=index) & op_phase.isin(train_phases)).sum()),
                 "train_rows": int(train_mask.sum()),
                 "test_rows": int(test_mask.sum()),
+                "test_phase0_rows": int((test_mask & op_phase.eq(0)).sum()),
+                "test_phase1_rows": int((test_mask & op_phase.eq(1)).sum()),
+                "test_phase2_rows": int((test_mask & op_phase.eq(2)).sum()),
             }
         )
         self.split_info = info
@@ -489,16 +520,23 @@ class MetroPTDataLoader(BaseDataLoader):
         train_mask, test_mask = self._build_masks(X.index, op_phase, windows)
 
         X_vals = X.to_numpy(dtype=np.float32, copy=False)
+        op_phase_vals = op_phase.to_numpy(dtype=np.int8, copy=False)
         train_mask_arr = train_mask.to_numpy(dtype=bool)
         test_mask_arr = test_mask.to_numpy(dtype=bool)
 
         train_segments_raw = _segments_from_mask(X_vals, train_mask_arr)
         test_segments_raw = _segments_from_mask(X_vals, test_mask_arr)
+        train_phase_segments_raw = _segments_from_mask(op_phase_vals, train_mask_arr)
+        test_phase_segments_raw = _segments_from_mask(op_phase_vals, test_mask_arr)
 
         if not train_segments_raw:
             raise ValueError("No contiguous training segments were produced (unexpected).")
         if not test_segments_raw:
             raise ValueError("No contiguous test segments were produced (unexpected).")
+        if len(train_segments_raw) != len(train_phase_segments_raw):
+            raise ValueError("Training phase segments are not aligned with training signal segments.")
+        if len(test_segments_raw) != len(test_phase_segments_raw):
+            raise ValueError("Test phase segments are not aligned with test signal segments.")
 
         scaler = StandardScaler()
         for seg in train_segments_raw:
@@ -512,7 +550,10 @@ class MetroPTDataLoader(BaseDataLoader):
             train_segments, seq_len=self.seq_len, stride=self.stride
         )
         test_ds = MetroPTSegmentedSequenceDataset(
-            test_segments, seq_len=self.seq_len, stride=self.stride
+            test_segments,
+            phase_segments=test_phase_segments_raw,
+            seq_len=self.seq_len,
+            stride=self.stride,
         )
 
         if len(train_val_ds) < 2 and self.val_size > 0:
@@ -530,6 +571,9 @@ class MetroPTDataLoader(BaseDataLoader):
                 "n_features": self.n_features,
                 "train_segments": int(len(train_segments)),
                 "test_segments": int(len(test_segments)),
+                "test_window_label_policy": "end_anchor_phase",
+                "test_label_pos_windows": int(test_ds.window_positive_count),
+                "test_label_neg_windows": int(test_ds.window_negative_count),
             }
         )
 
@@ -556,10 +600,16 @@ class MetroPTDataLoader(BaseDataLoader):
                 f"dataset={self.dataset_name} regime={self.split_info.get('regime')} cycle_id={self.split_info.get('cycle_id')} "
                 f"n_features={self.n_features} seq_len={self.seq_len} stride={self.stride} rolling_window={self.rolling_window} "
                 f"train_rows={self.split_info.get('train_rows')} test_rows={self.split_info.get('test_rows')} "
+                f"test_phase0_rows={self.split_info.get('test_phase0_rows')} "
+                f"test_phase1_rows={self.split_info.get('test_phase1_rows')} "
+                f"test_phase2_rows={self.split_info.get('test_phase2_rows')} "
                 f"train_segments={self.split_info.get('train_segments')} test_segments={self.split_info.get('test_segments')} "
                 f"train_windows={int(len(self.train_dataset)) if self.train_dataset is not None else 0} "
                 f"val_windows={int(len(self.val_dataset)) if self.val_dataset is not None else 0} "
-                f"test_windows={int(len(self.test_dataset)) if self.test_dataset is not None else 0}"
+                f"test_windows={int(len(self.test_dataset)) if self.test_dataset is not None else 0} "
+                f"test_label_pos_windows={self.split_info.get('test_label_pos_windows')} "
+                f"test_label_neg_windows={self.split_info.get('test_label_neg_windows')} "
+                f"test_window_label_policy={self.split_info.get('test_window_label_policy')}"
             )
             self._summary_logged = True
 
