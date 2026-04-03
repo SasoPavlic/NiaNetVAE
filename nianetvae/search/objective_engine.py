@@ -155,19 +155,31 @@ def _estimate_model_latency_ms(
             pass
 
 
+def _count_model_params(model) -> tuple[float | None, str | None]:
+    try:
+        value = float(sum(int(p.numel()) for p in model.parameters()))
+    except Exception as exc:
+        return None, f"params_count_failed:{exc.__class__.__name__}"
+    if value <= 0 or not math.isfinite(value):
+        return None, "params_non_finite"
+    return value, None
+
+
 def _compute_efficiency_objective(model, metric_name: str, seq_len: int, n_features: int) -> tuple[float | None, str | None]:
     metric = str(metric_name).strip().lower()
     if metric == "params":
-        try:
-            value = float(sum(int(p.numel()) for p in model.parameters()))
-        except Exception as exc:
-            return None, f"params_count_failed:{exc.__class__.__name__}"
-        if value <= 0 or not math.isfinite(value):
-            return None, "params_non_finite"
-        return value, None
+        return _count_model_params(model)
 
     if metric == "macs":
-        return _estimate_model_macs(model, seq_len=seq_len, n_features=n_features)
+        macs_value, macs_reason = _estimate_model_macs(model, seq_len=seq_len, n_features=n_features)
+        if macs_value is not None:
+            return macs_value, None
+        # Robust fallback for runtimes where FLOPs/MACs are not reported for RNN ops.
+        params_value, params_reason = _count_model_params(model)
+        if params_value is not None:
+            fallback_reason = f"{macs_reason or 'macs_unavailable'};fallback=params"
+            return params_value, fallback_reason
+        return None, macs_reason or params_reason or "macs_unavailable"
 
     if metric == "latency_ms":
         return _estimate_model_latency_ms(model, seq_len=seq_len, n_features=n_features)
@@ -235,18 +247,26 @@ def calculate_objective_bundle(
             objective_contract=objective_contract,
             penalty=penalty,
         )
+    if eff_reason:
+        Log.warning(
+            "OBJECTIVE_EFFICIENCY_FALLBACK "
+            f"metric={objective_contract['efficiency_metric']} "
+            f"reason={eff_reason} value={float(obj_efficiency):.4f} penalty=false"
+        )
 
     pdm_signal_quality = _safe_float(anomaly_metrics.get("pr_auc_mean"))
     if pdm_signal_quality is None:
+        # Some cycles can have no positive PdM labels after phase/window filtering.
+        # In that case AUPRC is undefined; use worst-case fallback (0.0) so search
+        # still proceeds and ranking can rely on the other objectives.
+        pdm_signal_quality = 0.0
         Log.warning(
             "OBJECTIVE_PDM_FALLBACK "
-            "metric=auprc_premaint reason=missing_or_invalid_pdm_signal_quality penalty=true"
+            "metric=auprc_premaint reason=missing_or_invalid_pdm_signal_quality "
+            "fallback_value=0.0 penalty=false"
         )
-        return _penalty_objective_bundle(
-            reason="missing_or_invalid_pdm_signal_quality",
-            objective_contract=objective_contract,
-            penalty=penalty,
-        )
+    # Keep the metric bounded to a valid probability range.
+    pdm_signal_quality = float(max(0.0, min(1.0, pdm_signal_quality)))
 
     obj_pdm = _safe_float(1.0 - pdm_signal_quality)
     if obj_pdm is None:

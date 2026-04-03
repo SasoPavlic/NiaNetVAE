@@ -94,7 +94,7 @@ def test_objective_bundle_computes_obj_pdm_from_pr_auc():
     assert bundle["obj_pdm"] == pytest.approx(0.17)
 
 
-def test_objective_bundle_penalizes_missing_pr_auc():
+def test_objective_bundle_uses_worst_case_when_pr_auc_missing():
     model = _TinyModel()
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
@@ -105,9 +105,10 @@ def test_objective_bundle_penalizes_missing_pr_auc():
         cfg=_cfg(),
     )
 
-    assert bundle["valid"] is False
-    assert bundle["obj_pdm"] == objective_engine.DEFAULT_PENALTY
-    assert bundle["reason"] == "missing_or_invalid_pdm_signal_quality"
+    assert bundle["valid"] is True
+    assert bundle["reason"] is None
+    assert bundle["pdm_signal_quality"] == pytest.approx(0.0)
+    assert bundle["obj_pdm"] == pytest.approx(1.0)
 
 
 def test_efficiency_params_backend_returns_finite_positive():
@@ -124,7 +125,7 @@ def test_efficiency_params_backend_returns_finite_positive():
     assert value > 0
 
 
-def test_efficiency_macs_backend_penalizes_with_reason(monkeypatch):
+def test_efficiency_macs_backend_falls_back_to_params_when_unavailable(monkeypatch):
     model = _TinyModel()
     monkeypatch.setattr(
         objective_engine,
@@ -140,9 +141,9 @@ def test_efficiency_macs_backend_penalizes_with_reason(monkeypatch):
         cfg=_cfg(efficiency_metric="macs"),
     )
 
-    assert bundle["valid"] is False
-    assert bundle["obj_efficiency"] == objective_engine.DEFAULT_PENALTY
-    assert bundle["reason"] == "macs_backend_unavailable"
+    assert bundle["valid"] is True
+    assert bundle["reason"] is None
+    assert bundle["obj_efficiency"] > 0
 
 
 def test_efficiency_latency_backend_penalizes_with_reason(monkeypatch):
@@ -526,5 +527,34 @@ def test_select_deterministic_pareto_winner_fails_fast_on_empty_valid_pool():
             candidates_df=df,
             selection_contract=winner_selection._resolve_winner_selection_contract(_cfg()),
             dataset_name="MetroPT_cycle00",
+            penalty=objective_engine.DEFAULT_PENALTY,
+        )
+
+
+def test_select_deterministic_pareto_winner_filters_postgres_real_rounded_penalty():
+    # Postgres REAL (float4) can round 9e10 -> 89999998976.0.
+    rounded_penalty = float(np.float32(objective_engine.DEFAULT_PENALTY))
+    assert rounded_penalty < float(objective_engine.DEFAULT_PENALTY)
+
+    df = pd.DataFrame(
+        [
+            {
+                "id": 1,
+                "hash_id": "rounded-penalty",
+                "solution_array": json.dumps([0.1] * 7),
+                "obj_error": rounded_penalty,
+                "obj_efficiency": rounded_penalty,
+                "obj_pdm": rounded_penalty,
+                "algorithm_name": "NSGA3",
+                "timestamp": "2026-04-03 11:16:45",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="no valid objective candidates"):
+        winner_selection._select_deterministic_pareto_winner(
+            candidates_df=df,
+            selection_contract=winner_selection._resolve_winner_selection_contract(_cfg()),
+            dataset_name="MetroPT_cycle20",
             penalty=objective_engine.DEFAULT_PENALTY,
         )

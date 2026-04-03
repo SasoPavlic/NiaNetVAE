@@ -8,6 +8,21 @@ from .objective_engine import _safe_float
 from .runtime_artifacts import _as_jsonable
 
 
+def _is_penalty_like_objective(value: float, penalty: float) -> bool:
+    """
+    Return True when objective value should be treated as penalty.
+
+    Postgres REAL (float4) can round 9e10 to 89999998976.0, so strict
+    >= penalty checks can miss penalty rows after DB round-trip.
+    """
+    if not math.isfinite(value):
+        return True
+    if value >= penalty:
+        return True
+    # Tolerate storage precision drift (e.g., float4 rounding in Postgres).
+    return bool(math.isclose(value, penalty, rel_tol=1e-6, abs_tol=1.0))
+
+
 def _resolve_winner_selection_contract(cfg: dict | None = None) -> dict:
     cfg = cfg or {}
     objectives = dict(cfg.get("objectives") or {})
@@ -151,7 +166,11 @@ def _select_deterministic_pareto_winner(
         solution = _parse_solution_array(row.get("solution_array"))
         if obj_error is None or obj_efficiency is None or obj_pdm is None or solution is None:
             continue
-        if obj_error >= penalty_value or obj_efficiency >= penalty_value or obj_pdm >= penalty_value:
+        if (
+            _is_penalty_like_objective(float(obj_error), penalty_value)
+            or _is_penalty_like_objective(float(obj_efficiency), penalty_value)
+            or _is_penalty_like_objective(float(obj_pdm), penalty_value)
+        ):
             continue
         valid.append(
             {

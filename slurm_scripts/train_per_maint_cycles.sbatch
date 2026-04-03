@@ -6,8 +6,9 @@
 #SBATCH --nodes=1                                                # Number of nodes
 #SBATCH --ntasks=1                                               # Number of tasks
 #SBATCH --gres=gpu:1                                             # Request 1 GPU
-#SBATCH --mem-per-gpu=50GB                                       # Memory per GPU
-#SBATCH --time=03:15:00                                          # Maximum runtime
+#SBATCH --mem-per-gpu=32GB                                       # Memory per GPU
+#SBATCH --time=02:00:00                                          # Maximum runtime
+#SBATCH --cpus-per-task=8
 
 set -euo pipefail
 

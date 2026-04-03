@@ -1,103 +1,142 @@
-# main_config.yaml
+# Main runtime configuration for NiaNetVAE.
+# This file defines search, objectives, training defaults, logging/export,
+# and dataset profile selection.
+
 nia_search:
   nsga3:
-    # C13.4: NSGA-III sizing contract (no legacy population_size).
-    # Reference directions are generated as:
-    #   ref_dirs = get_reference_directions("das-dennis", 3, n_partitions)
-    # Effective population size is driven by reference-direction count:
+    # NSGA-III search-size control.
+    # For 3 objectives, Das-Dennis reference directions produce:
     #   effective_population = len(ref_dirs)
-    # For 3 objectives this is combinatorial:
-    #   effective_population = (n_partitions + 2) * (n_partitions + 1) / 2
-    # Default n_partitions=5 -> effective_population=21.
-    n_partitions: 1
-  # with safety buffer for queue jitter, export, and manifest generation.
-  time: "00:05:00"  # format: HH:MM:SS
+    #   = (n_partitions + 2) * (n_partitions + 1) / 2
+    # Examples:
+    #   n_partitions=1 -> 3 individuals
+    #   n_partitions=5 -> 21 individuals
+    # Larger values improve tradeoff exploration but increase runtime.
+    n_partitions: 5
+
+  # Search-time budget per cycle (NSGA loop termination).
+  # Format: HH:MM:SS
+  # Note: total cycle wall time is usually longer than this because final
+  # winner retraining and export run after search terminates.
+  time: "01:30:00"
+
+  # Metrics printed in iteration logs for visibility.
+  # Optimization objectives are configured under objectives.* below.
   metrics:
     - SMAPE
+
   warm_start:
-    # Experiment B (C10.1): seed cycle k>0 search from previous best cycle.
+    # Warm-start settings for per-cycle search (k > 0).
+    # The initial population is built from:
+    # - carry-over candidates from previous trained cycle
+    # - perturbed candidates from previous trained cycle
+    # - random candidates
+    # Ratios are applied to effective_population.
     enabled: true
     carry_over_ratio: 0.10
     perturb_ratio: 0.40
     perturbation_strength: 0.08
 
 objectives:
-  # C13.1 objective contract lock (configuration + validation only).
-  # Objective semantics (for upcoming C13 implementation tasks):
-  # - obj_error: minimize selected reconstruction metric (single metric key).
-  # - obj_efficiency: minimize selected efficiency backend.
-  # - obj_pdm: minimize (1 - pdm_signal_quality), where pdm_signal_quality = AUPRC_premaint.
+  # Multi-objective contract used by search and DB persistence.
+  # All objectives are minimized:
+  # - obj_error: reconstruction metric value
+  # - obj_efficiency: efficiency backend value
+  # - obj_pdm: 1 - auprc_premaint
   #
-  # PdM label semantics must match metropt-pdm-framework:
-  # - evaluate only operation phases 0/1
-  # - positive class = phase 1
+  # MetroPT PdM labeling semantics (aligned with metropt-pdm-framework):
+  # - evaluate only test windows from phases 0 and 1
+  # - positive class is phase 1
   # - phase 2 excluded
   error:
-    metric: SMAPE        # allowed: MAE|MSE|RMSE|MAPE|RMAPE|SMAPE
+    # Single reconstruction metric for obj_error.
+    # Allowed: MAE|MSE|RMSE|MAPE|RMAPE|SMAPE
+    metric: SMAPE
+
   efficiency:
-    metric: macs         # allowed: params|macs|latency_ms
+    # Efficiency backend for obj_efficiency.
+    # Allowed:
+    # - params: parameter count
+    # - macs: estimated multiply-accumulate cost
+    # - latency_ms: measured inference latency
+    metric: macs
+
   pdm:
-    metric: auprc_premaint  # fixed allowed value in C13.1
+    # Fixed PdM metric key currently supported by contract.
+    metric: auprc_premaint
+
   selection:
-    # C13.5 deterministic winner-selection contract:
-    # - pool: DB rows scoped by dataset_name (cycle-level DB scope)
-    # - compute Pareto front on [obj_error, obj_efficiency, obj_pdm]
-    # - normalize objectives with min-max per Pareto pool
-    # - choose minimum weighted distance to ideal point (0,0,0)
-    # - tie-break: lower obj_pdm, then lower obj_error, then lower obj_efficiency
-    method: weighted_ideal_distance  # allowed: weighted_ideal_distance
+    # Deterministic winner selection after search:
+    # 1) use DB candidate pool for current cycle dataset_name
+    # 2) keep Pareto front on [obj_error, obj_efficiency, obj_pdm]
+    # 3) min-max normalize per objective on that pool
+    # 4) select smallest weighted distance to ideal point (0,0,0)
+    # 5) tie-break by obj_pdm -> obj_error -> obj_efficiency
+    # Allowed methods: weighted_ideal_distance
+    method: weighted_ideal_distance
     weights:
+      # Relative preference weights for winner selection.
+      # Weights are normalized internally (sum to 1).
       error: 0.30
       efficiency: 0.20
       pdm: 0.50
 
 workflow:
-  # Workflow switch:
-  # - baseline_search: current architecture-search workflow (default)
-  # - per_maint_finetune: Experiment A sequential fine-tune workflow
-  # - per_maint_warmstart_search: Experiment B warm-started NSGA3 per cycle
+  # Runtime workflow mode:
+  # - baseline_search: standard architecture search
+  # - per_maint_finetune: per-cycle fine-tuning from previous trained cycle
+  # - per_maint_warmstart_search: per-cycle warm-started NSGA-III search
   mode: "per_maint_warmstart_search"
+
   finetune:
-    # C5.3 controlled fine-tune defaults (used for cycle_id > 0)
+    # Fine-tune policy used only in mode=per_maint_finetune for cycle_id > 0.
+    # finetune_learning_rate = exp_params.learning_rate * learning_rate_scale
     learning_rate_scale: 0.1
     min_epochs: 3
     max_epochs: 3
 
-# Global parameters
+# Model constructor parameters passed into RNNVAE.
 model_params:
   name: 'RecurrentVariationalAutoencoder'
 
+# Trainer defaults for candidate and final training passes.
+# Lower values reduce runtime; higher values may improve fit quality.
 trainer_params:
   min_epochs: 5
   max_epochs: 5
 
+# Optimization hyperparameters and global seed.
 exp_params:
   learning_rate: 0.01
   weight_decay: 0.001
   kld_weight: 0.1
   manual_seed: 42
 
+# Logging, DB backend, and artifact export settings.
 logging_params:
   name: "RNNVAE"
   logger_file: "RNNAutoencoder.log"
-  save_dir: "logs"
-  db_storage: "logs/solutions.db"
-  db_backend: "postgres"
-  export_enabled: true
+  save_dir: "logs"                  # local run outputs
+  db_storage: "logs/solutions.db"   # used when db_backend=sqlite
+  db_backend: "postgres"            # postgres or sqlite
+  export_enabled: true               # write model/meta/summary export artifacts
   model_export_dir: "logs/per_maint_models"
 
-# Shared Data Loader parameters
+# DataLoader runtime settings.
+# num_workers is a major speed lever for CPU-side input pipeline throughput.
 data_loader_params:
-  data_percentage: 100
+  data_percentage: 100   # use subset (<100) for quick debug runs
   batch_size: 64
-  val_size: 10
+  val_size: 10           # percent of train windows for validation
   num_workers: 0
   persistent_workers: False
   pin_memory: True
 
-# Dataset configuration
+# Dataset profile file selected at startup.
+# The referenced file defines data_params for the active dataset/regime.
 dataset:
   config_file: "configs/metropt_config.yaml"
+
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+
 #| Benchmark  | # datasets | # dims| Train size | Test size  | Anomaly% | Path              | Set Seq Length|
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+
@@ -110,6 +149,6 @@ dataset:
 #| WADI       | 1          | 123   | 784,568    | 172,801    | 5.99%    | wadi_config.yaml  | 200           |
 #| Yahoo-A1   | 67         | 1     | 46,667     | 46,717     | 1.76%    | yahoo_config.yaml | 100           |
 #| NAB        | 6          | 1     | 4,033      | 4,033      | 0.92%    | nab_config.yaml   | 200           |
-#| X MBA        | 8          | 2     | 100,000    | 100,000    | 0.14%    | mba_config.yaml   | 200         |
-#| X MSDS       | 1          | 10    | 146,430    | 146,430    | 5.37%    | msds_config.yaml  | 200         |
+#| X MBA      | 8          | 2     | 100,000    | 100,000    | 0.14%    | mba_config.yaml   | 200           |
+#| X MSDS     | 1          | 10    | 146,430    | 146,430    | 5.37%    | msds_config.yaml  | 200           |
 #+------------+------------+-------+------------+------------+----------+-------------------+---------------+

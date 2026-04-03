@@ -5,7 +5,7 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --mem=16G
+#SBATCH --mem=4G
 #SBATCH --time=00:30:00
 
 set -euo pipefail
