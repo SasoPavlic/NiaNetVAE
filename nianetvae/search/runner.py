@@ -91,8 +91,6 @@ class RNNVAEArchitectureMultiObj(Problem):
         self.penalty = runner.ctx.penalty
         self.iteration = 0
         self.stats = {"trained": 0, "cached": 0, "invalid": 0, "failed": 0}
-        self.best_fitness = None
-        self.best_hash = None
         super().__init__(n_var=dimension, n_obj=3, n_constr=0, xl=0, xu=1)
 
     def _to_int(self, value, default: int | None = None):
@@ -142,9 +140,8 @@ class RNNVAEArchitectureMultiObj(Problem):
             iteration,
             hash_id,
             status,
-            fitness,
-            error,
-            complexity,
+            obj_error,
+            obj_efficiency,
             obj_pdm,
             pdm_signal_quality=None,
             duration_s=None,
@@ -156,11 +153,8 @@ class RNNVAEArchitectureMultiObj(Problem):
             f"iter={iteration}",
             f"hash={hash_id}",
             f"status={status}",
-            f"fitness={self._to_int(fitness)}",
-            f"error={self._to_int(error)}",
-            f"complexity={self._to_int(complexity)}",
-            f"obj_error={self._format_metric(error)}",
-            f"obj_efficiency={self._format_metric(complexity)}",
+            f"obj_error={self._format_metric(obj_error)}",
+            f"obj_efficiency={self._format_metric(obj_efficiency)}",
             f"obj_pdm={self._format_metric(obj_pdm)}",
         ]
         if pdm_signal_quality is not None:
@@ -177,9 +171,8 @@ class RNNVAEArchitectureMultiObj(Problem):
         F = []
         for solution in X:
             self.iteration += 1
-            fitness = self.penalty
-            error = self.penalty
-            complexity = self.penalty
+            obj_error = self.penalty
+            obj_efficiency = self.penalty
             obj_pdm = self.penalty
             pdm_signal_quality = None
             status = "failed"
@@ -208,11 +201,10 @@ class RNNVAEArchitectureMultiObj(Problem):
                     status = "cached"
                     reason = None
                     self.stats["cached"] += 1
-                    error = cached_bundle["obj_error"]
-                    complexity = cached_bundle["obj_efficiency"]
+                    obj_error = cached_bundle["obj_error"]
+                    obj_efficiency = cached_bundle["obj_efficiency"]
                     obj_pdm = cached_bundle["obj_pdm"]
                     pdm_signal_quality = cached_bundle.get("pdm_signal_quality")
-                    fitness = cached_bundle["fitness"]
                 else:
                     reason = f"cached_objective_miss:{cached_bundle.get('reason') or 'invalid'}"
                     existing_entry = existing_entry.iloc[0:0]
@@ -222,19 +214,18 @@ class RNNVAEArchitectureMultiObj(Problem):
                     status = "invalid"
                     reason = reason or "invalid_architecture"
                     self.stats["invalid"] += 1
-                    error = self.penalty
-                    complexity = self.penalty
+                    obj_error = self.penalty
+                    obj_efficiency = self.penalty
                     obj_pdm = self.penalty
-                    fitness = self.penalty
                     self.conn.save_model_and_entry(
                         dataset_name=self.dataset_name,
                         alg_name="NSGA3",
                         iteration=self.iteration,
                         model=model,
-                        fitness=self.penalty,
                         solution=solution,
-                        error=error,
-                        complexity=complexity
+                        obj_error=obj_error,
+                        obj_efficiency=obj_efficiency,
+                        obj_pdm=obj_pdm,
                     )
                 else:
                     trainer = None
@@ -268,20 +259,23 @@ class RNNVAEArchitectureMultiObj(Problem):
                             cfg=self.config,
                             penalty=self.penalty,
                         )
-                        error = objective_bundle["obj_error"]
-                        complexity = objective_bundle["obj_efficiency"]
+                        obj_error = objective_bundle["obj_error"]
+                        obj_efficiency = objective_bundle["obj_efficiency"]
                         obj_pdm = objective_bundle["obj_pdm"]
                         pdm_signal_quality = objective_bundle.get("pdm_signal_quality")
-                        fitness = objective_bundle["fitness"]
                         metric_parts = self._selected_metrics(experiment)
 
                         if not objective_bundle.get("valid"):
                             status = "failed"
                             reason = objective_bundle.get("reason") or "objective_bundle_invalid"
                             self.stats["failed"] += 1
-                        elif fitness >= self.penalty or error >= self.penalty or complexity >= self.penalty or obj_pdm >= self.penalty:
+                        elif (
+                            obj_error >= self.penalty
+                            or obj_efficiency >= self.penalty
+                            or obj_pdm >= self.penalty
+                        ):
                             status = "failed"
-                            reason = "penalty_fitness"
+                            reason = "penalty_objectives"
                             self.stats["failed"] += 1
                         else:
                             status = "trained"
@@ -293,11 +287,11 @@ class RNNVAEArchitectureMultiObj(Problem):
                             alg_name="NSGA3",
                             iteration=self.iteration,
                             solution=solution,
-                            error=error,
                             model=model,
                             experiment=experiment,
-                            fitness=fitness,
-                            complexity=complexity,
+                            obj_error=obj_error,
+                            obj_efficiency=obj_efficiency,
+                            obj_pdm=obj_pdm,
                             start_time=start_time,
                             end_time=end_time,
                             duration=duration
@@ -309,9 +303,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                         status = "failed"
                         reason = _short_exception_reason(e)
                         self.stats["failed"] += 1
-                        fitness = self.penalty
-                        error = self.penalty
-                        complexity = self.penalty
+                        obj_error = self.penalty
+                        obj_efficiency = self.penalty
                         obj_pdm = self.penalty
                         pdm_signal_quality = None
                         metric_parts = []
@@ -325,11 +318,11 @@ class RNNVAEArchitectureMultiObj(Problem):
                             alg_name="NSGA3",
                             iteration=self.iteration,
                             solution=solution,
-                            error=error,
                             model=model,
                             experiment=None,
-                            fitness=fitness,
-                            complexity=complexity,
+                            obj_error=obj_error,
+                            obj_efficiency=obj_efficiency,
+                            obj_pdm=obj_pdm,
                             start_time=start_time,
                             end_time=end_time,
                             duration=duration
@@ -337,27 +330,21 @@ class RNNVAEArchitectureMultiObj(Problem):
                     finally:
                         _cleanup_candidate_runtime(trainer=trainer, experiment=experiment, model=model)
 
-            if np.isnan(error) or np.isnan(complexity) or np.isnan(obj_pdm):
-                fitness = self.penalty
-                error = self.penalty
-                complexity = self.penalty
+            if np.isnan(obj_error) or np.isnan(obj_efficiency) or np.isnan(obj_pdm):
+                obj_error = self.penalty
+                obj_efficiency = self.penalty
                 obj_pdm = self.penalty
                 pdm_signal_quality = None
                 status = "failed"
                 reason = "nan_objective"
                 self.stats["failed"] += 1
 
-            if self.best_fitness is None or fitness < self.best_fitness:
-                self.best_fitness = self._to_int(fitness)
-                self.best_hash = model_hash
-
             self._log_iteration_result(
                 iteration=self.iteration,
                 hash_id=model_hash,
                 status=status,
-                fitness=fitness,
-                error=error,
-                complexity=complexity,
+                obj_error=obj_error,
+                obj_efficiency=obj_efficiency,
                 obj_pdm=obj_pdm,
                 pdm_signal_quality=pdm_signal_quality,
                 duration_s=duration,
@@ -365,7 +352,7 @@ class RNNVAEArchitectureMultiObj(Problem):
                 metric_parts=metric_parts
             )
 
-            F.append([error, complexity, obj_pdm])
+            F.append([obj_error, obj_efficiency, obj_pdm])
         out["F"] = np.array(F)
 
 
@@ -450,8 +437,8 @@ class SearchRunner:
         )
         Log.info(
             f"FINETUNE_DONE cycle_id={cycle_id:02d} source_cycle={previous_cycle_id:02d} "
-            f"fitness={final_result['fitness']} error={final_result['error']} "
-            f"complexity={final_result['complexity']}"
+            f"obj_error={final_result['obj_error']} obj_efficiency={final_result['obj_efficiency']} "
+            f"obj_pdm={final_result['obj_pdm']}"
         )
 
         export_enabled = bool(self.ctx.config.get("logging_params", {}).get("export_enabled", False))
@@ -627,7 +614,7 @@ class SearchRunner:
             "invalid": problem.stats["invalid"],
             "failed": problem.stats["failed"],
             "best_hash": winner_selection["selected_hash"],
-            "best_fitness": winner_selection["selected_distance"],
+            "selected_distance": winner_selection["selected_distance"],
             "best_solution": _as_jsonable(best_solution),
             "time_limit": time_str,
             "time_limit_seconds": max_time,
@@ -665,7 +652,7 @@ class SearchRunner:
         Log.info(
             f"SEARCH_DONE iterations={problem.iteration} trained={problem.stats['trained']} "
             f"cached={problem.stats['cached']} invalid={problem.stats['invalid']} failed={problem.stats['failed']} "
-            f"best_hash={best_model.hash_id} best_fitness={winner_selection['selected_distance']}"
+            f"best_hash={best_model.hash_id} selected_distance={winner_selection['selected_distance']}"
         )
         Log.info(f"BEST_MODEL_SAVED path={model_file}")
 

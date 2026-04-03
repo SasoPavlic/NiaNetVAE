@@ -171,9 +171,8 @@ def _run_training_with_model(
         "started_at": started_at,
         "ended_at": ended_at,
         "duration_s": duration_s,
-        "fitness": objective_bundle["fitness"],
-        "error": objective_bundle["obj_error"],
-        "complexity": objective_bundle["obj_efficiency"],
+        "obj_error": objective_bundle["obj_error"],
+        "obj_efficiency": objective_bundle["obj_efficiency"],
         "obj_pdm": objective_bundle["obj_pdm"],
         "pdm_signal_quality": objective_bundle["pdm_signal_quality"],
         "objective_reason": objective_bundle.get("reason"),
@@ -235,6 +234,7 @@ def _export_cycle_artifacts(
     }
     if isinstance(warm_start_payload, dict):
         provenance["warm_start"] = _as_jsonable(warm_start_payload)
+    winner_selection = search_result.get("winner_selection")
     metadata = {
         "schema_version": "1.0",
         "dataset_name": data_params.get("dataset_name"),
@@ -260,6 +260,13 @@ def _export_cycle_artifacts(
         "git_ref": _get_git_ref(),
         "weights_file": "model.pt",
         "provenance": provenance,
+        "winner_selection": {
+            "method": winner_selection.get("method"),
+            "weights_normalized": winner_selection.get("weights_normalized"),
+            "selected_hash": winner_selection.get("selected_hash"),
+            "selected_objectives": winner_selection.get("selected_objectives"),
+            "selected_distance": winner_selection.get("selected_distance"),
+        } if isinstance(winner_selection, dict) else None,
     }
     meta_path = export_dir / "model_meta.json"
     meta_path.write_text(json.dumps(_as_jsonable(metadata), indent=2, sort_keys=True), encoding="utf-8")
@@ -276,15 +283,14 @@ def _export_cycle_artifacts(
         "regime": data_params.get("regime"),
         "cycle_id": data_params.get("cycle_id"),
         "provenance": provenance,
-        "winner_selection": search_result.get("winner_selection"),
+        "winner_selection": winner_selection,
         "search": search_result,
         "final_training": {
             "started_at": final_result["started_at"],
             "ended_at": final_result["ended_at"],
             "duration_s": final_result["duration_s"],
-            "fitness": final_result["fitness"],
-            "error": final_result["error"],
-            "complexity": final_result["complexity"],
+            "obj_error": final_result["obj_error"],
+            "obj_efficiency": final_result["obj_efficiency"],
             "obj_pdm": final_result.get("obj_pdm"),
             "pdm_signal_quality": final_result.get("pdm_signal_quality"),
             "objective_reason": final_result.get("objective_reason"),

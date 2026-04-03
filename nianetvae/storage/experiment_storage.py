@@ -191,7 +191,7 @@ class SQLiteConnector:
                     decoder_num_layers INTEGER, decoder_layer_step INTEGER,
                     encoding_layers TEXT, decoding_layers TEXT,
                     bottleneck_size INTEGER,
-                    fitness REAL, complexity REAL, error REAL,
+                    obj_error REAL, obj_efficiency REAL, obj_pdm REAL,
                     MAE REAL, MSE REAL, RMSE REAL, MAPE REAL,
                     RMAPE REAL, SMAPE REAL,
                     precision REAL, recall REAL, f1_score REAL,
@@ -230,10 +230,10 @@ class SQLiteConnector:
         conn = None
         try:
             conn = self._get_connection()
-            df = pd.read_sql_query(f"SELECT MAX(fitness) AS max_fitness FROM {self.table_name}", conn)
-            return df['max_fitness'][0]
+            df = pd.read_sql_query(f"SELECT MAX(obj_error) AS max_obj_error FROM {self.table_name}", conn)
+            return df['max_obj_error'][0]
         except Exception as e:
-            Log.error(f"Error fetching maximum fitness: {e}")
+            Log.error(f"Error fetching maximum objective: {e}")
             return None
         finally:
             if conn:
@@ -245,8 +245,8 @@ class SQLiteConnector:
         try:
             conn = self._get_connection()
             df = pd.read_sql_query(
-                f"SELECT id, hash_id, solution_array, error, complexity, pr_auc_mean, "
-                f"algorithm_name, timestamp, fitness "
+                f"SELECT id, hash_id, solution_array, obj_error, obj_efficiency, obj_pdm, "
+                f"algorithm_name, timestamp "
                 f"FROM {self.table_name} "
                 f"WHERE dataset_name = ? AND algorithm_name = ? "
                 f"ORDER BY id ASC",
@@ -267,22 +267,28 @@ class SQLiteConnector:
             alg_name,
             iteration,
             solution=None,
-            error=None,
+            obj_error=None,
+            obj_efficiency=None,
+            obj_pdm=None,
             model=None,
             experiment=None,
-            fitness=None,
-            complexity=None,
             path=None,
             start_time=None,
             end_time=None,
             duration=None,
     ):
         """
-        Insert only when we have a model, fitness, and solution.
+        Insert only when we have a model, objective vector, and solution.
         Will not fail the script on errors.
         """
         try:
-            if not (model and fitness is not None and solution is not None):
+            if not (
+                model
+                and solution is not None
+                and obj_error is not None
+                and obj_efficiency is not None
+                and obj_pdm is not None
+            ):
                 return
 
             anomaly = getattr(experiment, 'anomaly_metrics', {})
@@ -295,10 +301,10 @@ class SQLiteConnector:
 
             self._insert_entry(
                 model=model,
-                fitness=fitness,
+                obj_error=obj_error,
+                obj_efficiency=obj_efficiency,
+                obj_pdm=obj_pdm,
                 solution=solution,
-                error=error or 0,
-                complexity=complexity or 0,
                 dataset_name=dataset_name,
                 alg_name=alg_name,
                 iteration=iteration,
@@ -332,7 +338,7 @@ class SQLiteConnector:
 
     @_retry_db()
     def _insert_entry(
-            self, model, fitness, solution, error, complexity,
+            self, model, obj_error, obj_efficiency, obj_pdm, solution,
             dataset_name, alg_name, iteration,
             mae, mse, rmse, mape, rmape, smape,
             start_time, end_time, duration,
@@ -365,9 +371,9 @@ class SQLiteConnector:
                 'encoding_layers': str(model.encoding_layers),
                 'decoding_layers': str(model.decoding_layers),
                 'bottleneck_size': int(model.bottleneck_size),
-                'fitness': float(fitness),
-                'complexity': float(complexity),
-                'error': float(error),
+                'obj_error': float(obj_error),
+                'obj_efficiency': float(obj_efficiency),
+                'obj_pdm': float(obj_pdm),
                 'MAE': float(mae),
                 'MSE': float(mse),
                 'RMSE': float(rmse),
@@ -436,7 +442,7 @@ class PostgresConnector:
                     decoder_num_layers INTEGER, decoder_layer_step INTEGER,
                     encoding_layers TEXT, decoding_layers TEXT,
                     bottleneck_size INTEGER,
-                    fitness REAL, complexity REAL, error REAL,
+                    obj_error REAL, obj_efficiency REAL, obj_pdm REAL,
                     MAE REAL, MSE REAL, RMSE REAL, MAPE REAL,
                     RMAPE REAL, SMAPE REAL,
                     precision REAL, recall REAL, f1_score REAL,
@@ -475,10 +481,10 @@ class PostgresConnector:
         conn = None
         try:
             conn = self._get_connection()
-            df = pd.read_sql_query(f"SELECT MAX(fitness) AS max_fitness FROM {self.table_name}", conn)
-            return df['max_fitness'][0]
+            df = pd.read_sql_query(f"SELECT MAX(obj_error) AS max_obj_error FROM {self.table_name}", conn)
+            return df['max_obj_error'][0]
         except Exception as e:
-            Log.error(f"Error fetching maximum fitness: {e}")
+            Log.error(f"Error fetching maximum objective: {e}")
             return None
         finally:
             if conn:
@@ -490,8 +496,8 @@ class PostgresConnector:
         try:
             conn = self._get_connection()
             df = pd.read_sql_query(
-                f"SELECT id, hash_id, solution_array, error, complexity, pr_auc_mean, "
-                f"algorithm_name, timestamp, fitness "
+                f"SELECT id, hash_id, solution_array, obj_error, obj_efficiency, obj_pdm, "
+                f"algorithm_name, timestamp "
                 f"FROM {self.table_name} "
                 f"WHERE dataset_name = %s AND algorithm_name = %s "
                 f"ORDER BY id ASC",
@@ -512,18 +518,24 @@ class PostgresConnector:
             alg_name,
             iteration,
             solution=None,
-            error=None,
+            obj_error=None,
+            obj_efficiency=None,
+            obj_pdm=None,
             model=None,
             experiment=None,
-            fitness=None,
-            complexity=None,
             path=None,
             start_time=None,
             end_time=None,
             duration=None,
     ):
         try:
-            if not (model and fitness is not None and solution is not None):
+            if not (
+                model
+                and solution is not None
+                and obj_error is not None
+                and obj_efficiency is not None
+                and obj_pdm is not None
+            ):
                 return
 
             anomaly = getattr(experiment, 'anomaly_metrics', {})
@@ -536,10 +548,10 @@ class PostgresConnector:
 
             self._insert_entry(
                 model=model,
-                fitness=fitness,
+                obj_error=obj_error,
+                obj_efficiency=obj_efficiency,
+                obj_pdm=obj_pdm,
                 solution=solution,
-                error=error or 0,
-                complexity=complexity or 0,
                 dataset_name=dataset_name,
                 alg_name=alg_name,
                 iteration=iteration,
@@ -573,7 +585,7 @@ class PostgresConnector:
 
     @_retry_pg()
     def _insert_entry(
-            self, model, fitness, solution, error, complexity,
+            self, model, obj_error, obj_efficiency, obj_pdm, solution,
             dataset_name, alg_name, iteration,
             mae, mse, rmse, mape, rmape, smape,
             start_time, end_time, duration,
@@ -603,9 +615,9 @@ class PostgresConnector:
                 'encoding_layers': str(model.encoding_layers),
                 'decoding_layers': str(model.decoding_layers),
                 'bottleneck_size': int(model.bottleneck_size),
-                'fitness': float(fitness),
-                'complexity': float(complexity),
-                'error': float(error),
+                'obj_error': float(obj_error),
+                'obj_efficiency': float(obj_efficiency),
+                'obj_pdm': float(obj_pdm),
                 'MAE': float(mae),
                 'MSE': float(mse),
                 'RMSE': float(rmse),

@@ -76,7 +76,6 @@ def test_objective_bundle_uses_selected_raw_error_metric():
     assert bundle["valid"] is True
     assert bundle["obj_error"] == pytest.approx(2.75)
     assert bundle["obj_efficiency"] > 0
-    assert bundle["fitness"] == pytest.approx(bundle["obj_error"] + bundle["obj_efficiency"])
 
 
 def test_objective_bundle_computes_obj_pdm_from_pr_auc():
@@ -216,9 +215,9 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
                     {
                         "hash_id": hash_id,
                         "dataset_name": dataset_name,
-                        "error": 1.5,
-                        "complexity": 10.0,
-                        "fitness": 11.5,
+                        "obj_error": 1.5,
+                        "obj_efficiency": 10.0,
+                        "obj_pdm": 0.4,
                         "MAE": 0.1,
                         "MSE": 0.2,
                         "RMSE": 0.3,
@@ -336,12 +335,11 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
                         "id": 1,
                         "hash_id": "winner-hash",
                         "solution_array": json.dumps([0.5] * 7),
-                        "error": 1.2,
-                        "complexity": 100.0,
-                        "pr_auc_mean": 0.8,
+                        "obj_error": 1.2,
+                        "obj_efficiency": 100.0,
+                        "obj_pdm": 0.2,
                         "algorithm_name": "NSGA3",
                         "timestamp": "2026-04-02 12:00:00",
-                        "fitness": 101.2,
                     }
                 ]
             )
@@ -385,9 +383,8 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
             "started_at": "2026-04-02T12:00:00",
             "ended_at": "2026-04-02T12:00:01",
             "duration_s": 1.0,
-            "fitness": 101.2,
-            "error": 1.2,
-            "complexity": 100.0,
+            "obj_error": 1.2,
+            "obj_efficiency": 100.0,
             "obj_pdm": 0.2,
             "pdm_signal_quality": 0.8,
             "objective_reason": None,
@@ -426,23 +423,21 @@ def test_select_deterministic_pareto_winner_prefers_lower_pdm_on_tie():
                     "id": 10,
                     "hash_id": "a",
                     "solution_array": json.dumps([0.1] * 7),
-                    "error": 1.0,
-                    "complexity": 10.0,
-                    "pr_auc_mean": 0.70,  # obj_pdm=0.30
+                    "obj_error": 1.0,
+                    "obj_efficiency": 10.0,
+                    "obj_pdm": 0.30,
                     "algorithm_name": "NSGA3",
                     "timestamp": "2026-04-02 12:00:10",
-                    "fitness": 11.0,
                 },
                 {
                     "id": 11,
                     "hash_id": "b",
                     "solution_array": json.dumps([0.2] * 7),
-                    "error": 2.0,
-                    "complexity": 10.0,
-                    "pr_auc_mean": 0.80,  # obj_pdm=0.20 (better)
+                    "obj_error": 2.0,
+                    "obj_efficiency": 10.0,
+                    "obj_pdm": 0.20,  # better
                     "algorithm_name": "NSGA3",
                     "timestamp": "2026-04-02 12:00:11",
-                    "fitness": 11.0,
             },
         ]
     )
@@ -470,34 +465,31 @@ def test_select_deterministic_pareto_winner_deduplicates_by_hash():
                 "id": 1,
                 "hash_id": "dup",
                 "solution_array": json.dumps([0.1] * 7),
-                "error": 2.0,
-                "complexity": 20.0,
-                "pr_auc_mean": 0.50,
+                "obj_error": 2.0,
+                "obj_efficiency": 20.0,
+                "obj_pdm": 0.50,
                 "algorithm_name": "NSGA3",
                 "timestamp": "2026-04-02 12:00:01",
-                "fitness": 22.0,
             },
             {
                 "id": 2,
                 "hash_id": "dup",
                 "solution_array": json.dumps([0.2] * 7),
-                "error": 1.0,
-                "complexity": 15.0,
-                "pr_auc_mean": 0.70,
+                "obj_error": 1.0,
+                "obj_efficiency": 15.0,
+                "obj_pdm": 0.30,
                 "algorithm_name": "NSGA3",
                 "timestamp": "2026-04-02 12:00:02",
-                "fitness": 16.0,
             },
             {
                 "id": 3,
                 "hash_id": "other",
                 "solution_array": json.dumps([0.3] * 7),
-                "error": 1.2,
-                "complexity": 16.0,
-                "pr_auc_mean": 0.65,
+                "obj_error": 1.2,
+                "obj_efficiency": 16.0,
+                "obj_pdm": 0.35,
                 "algorithm_name": "NSGA3",
                 "timestamp": "2026-04-02 12:00:03",
-                "fitness": 17.2,
             },
         ]
     )
@@ -520,12 +512,11 @@ def test_select_deterministic_pareto_winner_fails_fast_on_empty_valid_pool():
                 "id": 1,
                 "hash_id": "bad",
                 "solution_array": json.dumps([0.1] * 7),
-                "error": float(objective_engine.DEFAULT_PENALTY),
-                "complexity": float(objective_engine.DEFAULT_PENALTY),
-                "pr_auc_mean": None,
+                "obj_error": float(objective_engine.DEFAULT_PENALTY),
+                "obj_efficiency": float(objective_engine.DEFAULT_PENALTY),
+                "obj_pdm": float(objective_engine.DEFAULT_PENALTY),
                 "algorithm_name": "NSGA3",
                 "timestamp": "2026-04-02 12:00:00",
-                "fitness": float(objective_engine.DEFAULT_PENALTY),
             }
         ]
     )

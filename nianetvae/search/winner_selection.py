@@ -145,10 +145,9 @@ def _select_deterministic_pareto_winner(
 
     valid = []
     for row in records:
-        obj_error = _safe_float(row.get("error"))
-        obj_efficiency = _safe_float(row.get("complexity"))
-        pr_auc_mean = _safe_float(row.get("pr_auc_mean"))
-        obj_pdm = _safe_float(1.0 - pr_auc_mean) if pr_auc_mean is not None else None
+        obj_error = _safe_float(row.get("obj_error"))
+        obj_efficiency = _safe_float(row.get("obj_efficiency"))
+        obj_pdm = _safe_float(row.get("obj_pdm"))
         solution = _parse_solution_array(row.get("solution_array"))
         if obj_error is None or obj_efficiency is None or obj_pdm is None or solution is None:
             continue
@@ -163,7 +162,6 @@ def _select_deterministic_pareto_winner(
                 "obj_error": float(obj_error),
                 "obj_efficiency": float(obj_efficiency),
                 "obj_pdm": float(obj_pdm),
-                "pdm_signal_quality": float(pr_auc_mean),
                 "solution": solution,
             }
         )
@@ -246,7 +244,6 @@ def _select_deterministic_pareto_winner(
             "obj_efficiency": float(selected["obj_efficiency"]),
             "obj_pdm": float(selected["obj_pdm"]),
         },
-        "selected_pdm_signal_quality": float(selected["pdm_signal_quality"]),
         "selected_distance": float(best_distance),
         "selected_solution": _as_jsonable(selected["solution"]),
     }

@@ -45,7 +45,6 @@ def _penalty_objective_bundle(
         "obj_efficiency": penalty_value,
         "obj_pdm": penalty_value,
         "pdm_signal_quality": None,
-        "fitness": penalty_value,
     }
 
 
@@ -257,14 +256,6 @@ def calculate_objective_bundle(
             penalty=penalty,
         )
 
-    fitness = _safe_float(obj_error + obj_efficiency)
-    if fitness is None:
-        return _penalty_objective_bundle(
-            reason="invalid_compatibility_fitness",
-            objective_contract=objective_contract,
-            penalty=penalty,
-        )
-
     return {
         "valid": True,
         "reason": None,
@@ -273,8 +264,6 @@ def calculate_objective_bundle(
         "obj_efficiency": float(obj_efficiency),
         "obj_pdm": float(obj_pdm),
         "pdm_signal_quality": float(pdm_signal_quality),
-        # Compatibility fields retained until winner selector migration finalization.
-        "fitness": float(fitness),
     }
 
 

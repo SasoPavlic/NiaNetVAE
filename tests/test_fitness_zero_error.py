@@ -49,7 +49,7 @@ def _objective_cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params
     }
 
 
-def test_calculate_fitness_zero_error_is_valid():
+def test_objective_bundle_zero_error_is_valid():
     experiment = SimpleNamespace(
         metrics=_DummyMetrics({"SMAPE": 0.0}),
         anomaly_metrics={"pr_auc_mean": 0.70},
@@ -66,11 +66,11 @@ def test_calculate_fitness_zero_error_is_valid():
 
     assert bundle["obj_error"] == pytest.approx(0.0)
     assert bundle["obj_efficiency"] > 0
-    assert bundle["fitness"] == pytest.approx(bundle["obj_error"] + bundle["obj_efficiency"])
-    assert bundle["fitness"] != DEFAULT_PENALTY
+    assert bundle["obj_error"] != DEFAULT_PENALTY
+    assert bundle["obj_pdm"] != DEFAULT_PENALTY
 
 
-def test_calculate_fitness_uses_raw_smape_value():
+def test_objective_bundle_uses_raw_smape_value():
     experiment = SimpleNamespace(
         metrics=_DummyMetrics({"SMAPE": 1.23456789}),
         anomaly_metrics={"pr_auc_mean": 0.80},
@@ -87,10 +87,10 @@ def test_calculate_fitness_uses_raw_smape_value():
 
     assert bundle["obj_error"] == pytest.approx(1.23456789)
     assert bundle["obj_efficiency"] > 0
-    assert bundle["fitness"] == pytest.approx(bundle["obj_error"] + bundle["obj_efficiency"])
+    assert bundle["obj_pdm"] == pytest.approx(0.2)
 
 
-def test_calculate_fitness_penalizes_when_smape_missing():
+def test_objective_bundle_penalizes_when_smape_missing():
     experiment = SimpleNamespace(
         metrics=_DummyMetrics({"MAE": 0.1}),
         anomaly_metrics={"pr_auc_mean": 0.75},
@@ -105,6 +105,6 @@ def test_calculate_fitness_penalizes_when_smape_missing():
         cfg=_objective_cfg(error_metric="SMAPE"),
     )
 
-    assert bundle["fitness"] == DEFAULT_PENALTY
     assert bundle["obj_error"] == DEFAULT_PENALTY
     assert bundle["obj_efficiency"] == DEFAULT_PENALTY
+    assert bundle["obj_pdm"] == DEFAULT_PENALTY
