@@ -3,7 +3,7 @@
 ## Purpose and Role
 `NiaNetVAE` is the model-production repository in the MetroPT workflow:
 - It searches recurrent VAE architectures per maintenance cycle.
-- It trains candidates, scores them by fitness (reconstruction error + complexity), and selects the best model.
+- It trains candidates, scores them by multi-objective vectors, and selects the best model.
 - It exports cycle artifacts and generates a manifest consumed downstream by `metropt-pdm-framework`.
 
 ## Main Entry Points
@@ -44,7 +44,7 @@ If you change export formats, manifest fields, cycle naming, feature expectation
 
 ## Change Rules for Search/Fitness
 - Preserve config-driven flow (`configs/main_config.yaml` + dataset config merge).
-- Keep candidate dimensionality contract (`RNNVAE` 7-gene vector) unless explicitly versioned and coordinated.
+- Keep candidate dimensionality contract (`RNNVAE` 6-gene architecture vector) unless explicitly versioned and coordinated.
 - Keep penalty semantics (`9e10`) for invalid/failed candidates unless there is a deliberate migration.
 - When extending fitness logic, keep metric normalization + DB min/max update behavior coherent and backward compatible.
 - Prefer minimal, reviewable edits over broad refactors.

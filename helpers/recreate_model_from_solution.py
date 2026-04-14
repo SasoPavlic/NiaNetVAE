@@ -5,7 +5,7 @@ then visualize metrics (e.g., training/validation loss) from the CSV logs.
 
 Usage (PowerShell one-liner example):
   python recreate_model_from_solution.py `
-    --solution "[...7 floats...]" `
+    --solution "[...6 floats...]" `
     --dataset SWAT `
     --config configs/main_config.yaml `
     --outdir logs/manual_replays `
@@ -61,14 +61,16 @@ from nianetvae.dataloaders.metropt_dataloader import MetroPTDataLoader
 # ============================================================
 
 def parse_solution(arg: str) -> np.ndarray:
-    """Accept JSON list or comma-separated string for --solution and enforce 7 genes."""
+    """Accept JSON list or comma-separated string for --solution and enforce the current genome length."""
     s = arg.strip()
     try:
         arr = np.array(json.loads(s), dtype=float) if s.startswith("[") else np.array([float(x) for x in s.split(",")], dtype=float)
     except Exception as e:
         raise ValueError(f"Could not parse --solution: {e}")
-    if arr.shape[0] != 7:
-        raise ValueError(f"--solution must contain exactly 7 values (got {arr.shape[0]}).")
+    if arr.shape[0] != RNNVAE.GENE_DIMENSION:
+        raise ValueError(
+            f"--solution must contain exactly {RNNVAE.GENE_DIMENSION} values (got {arr.shape[0]})."
+        )
     return arr
 
 
@@ -280,7 +282,7 @@ def viz_training_validation_loss(run_dir: Path, out: Path | None = None, show: b
 def main():
     parser = argparse.ArgumentParser(description="Recreate & evaluate a single NiaNetVAE model, then visualize.")
     # core
-    parser.add_argument("--solution", required=True, help="7-gene vector in [0,1] (JSON list or comma-separated).")
+    parser.add_argument("--solution", required=True, help="6-gene architecture vector in [0,1] (JSON list or comma-separated).")
     parser.add_argument("--dataset", required=True, help="Dataset name (e.g., SWAT, KPI, YahooA1, ...).")
     parser.add_argument("--config", default="configs/main_config.yaml", help="Path to main_config.yaml.")
     parser.add_argument("--dataset-config", default=None, help="(Optional) Explicit dataset config path.")

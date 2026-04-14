@@ -4,10 +4,13 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 
+from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
 from nianetvae.search.runtime_artifacts import _export_cycle_artifacts
 from nianetvae.storage.experiment_storage import SQLiteConnector
 
@@ -18,7 +21,7 @@ class _DummyModel(torch.nn.Module):
         self.linear = torch.nn.Linear(3, 2, bias=False)
         self.hash_id = "dummy-hash"
         self.activation_name = "Tanh"
-        self.optimizer_name = "ASGD"
+        self.optimizer_name = "Adam"
         self.encoder_layer_step = 16
         self.encoder_num_layers = 2
         self.decoder_num_layers = 2
@@ -29,6 +32,15 @@ class _DummyModel(torch.nn.Module):
         self.mapping_context = {"source": "test"}
 
 
+class _DummyMetrics:
+    MAE = 0.1
+    MSE = 0.2
+    RMSE = 0.3
+    MAPE = 0.4
+    RMAPE = 0.5
+    SMAPE = 1.25
+
+
 def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
     db_path = tmp_path / "objective_only.sqlite"
     connector = SQLiteConnector(str(db_path), "solutions")
@@ -37,20 +49,66 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
     try:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(solutions)").fetchall()}
         assert {"obj_error", "obj_efficiency", "obj_pdm"}.issubset(columns)
+        assert {
+            "window_auprc",
+            "window_roc_auc",
+            "ranking_metric_valid",
+            "ranking_metric_invalid_reason",
+            "window_count",
+            "positive_window_count",
+            "negative_window_count",
+            "positive_window_rate",
+            "score_min",
+            "score_max",
+            "score_mean",
+            "score_std",
+            "segment_count",
+            "best_f1_threshold",
+            "best_f1_precision",
+            "best_f1_recall",
+            "best_f1_score",
+        }.issubset(columns)
         assert "error" not in columns
         assert "complexity" not in columns
         assert "fitness" not in columns
+        assert "_".join(("pr", "auc", "mean")) not in columns
+        assert "_".join(("roc", "auc", "mean")) not in columns
+        assert "precision" not in columns
+        assert "recall" not in columns
+        assert "f1_score" not in columns
     finally:
         conn.close()
 
     model = _DummyModel()
+    experiment = SimpleNamespace(
+        metrics=_DummyMetrics(),
+        anomaly_metrics={
+            "window_auprc": 0.67,
+            "window_roc_auc": 0.72,
+            "ranking_metric_valid": True,
+            "ranking_metric_invalid_reason": None,
+            "window_count": 100,
+            "positive_window_count": 10,
+            "negative_window_count": 90,
+            "positive_window_rate": 0.1,
+            "score_min": 0.01,
+            "score_max": 1.5,
+            "score_mean": 0.4,
+            "score_std": 0.2,
+            "segment_count": 2,
+            "best_f1_threshold": 0.5,
+            "best_f1_precision": 0.3,
+            "best_f1_recall": 0.8,
+            "best_f1_score": 0.4364,
+        },
+    )
     connector.save_model_and_entry(
         dataset_name="MetroPT_cycle00",
         alg_name="NSGA3",
         iteration=1,
-        solution=np.asarray([0.1] * 7, dtype=float),
+        solution=np.asarray([0.1] * 6, dtype=float),
         model=model,
-        experiment=None,
+        experiment=experiment,
         obj_error=1.25,
         obj_efficiency=1234.0,
         obj_pdm=0.33,
@@ -59,12 +117,20 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
     conn = sqlite3.connect(str(db_path))
     try:
         row = conn.execute(
-            "SELECT obj_error, obj_efficiency, obj_pdm FROM solutions LIMIT 1"
+            "SELECT obj_error, obj_efficiency, obj_pdm, window_auprc, window_roc_auc, "
+            "ranking_metric_valid, window_count, positive_window_count, best_f1_score "
+            "FROM solutions LIMIT 1"
         ).fetchone()
         assert row is not None
         assert float(row[0]) == 1.25
         assert float(row[1]) == 1234.0
         assert float(row[2]) == 0.33
+        assert float(row[3]) == 0.67
+        assert float(row[4]) == 0.72
+        assert bool(row[5]) is True
+        assert int(row[6]) == 100
+        assert int(row[7]) == 10
+        assert float(row[8]) == 0.4364
     finally:
         conn.close()
 
@@ -73,6 +139,28 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
     assert "error" not in set(df.columns)
     assert "complexity" not in set(df.columns)
     assert "fitness" not in set(df.columns)
+
+
+def test_sqlite_schema_mismatch_fails_fast_for_old_anomaly_columns(tmp_path: Path):
+    db_path = tmp_path / "old_schema.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        old_auprc_column = "_".join(("pr", "auc", "mean"))
+        conn.execute(
+            f"""
+            CREATE TABLE solutions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hash_id TEXT,
+                {old_auprc_column} REAL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(ValueError, match="WindowAnomalyRankingMetrics schema"):
+        SQLiteConnector(str(db_path), "solutions")
 
 
 def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: Path):
@@ -87,7 +175,7 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
             "seq_len": 200,
         },
         "workflow": {"mode": "per_maint_warmstart_search"},
-        "exp_params": {"manual_seed": 42},
+        "exp_params": {"manual_seed": 42, "optimizer": "Adam", "learning_rate": 0.003, "weight_decay": 0.0},
         "logging_params": {},
     }
     search_result = {
@@ -110,6 +198,11 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
         },
     }
     final_result = {
+        "experiment": type(
+            "_ExperimentStub",
+            (),
+            {"learning_rate": 0.003, "weight_decay": 0.0},
+        )(),
         "started_at": datetime(2026, 4, 3, 9, 0, 0),
         "ended_at": datetime(2026, 4, 3, 9, 0, 5),
         "duration_s": 5.0,
@@ -121,16 +214,16 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
         "objective_contract": {
             "error_metric": "SMAPE",
             "efficiency_metric": "macs",
-            "pdm_metric": "auprc_premaint",
+            "pdm_metric": "window_auprc",
         },
         "metrics": {"SMAPE": 1.25},
-        "anomaly_metrics": {"pr_auc_mean": 0.67},
+        "anomaly_metrics": {"window_auprc": 0.67},
     }
 
     _, meta_path, summary_path = _export_cycle_artifacts(
         export_dir=export_dir,
         model=model,
-        best_solution=np.asarray([0.1] * 7, dtype=float),
+        best_solution=np.asarray([0.1] * 6, dtype=float),
         best_algorithm="NSGA3",
         search_result=search_result,
         final_result=final_result,
@@ -144,11 +237,34 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
 
     assert meta["winner_selection"]["method"] == "weighted_ideal_distance"
     assert meta["winner_selection"]["selected_objectives"]["obj_pdm"] == 0.33
+    assert meta["training_policy"]["optimizer"] == "Adam"
+    assert meta["training_policy"]["learning_rate"] == 0.003
+    assert meta["training_policy"]["weight_decay"] == 0.0
+    assert meta["final_training_anomaly_metrics"]["window_auprc"] == 0.67
 
     final_training = summary["final_training"]
+    assert final_training["training_policy"]["optimizer"] == "Adam"
     assert final_training["obj_error"] == 1.25
     assert final_training["obj_efficiency"] == 1234.0
     assert final_training["obj_pdm"] == 0.33
     assert "error" not in final_training
     assert "complexity" not in final_training
     assert "fitness" not in final_training
+    assert final_training["anomaly_metrics"]["window_auprc"] == 0.67
+
+
+def test_experiment_uses_fixed_adam_training_policy():
+    model = _DummyModel()
+    experiment = RNNVAExperiment(
+        model,
+        dataset_name="MetroPT_cycle00",
+        alg_name="NSGA3",
+        exp_params={"optimizer": "Adam", "learning_rate": 0.003, "weight_decay": 0.0, "kld_weight": 0.1},
+        data_params={"seq_len": 200, "n_features": 90},
+    )
+
+    optimizer = experiment.configure_optimizers()
+
+    assert isinstance(optimizer, torch.optim.Adam)
+    assert optimizer.defaults["lr"] == 0.003
+    assert optimizer.defaults["weight_decay"] == 0.0

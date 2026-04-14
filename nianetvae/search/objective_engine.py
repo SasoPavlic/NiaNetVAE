@@ -22,7 +22,7 @@ def _resolve_objective_contract(cfg: dict | None = None) -> dict:
     objectives = dict(cfg.get("objectives") or {})
     error_metric = str(((objectives.get("error") or {}).get("metric") or "SMAPE")).strip().upper()
     efficiency_metric = str(((objectives.get("efficiency") or {}).get("metric") or "macs")).strip().lower()
-    pdm_metric = str(((objectives.get("pdm") or {}).get("metric") or "auprc_premaint")).strip().lower()
+    pdm_metric = str(((objectives.get("pdm") or {}).get("metric") or "window_auprc")).strip().lower()
     return {
         "error_metric": error_metric,
         "efficiency_metric": efficiency_metric,
@@ -196,13 +196,23 @@ def _metrics_payload_from_cached_entry(entry: dict | None) -> dict:
 def _anomaly_payload_from_cached_entry(entry: dict | None) -> dict:
     entry = entry or {}
     keys = (
-        "precision",
-        "recall",
-        "f1_score",
-        "pr_auc_mean",
-        "pr_auc_std",
-        "roc_auc_mean",
-        "roc_auc_std",
+        "window_auprc",
+        "window_roc_auc",
+        "ranking_metric_valid",
+        "ranking_metric_invalid_reason",
+        "window_count",
+        "positive_window_count",
+        "negative_window_count",
+        "positive_window_rate",
+        "score_min",
+        "score_max",
+        "score_mean",
+        "score_std",
+        "segment_count",
+        "best_f1_threshold",
+        "best_f1_precision",
+        "best_f1_recall",
+        "best_f1_score",
     )
     return {key: entry.get(key) for key in keys}
 
@@ -254,15 +264,17 @@ def calculate_objective_bundle(
             f"reason={eff_reason} value={float(obj_efficiency):.4f} penalty=false"
         )
 
-    pdm_signal_quality = _safe_float(anomaly_metrics.get("pr_auc_mean"))
+    pdm_metric_key = objective_contract["pdm_metric"]
+    pdm_signal_quality = _safe_float(anomaly_metrics.get(pdm_metric_key))
     if pdm_signal_quality is None:
-        # Some cycles can have no positive PdM labels after phase/window filtering.
-        # In that case AUPRC is undefined; use worst-case fallback (0.0) so search
-        # still proceeds and ranking can rely on the other objectives.
+        # Some cycles have single-class labels after phase/window filtering.
+        # In that case ranking AUPRC is undefined; use worst-case fallback (0.0)
+        # so search still proceeds and ranking can rely on the other objectives.
         pdm_signal_quality = 0.0
+        invalid_reason = anomaly_metrics.get("ranking_metric_invalid_reason") or "missing_or_invalid_pdm_signal_quality"
         Log.warning(
             "OBJECTIVE_PDM_FALLBACK "
-            "metric=auprc_premaint reason=missing_or_invalid_pdm_signal_quality "
+            f"metric={pdm_metric_key} reason={invalid_reason} "
             "fallback_value=0.0 penalty=false"
         )
     # Keep the metric bounded to a valid probability range.

@@ -78,7 +78,7 @@ class RNNVAEArchitectureMultiObj(Problem):
     The three objectives are:
       1. The error (from validation/test metrics)
       2. The efficiency objective (params|macs|latency_ms)
-      3. The PdM objective (1 - AUPRC_premaint)
+      3. The PdM objective (1 - window_auprc)
     All are minimized.
     """
 
@@ -503,9 +503,9 @@ class SearchRunner:
           1) obj_error
           2) obj_efficiency
           3) obj_pdm
-        Objective contract and optimizer settings are taken from the configuration file.
+        Objective contract and fixed training policy are taken from the configuration file.
         """
-        dimensionality = 7
+        dimensionality = RNNVAE.GENE_DIMENSION
         problem = RNNVAEArchitectureMultiObj(dimension=dimensionality, runner=self)
 
         time_str = self.ctx.config['nia_search']['time']
@@ -562,6 +562,7 @@ class SearchRunner:
             f"time_limit={time_str} time_limit_seconds={max_time} n_jobs={n_jobs} "
             f"metrics={self.ctx.config['nia_search'].get('metrics')} "
             f"search_init_mode={search_init_mode} seed_source={seed_source} "
+            f"fixed_optimizer={self.ctx.config['exp_params'].get('optimizer')} "
             f"obj_error={objective_contract['error_metric']} "
             f"obj_efficiency={objective_contract['efficiency_metric']} "
             f"obj_pdm=1-{objective_contract['pdm_metric']} "
@@ -586,6 +587,7 @@ class SearchRunner:
             selection_contract=selection_contract,
             dataset_name=self.ctx.dataset_name,
             penalty=self.ctx.penalty,
+            expected_solution_dim=RNNVAE.GENE_DIMENSION,
         )
         best_solution = np.asarray(winner_selection["selected_solution"], dtype=float)
         best_algorithm = winner_selection["selected_algorithm"]

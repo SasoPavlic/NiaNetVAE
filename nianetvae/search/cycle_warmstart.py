@@ -13,7 +13,7 @@ def _resolve_finetune_policy(config: dict) -> dict:
     exp_params = config.get("exp_params") or {}
     trainer_params = config.get("trainer_params") or {}
 
-    base_lr = float(exp_params.get("learning_rate", 0.01))
+    base_lr = float(exp_params.get("learning_rate", 0.003))
     lr_scale = float(finetune_cfg.get("learning_rate_scale", 0.1))
     if base_lr <= 0:
         raise ValueError(f"Invalid exp_params.learning_rate={base_lr}. Must be > 0.")
@@ -138,7 +138,7 @@ def _resolve_warm_start_sampling(
         return result
 
     if anchor.size != dimensionality:
-        result["reason"] = f"invalid_anchor_dim:{anchor.size}"
+        result["reason"] = f"invalid_anchor_dim:{anchor.size}_expected:{dimensionality}"
         return result
 
     anchor = np.clip(anchor, 0.0, 1.0)

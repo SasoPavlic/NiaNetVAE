@@ -44,7 +44,7 @@ def _objective_cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params
         "objectives": {
             "error": {"metric": error_metric},
             "efficiency": {"metric": efficiency_metric},
-            "pdm": {"metric": "auprc_premaint"},
+            "pdm": {"metric": "window_auprc"},
         },
     }
 
@@ -52,7 +52,7 @@ def _objective_cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params
 def test_objective_bundle_zero_error_is_valid():
     experiment = SimpleNamespace(
         metrics=_DummyMetrics({"SMAPE": 0.0}),
-        anomaly_metrics={"pr_auc_mean": 0.70},
+        anomaly_metrics={"window_auprc": 0.70},
     )
     model = _TinyModel()
 
@@ -73,7 +73,7 @@ def test_objective_bundle_zero_error_is_valid():
 def test_objective_bundle_uses_raw_smape_value():
     experiment = SimpleNamespace(
         metrics=_DummyMetrics({"SMAPE": 1.23456789}),
-        anomaly_metrics={"pr_auc_mean": 0.80},
+        anomaly_metrics={"window_auprc": 0.80},
     )
     model = _TinyModel()
 
@@ -93,7 +93,7 @@ def test_objective_bundle_uses_raw_smape_value():
 def test_objective_bundle_penalizes_when_smape_missing():
     experiment = SimpleNamespace(
         metrics=_DummyMetrics({"MAE": 0.1}),
-        anomaly_metrics={"pr_auc_mean": 0.75},
+        anomaly_metrics={"window_auprc": 0.75},
     )
     model = _TinyModel()
 

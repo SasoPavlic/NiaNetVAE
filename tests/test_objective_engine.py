@@ -12,6 +12,7 @@ import nianetvae.search.cycle_warmstart as cycle_warmstart
 import nianetvae.search.objective_engine as objective_engine
 import nianetvae.search.runner as runner_module
 import nianetvae.search.winner_selection as winner_selection
+from nianetvae.models.rnn_vae import RNNVAE
 
 
 class _TinyModel(torch.nn.Module):
@@ -52,7 +53,7 @@ def _cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params") -> dict
         "objectives": {
             "error": {"metric": error_metric},
             "efficiency": {"metric": efficiency_metric},
-            "pdm": {"metric": "auprc_premaint"},
+            "pdm": {"metric": "window_auprc"},
             "selection": {
                 "method": "weighted_ideal_distance",
                 "weights": {"error": 0.30, "efficiency": 0.20, "pdm": 0.50},
@@ -67,7 +68,7 @@ def test_objective_bundle_uses_selected_raw_error_metric():
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"RMSE": 2.75},
-        anomaly_metrics={"pr_auc_mean": 0.40},
+        anomaly_metrics={"window_auprc": 0.40},
         seq_len=16,
         n_features=4,
         cfg=_cfg(error_metric="RMSE"),
@@ -78,12 +79,12 @@ def test_objective_bundle_uses_selected_raw_error_metric():
     assert bundle["obj_efficiency"] > 0
 
 
-def test_objective_bundle_computes_obj_pdm_from_pr_auc():
+def test_objective_bundle_computes_obj_pdm_from_window_auprc():
     model = _TinyModel()
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
-        anomaly_metrics={"pr_auc_mean": 0.83},
+        anomaly_metrics={"window_auprc": 0.83},
         seq_len=16,
         n_features=4,
         cfg=_cfg(),
@@ -94,7 +95,7 @@ def test_objective_bundle_computes_obj_pdm_from_pr_auc():
     assert bundle["obj_pdm"] == pytest.approx(0.17)
 
 
-def test_objective_bundle_uses_worst_case_when_pr_auc_missing():
+def test_objective_bundle_uses_worst_case_when_window_auprc_missing():
     model = _TinyModel()
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
@@ -135,7 +136,7 @@ def test_efficiency_macs_backend_falls_back_to_params_when_unavailable(monkeypat
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
-        anomaly_metrics={"pr_auc_mean": 0.5},
+        anomaly_metrics={"window_auprc": 0.5},
         seq_len=16,
         n_features=4,
         cfg=_cfg(efficiency_metric="macs"),
@@ -156,7 +157,7 @@ def test_efficiency_latency_backend_penalizes_with_reason(monkeypatch):
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
-        anomaly_metrics={"pr_auc_mean": 0.5},
+        anomaly_metrics={"window_auprc": 0.5},
         seq_len=16,
         n_features=4,
         cfg=_cfg(efficiency_metric="latency_ms"),
@@ -181,7 +182,7 @@ def test_problem_initializes_with_three_objectives(tmp_path):
     )
     runner = runner_module.SearchRunner(ctx)
     problem = runner_module.RNNVAEArchitectureMultiObj(
-        dimension=7,
+        dimension=RNNVAE.GENE_DIMENSION,
         runner=runner,
     )
 
@@ -225,10 +226,23 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
                         "MAPE": 0.4,
                         "RMAPE": 0.5,
                         "SMAPE": 1.5,
-                        "pr_auc_mean": 0.6,
-                        "pr_auc_std": 0.1,
-                        "roc_auc_mean": 0.7,
-                        "roc_auc_std": 0.1,
+                        "window_auprc": 0.6,
+                        "window_roc_auc": 0.7,
+                        "ranking_metric_valid": True,
+                        "ranking_metric_invalid_reason": None,
+                        "window_count": 10,
+                        "positive_window_count": 2,
+                        "negative_window_count": 8,
+                        "positive_window_rate": 0.2,
+                        "score_min": 0.1,
+                        "score_max": 1.0,
+                        "score_mean": 0.5,
+                        "score_std": 0.1,
+                        "segment_count": 1,
+                        "best_f1_threshold": 0.4,
+                        "best_f1_precision": 0.5,
+                        "best_f1_recall": 1.0,
+                        "best_f1_score": 0.6667,
                     }
                 ]
             )
@@ -247,12 +261,12 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
     )
     runner = runner_module.SearchRunner(ctx)
     problem = runner_module.RNNVAEArchitectureMultiObj(
-        dimension=7,
+        dimension=RNNVAE.GENE_DIMENSION,
         runner=runner,
     )
 
     out = {}
-    problem._evaluate(np.zeros((2, 7), dtype=np.float32), out)
+    problem._evaluate(np.zeros((2, RNNVAE.GENE_DIMENSION), dtype=np.float32), out)
 
     assert "F" in out
     assert out["F"].shape == (2, 3)
@@ -261,7 +275,7 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
 
 def test_warm_start_sampling_uses_effective_population(monkeypatch, tmp_path):
     meta_path = tmp_path / "model_meta.json"
-    meta_path.write_text(json.dumps({"solution": [0.25] * 7}), encoding="utf-8")
+    meta_path.write_text(json.dumps({"solution": [0.25] * RNNVAE.GENE_DIMENSION}), encoding="utf-8")
     weights_path = tmp_path / "model.pt"
     weights_path.write_bytes(b"dummy")
 
@@ -286,14 +300,14 @@ def test_warm_start_sampling_uses_effective_population(monkeypatch, tmp_path):
     }
 
     out = cycle_warmstart._resolve_warm_start_sampling(
-        dimensionality=7,
+        dimensionality=RNNVAE.GENE_DIMENSION,
         effective_population=21,
         config=cfg,
         run_uuid="test-run",
     )
 
     assert out["enabled"] is True
-    assert out["sampling"].shape == (21, 7)
+    assert out["sampling"].shape == (21, RNNVAE.GENE_DIMENSION)
     details = out["details"]
     assert details["population_size"] == 21
     assert details["carry_over_count"] + details["perturb_count"] + details["random_count"] == 21
@@ -307,7 +321,7 @@ def test_warm_start_cycle0_remains_random_init(monkeypatch):
     }
 
     out = cycle_warmstart._resolve_warm_start_sampling(
-        dimensionality=7,
+        dimensionality=RNNVAE.GENE_DIMENSION,
         effective_population=21,
         config=cfg,
         run_uuid="test-run",
@@ -335,7 +349,7 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
                     {
                         "id": 1,
                         "hash_id": "winner-hash",
-                        "solution_array": json.dumps([0.5] * 7),
+                        "solution_array": json.dumps([0.5] * RNNVAE.GENE_DIMENSION),
                         "obj_error": 1.2,
                         "obj_efficiency": 100.0,
                         "obj_pdm": 0.2,
@@ -391,7 +405,7 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
             "objective_reason": None,
             "objective_contract": objective_engine._resolve_objective_contract(_cfg()),
             "metrics": {},
-            "anomaly_metrics": {"pr_auc_mean": 0.8},
+            "anomaly_metrics": {"window_auprc": 0.8},
         },
     )
     monkeypatch.setattr(runner_module.torch, "save", lambda *args, **kwargs: None)
@@ -423,7 +437,7 @@ def test_select_deterministic_pareto_winner_prefers_lower_pdm_on_tie():
                 {
                     "id": 10,
                     "hash_id": "a",
-                    "solution_array": json.dumps([0.1] * 7),
+                    "solution_array": json.dumps([0.1] * RNNVAE.GENE_DIMENSION),
                     "obj_error": 1.0,
                     "obj_efficiency": 10.0,
                     "obj_pdm": 0.30,
@@ -433,7 +447,7 @@ def test_select_deterministic_pareto_winner_prefers_lower_pdm_on_tie():
                 {
                     "id": 11,
                     "hash_id": "b",
-                    "solution_array": json.dumps([0.2] * 7),
+                    "solution_array": json.dumps([0.2] * RNNVAE.GENE_DIMENSION),
                     "obj_error": 2.0,
                     "obj_efficiency": 10.0,
                     "obj_pdm": 0.20,  # better
@@ -465,7 +479,7 @@ def test_select_deterministic_pareto_winner_deduplicates_by_hash():
             {
                 "id": 1,
                 "hash_id": "dup",
-                "solution_array": json.dumps([0.1] * 7),
+                "solution_array": json.dumps([0.1] * RNNVAE.GENE_DIMENSION),
                 "obj_error": 2.0,
                 "obj_efficiency": 20.0,
                 "obj_pdm": 0.50,
@@ -475,7 +489,7 @@ def test_select_deterministic_pareto_winner_deduplicates_by_hash():
             {
                 "id": 2,
                 "hash_id": "dup",
-                "solution_array": json.dumps([0.2] * 7),
+                "solution_array": json.dumps([0.2] * RNNVAE.GENE_DIMENSION),
                 "obj_error": 1.0,
                 "obj_efficiency": 15.0,
                 "obj_pdm": 0.30,
@@ -485,7 +499,7 @@ def test_select_deterministic_pareto_winner_deduplicates_by_hash():
             {
                 "id": 3,
                 "hash_id": "other",
-                "solution_array": json.dumps([0.3] * 7),
+                "solution_array": json.dumps([0.3] * RNNVAE.GENE_DIMENSION),
                 "obj_error": 1.2,
                 "obj_efficiency": 16.0,
                 "obj_pdm": 0.35,
@@ -512,7 +526,7 @@ def test_select_deterministic_pareto_winner_fails_fast_on_empty_valid_pool():
             {
                 "id": 1,
                 "hash_id": "bad",
-                "solution_array": json.dumps([0.1] * 7),
+                "solution_array": json.dumps([0.1] * RNNVAE.GENE_DIMENSION),
                 "obj_error": float(objective_engine.DEFAULT_PENALTY),
                 "obj_efficiency": float(objective_engine.DEFAULT_PENALTY),
                 "obj_pdm": float(objective_engine.DEFAULT_PENALTY),
@@ -541,7 +555,7 @@ def test_select_deterministic_pareto_winner_filters_postgres_real_rounded_penalt
             {
                 "id": 1,
                 "hash_id": "rounded-penalty",
-                "solution_array": json.dumps([0.1] * 7),
+                "solution_array": json.dumps([0.1] * RNNVAE.GENE_DIMENSION),
                 "obj_error": rounded_penalty,
                 "obj_efficiency": rounded_penalty,
                 "obj_pdm": rounded_penalty,

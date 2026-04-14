@@ -1,12 +1,12 @@
 from lightning.pytorch import LightningModule
 from tabulate import tabulate
 
+import torch
 from torch import Tensor
 
 from log import Log
-from nianetvae.experiments.anomaly_evaluation import *
 from nianetvae.experiments.metrics_evaluation import EvaluationMetrics
-from nianetvae.experiments.anomaly_evaluation import AnomalyDetectionMetrics
+from nianetvae.experiments.anomaly_evaluation import WindowAnomalyRankingMetrics
 
 from nianetvae.models.base import BaseVAE
 
@@ -20,7 +20,8 @@ class RNNVAExperiment(LightningModule):
         self.dataset_name=dataset_name
         self.alg_name=alg_name
         self.params = kwargs['exp_params']
-        self.learning_rate = float(self.params.get('learning_rate', 0.01))
+        self.learning_rate = float(self.params.get('learning_rate', 0.003))
+        self.weight_decay = float(self.params.get('weight_decay', 0.0))
         self.seq_len = kwargs['data_params']['seq_len']
         self.n_features = kwargs['data_params']['n_features']
         self.curr_device = None
@@ -31,7 +32,7 @@ class RNNVAExperiment(LightningModule):
         self.metrics = EvaluationMetrics()
         # C13.3 policy lock: anomaly metrics are always enabled because obj_pdm depends on them.
         self.compute_anomaly_metrics = True
-        self.anomaly_detection_metrics = AnomalyDetectionMetrics()
+        self.anomaly_detection_metrics = WindowAnomalyRankingMetrics()
         self.anomaly_metrics = {}
         try:
             self.hold_graph = self.params['retain_first_backpass']
@@ -48,26 +49,17 @@ class RNNVAExperiment(LightningModule):
             self.model.optimizer_name = "Empty"
             return None
 
-        if self.model.optimizer_name == "Adam":
-            return torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        if self.model.optimizer_name != "Adam":
+            raise ValueError(
+                f"Unsupported optimizer {self.model.optimizer_name!r}. "
+                "Architecture-only search requires fixed Adam training."
+            )
 
-        elif self.model.optimizer_name == "Adagrad":
-            return torch.optim.Adagrad(self.model.parameters(), lr=self.learning_rate)
-
-        elif self.model.optimizer_name == "SGD":
-            return torch.optim.SGD(self.model.parameters(), lr=self.learning_rate)
-
-        elif self.model.optimizer_name == "RAdam":
-            return torch.optim.RAdam(self.model.parameters(), lr=self.learning_rate)
-
-        elif self.model.optimizer_name == "ASGD":
-            return torch.optim.ASGD(self.model.parameters(), lr=self.learning_rate)
-
-        elif self.model.optimizer_name == "RPROP":
-            return torch.optim.Rprop(self.model.parameters(), lr=self.learning_rate)
-
-        else:
-            return torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        return torch.optim.Adam(
+            self.model.parameters(),
+            lr=self.learning_rate,
+            weight_decay=self.weight_decay,
+        )
 
     def training_step(self, batch, batch_idx):
         torch.cuda.empty_cache()
@@ -150,15 +142,25 @@ class RNNVAExperiment(LightningModule):
         # Print metrics using Tabulate
         if self.anomaly_metrics:
             metrics_list = [
-                ["Precision", safe_format(self.anomaly_metrics.get('precision'))],
-                ["Recall", safe_format(self.anomaly_metrics.get('recall'))],
-                ["F1-Score", safe_format(self.anomaly_metrics.get('f1_score'))],
-                ["PR AUC Mean", safe_format(self.anomaly_metrics.get('pr_auc_mean'))],
-                ["PR AUC Std", safe_format(self.anomaly_metrics.get('pr_auc_std'))],
-                ["ROC AUC Mean", safe_format(self.anomaly_metrics.get('roc_auc_mean'))],
-                ["ROC AUC Std", safe_format(self.anomaly_metrics.get('roc_auc_std'))],
+                ["Window AUPRC", safe_format(self.anomaly_metrics.get('window_auprc'))],
+                ["Window ROC AUC", safe_format(self.anomaly_metrics.get('window_roc_auc'))],
+                ["Ranking Valid", str(self.anomaly_metrics.get('ranking_metric_valid'))],
+                ["Invalid Reason", self.anomaly_metrics.get('ranking_metric_invalid_reason') or "N/A"],
+                ["Window Count", self.anomaly_metrics.get('window_count')],
+                ["Positive Windows", self.anomaly_metrics.get('positive_window_count')],
+                ["Negative Windows", self.anomaly_metrics.get('negative_window_count')],
+                ["Positive Rate", safe_format(self.anomaly_metrics.get('positive_window_rate'))],
+                ["Score Min", safe_format(self.anomaly_metrics.get('score_min'))],
+                ["Score Max", safe_format(self.anomaly_metrics.get('score_max'))],
+                ["Score Mean", safe_format(self.anomaly_metrics.get('score_mean'))],
+                ["Score Std", safe_format(self.anomaly_metrics.get('score_std'))],
+                ["Segment Count", self.anomaly_metrics.get('segment_count')],
+                ["Best-F1 Threshold", safe_format(self.anomaly_metrics.get('best_f1_threshold'))],
+                ["Best-F1 Precision", safe_format(self.anomaly_metrics.get('best_f1_precision'))],
+                ["Best-F1 Recall", safe_format(self.anomaly_metrics.get('best_f1_recall'))],
+                ["Best-F1 Score", safe_format(self.anomaly_metrics.get('best_f1_score'))],
             ]
-            Log.info("\nAnomaly Detection Metrics:")
+            Log.info("\nWindow Anomaly Ranking Metrics:")
             Log.info(tabulate(metrics_list, headers=["Metric", "Value"], tablefmt="pretty"))
         else:
             Log.error("Anomaly detection was not performed due to errors.")

@@ -13,14 +13,19 @@ from .types_ import *
 
 
 class RNNVAE(BaseVAE, nn.Module):
+    GENE_DIMENSION = 6
+    FIXED_OPTIMIZER_NAME = "Adam"
+
     def __init__(self, solution, **kwargs) -> None:
         super(RNNVAE, self).__init__()
         """
-        Solution vector dimensionality (length 7):
+        Solution vector dimensionality (length 6):
             y1: recurrent layer family,
             y2..y5: mapping-specific architecture genes,
-            y6: activation function,
-            y7: optimizer algorithm.
+            y6: activation function.
+
+        Optimizer is not part of the searched genome. Candidate training uses a
+        fixed shared training policy configured outside the architecture vector.
         """
 
         self.is_valid = True
@@ -63,12 +68,19 @@ class RNNVAE(BaseVAE, nn.Module):
         self.decoder_num_layers = 1
         self.bottleneck_size = 1
 
-        # Map solution vector (length 7)
-        y1, y2, y3, y4, y5, y6, y7 = solution
+        solution = np.asarray(solution, dtype=float).reshape(-1)
+        if solution.size != self.GENE_DIMENSION:
+            raise ValueError(
+                f"RNNVAE expects a {self.GENE_DIMENSION}-gene solution vector, "
+                f"got {solution.size}."
+            )
+
+        # Map solution vector (length 6)
+        y1, y2, y3, y4, y5, y6 = solution
 
         self.layer_type = self.map_layer_type(y1)  # Shared for encoder & decoder
         self.activation = self.map_activation(y6)
-        self.optimizer_name = self.map_optimizer(y7, self)
+        self.optimizer_name = self._resolve_fixed_optimizer_name(kwargs.get("exp_params") or {})
 
         self.hidden_dims = []
         self.decoder_hidden_dims = []
@@ -112,7 +124,6 @@ class RNNVAE(BaseVAE, nn.Module):
             str(self.decoder_num_layers),
             str(self.decoder_layer_step),
             str(self.activation_name),
-            str(self.optimizer_name),
             str(self.bottleneck_size),
         ]
         hash_parts.extend([
@@ -206,14 +217,16 @@ class RNNVAE(BaseVAE, nn.Module):
         self.activation_name = activation_names[index]
         return activation_functions[index]
 
-    def map_optimizer(self, gene, architecture):
-        gene = float(gene)
-        optimizer_names = ["Adam", "Adagrad", "SGD", "RAdam", "ASGD", "RPROP"]
-        index = int(gene * len(optimizer_names))
-        if index >= len(optimizer_names):
-            index = len(optimizer_names) - 1
-        self.optimizer_name = optimizer_names[index]
-        return optimizer_names[index]
+    @classmethod
+    def _resolve_fixed_optimizer_name(cls, exp_params):
+        raw_value = (exp_params or {}).get("optimizer", cls.FIXED_OPTIMIZER_NAME)
+        optimizer_name = str(raw_value).strip() if raw_value is not None else cls.FIXED_OPTIMIZER_NAME
+        if optimizer_name != cls.FIXED_OPTIMIZER_NAME:
+            raise ValueError(
+                f"Unsupported fixed optimizer {optimizer_name!r}. "
+                f"Expected {cls.FIXED_OPTIMIZER_NAME!r}."
+            )
+        return optimizer_name
 
     @staticmethod
     def _map_from_options(gene, options):

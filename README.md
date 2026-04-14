@@ -64,7 +64,11 @@ The following dimensions can be modified:
 * **Layer step:** (Determined by dataset shape)
 * **Number of layers:** (Determined by dataset shape)
 * **Activation functions:** (ELU, RELU, Leaky RELU, RRELU, SELU, CELU, GELU, TANH)
-* **Optimizer:** (Adam, Adagrad, SGD, RAdam, ASGD, RPROP)
+
+Current methodology note:
+- optimizer is **not** part of the searched genome,
+- all candidates are trained with the same fixed policy from `exp_params`,
+- default fixed policy is `Adam` with shared learning-rate / weight-decay settings.
 
 You can run the NiaNet script once your setup is complete.
 
@@ -103,7 +107,8 @@ Notes:
   - `cycle_id>0`: reuses latest previous trained cycle architecture/weights and performs fine-tune training.
   - If a cycle is non-trainable (for example zero rows after phase filtering), run is skipped gracefully and `cycle_status.json` is written with `status=skipped_non_trainable`.
 - Controlled fine-tune policy (cycle `>0`) is config-driven:
-  - Base LR: `exp_params.learning_rate` (default `0.01`).
+  - Fixed optimizer: `exp_params.optimizer` (default `Adam`).
+  - Base LR: `exp_params.learning_rate` (default `0.003`).
   - Fine-tune LR: `base_lr * workflow.finetune.learning_rate_scale` (default scale `0.1`).
   - Fine-tune epoch cap: `workflow.finetune.max_epochs` (default `3`).
 - If previous cycle artifacts are missing (`model.pt`, `model_meta.json`), run exits with an explicit error.

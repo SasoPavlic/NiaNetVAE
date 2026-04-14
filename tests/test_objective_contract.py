@@ -11,7 +11,7 @@ def test_resolve_objective_contract_defaults_when_missing() -> None:
     assert contract == {
         "error": {"metric": "SMAPE"},
         "efficiency": {"metric": "macs"},
-        "pdm": {"metric": "auprc_premaint"},
+        "pdm": {"metric": "window_auprc"},
     }
     assert cfg["objectives"] == contract
 
@@ -21,7 +21,7 @@ def test_resolve_objective_contract_normalizes_case() -> None:
         "objectives": {
             "error": {"metric": "rmse"},
             "efficiency": {"metric": "MACS"},
-            "pdm": {"metric": "AUPRC_PREMAINT"},
+            "pdm": {"metric": "WINDOW_AUPRC"},
         }
     }
 
@@ -29,7 +29,7 @@ def test_resolve_objective_contract_normalizes_case() -> None:
 
     assert contract["error"]["metric"] == "RMSE"
     assert contract["efficiency"]["metric"] == "macs"
-    assert contract["pdm"]["metric"] == "auprc_premaint"
+    assert contract["pdm"]["metric"] == "window_auprc"
 
 
 def test_resolve_objective_contract_preserves_selection_block() -> None:
@@ -75,10 +75,11 @@ def test_config_summary_line_includes_objective_contract_fields() -> None:
         "workflow": {"mode": "baseline_search"},
         "data_params": {"dataset_name": "MetroPT"},
         "nia_search": {"metrics": ["SMAPE"], "nsga3": {"n_partitions": 5, "effective_population": 21}},
+        "exp_params": {"optimizer": "Adam", "learning_rate": 0.003, "weight_decay": 0.0},
         "objectives": {
             "error": {"metric": "SMAPE"},
             "efficiency": {"metric": "macs"},
-            "pdm": {"metric": "auprc_premaint"},
+            "pdm": {"metric": "window_auprc"},
         },
     }
 
@@ -86,16 +87,19 @@ def test_config_summary_line_includes_objective_contract_fields() -> None:
 
     assert "obj_error=SMAPE" in line
     assert "obj_efficiency=macs" in line
-    assert "obj_pdm=auprc_premaint" in line
+    assert "obj_pdm=window_auprc" in line
     assert "nsga3_n_partitions=5" in line
     assert "nsga3_effective_population=21" in line
+    assert "fixed_optimizer=Adam" in line
+    assert "base_learning_rate=0.003" in line
+    assert "weight_decay=0.0" in line
 
 
 def test_objective_contract_line_contains_locked_semantics() -> None:
     contract = {
         "error": {"metric": "SMAPE"},
         "efficiency": {"metric": "macs"},
-        "pdm": {"metric": "auprc_premaint"},
+        "pdm": {"metric": "window_auprc"},
     }
 
     line = main._objective_contract_line(contract)
@@ -103,7 +107,7 @@ def test_objective_contract_line_contains_locked_semantics() -> None:
     assert line.startswith("OBJECTIVE_CONTRACT ")
     assert "obj_error=SMAPE direction=min" in line
     assert "obj_efficiency=macs direction=min" in line
-    assert "obj_pdm=1-auprc_premaint direction=min" in line
+    assert "obj_pdm=1-window_auprc direction=min" in line
     assert "pdm_label_policy=phase0_or_phase1_positive_is_phase1_exclude_phase2" in line
     assert "pdm_eval_slice=test_only" in line
 
@@ -120,9 +124,29 @@ def test_enforce_anomaly_metrics_enabled_forces_exp_param_and_removes_legacy_fla
     assert "compute_anomaly_metrics" not in cfg["data_params"]
 
 
+def test_resolve_training_policy_defaults_and_validation() -> None:
+    cfg = {}
+
+    contract = main._resolve_training_policy(cfg)
+
+    assert contract == {"optimizer": "Adam", "learning_rate": 0.003, "weight_decay": 0.0}
+    assert cfg["exp_params"]["optimizer"] == "Adam"
+
+
+def test_resolve_training_policy_rejects_invalid_values() -> None:
+    with pytest.raises(ValueError, match="exp_params.optimizer"):
+        main._resolve_training_policy({"exp_params": {"optimizer": "SGD"}})
+
+    with pytest.raises(ValueError, match="exp_params.learning_rate"):
+        main._resolve_training_policy({"exp_params": {"optimizer": "Adam", "learning_rate": 0}})
+
+    with pytest.raises(ValueError, match="exp_params.weight_decay"):
+        main._resolve_training_policy({"exp_params": {"optimizer": "Adam", "weight_decay": -1}})
+
+
 def test_validate_pdm_objective_scope_accepts_metropt_per_maint() -> None:
     cfg = {
-        "objectives": {"pdm": {"metric": "auprc_premaint"}},
+        "objectives": {"pdm": {"metric": "window_auprc"}},
         "data_params": {"dataset_name": "MetroPT", "regime": "per_maint"},
     }
 
@@ -131,7 +155,7 @@ def test_validate_pdm_objective_scope_accepts_metropt_per_maint() -> None:
 
 def test_validate_pdm_objective_scope_rejects_other_scope() -> None:
     cfg = {
-        "objectives": {"pdm": {"metric": "auprc_premaint"}},
+        "objectives": {"pdm": {"metric": "window_auprc"}},
         "data_params": {"dataset_name": "SMAP", "regime": "single"},
     }
 

@@ -16,13 +16,14 @@ def _model_kwargs(n_features: int = 90, seq_len: int = 200) -> dict:
 
 
 def test_default_constructor_uses_solution_mapping():
-    solution = np.array([0.1, 0.01, 0.01, 0.01, 0.01, 0.2, 0.3], dtype=float)
+    solution = np.array([0.1, 0.01, 0.01, 0.01, 0.01, 0.2], dtype=float)
     model = RNNVAE(solution, **_model_kwargs())
     assert isinstance(model.mapping_context, dict)
+    assert model.optimizer_name == "Adam"
 
 
 def test_mapping_builds_monotone_valid_architecture():
-    solution = np.array([0.25, 0.8, 0.5, 0.75, 0.4, 0.2, 0.3], dtype=float)
+    solution = np.array([0.25, 0.8, 0.5, 0.75, 0.4, 0.2], dtype=float)
     model = RNNVAE(solution, **_model_kwargs(n_features=90, seq_len=200))
 
     assert model.is_valid
@@ -40,7 +41,7 @@ def test_mapping_builds_monotone_valid_architecture():
 
 def test_invalid_rate_is_zero_on_random_solutions():
     rng = np.random.default_rng(42)
-    solutions = rng.uniform(0.0, 1.0, size=(200, 7))
+    solutions = rng.uniform(0.0, 1.0, size=(200, RNNVAE.GENE_DIMENSION))
 
     invalid_count = 0
     for solution in solutions:
@@ -54,9 +55,18 @@ def test_dense_ratio_grid_and_half_up_rounding():
     # Gene y3 is mapped from a dense ratio grid [0.04..0.50 step 0.01].
     # Pick index 31 => ratio 0.35 and verify 90 * 0.35 rounds to 32 (half-up).
     y3_gene = (31.1 / 47.0)
-    solution = np.array([0.2, 0.3, y3_gene, 0.4, 0.5, 0.1, 0.2], dtype=float)
+    solution = np.array([0.2, 0.3, y3_gene, 0.4, 0.5, 0.1], dtype=float)
     model = RNNVAE(solution, **_model_kwargs(n_features=90, seq_len=200))
 
     assert model.is_valid
     assert model.mapping_context["bottleneck_ratio"] == 0.35
     assert model.bottleneck_size == 32
+
+
+def test_hash_does_not_depend_on_fixed_optimizer():
+    solution = np.array([0.3, 0.4, 0.2, 0.5, 0.6, 0.7], dtype=float)
+    model_a = RNNVAE(solution, **_model_kwargs())
+    model_b = RNNVAE(solution, **_model_kwargs())
+
+    assert model_a.hash_id == model_b.hash_id
+    assert model_a.optimizer_name == "Adam"

@@ -18,7 +18,7 @@ nia_search:
   # Format: HH:MM:SS
   # Note: total cycle wall time is usually longer than this because final
   # winner retraining and export run after search terminates.
-  time: "01:30:00"
+  time: "05:30:00"
 
   # Metrics printed in iteration logs for visibility.
   # Optimization objectives are configured under objectives.* below.
@@ -42,7 +42,7 @@ objectives:
   # All objectives are minimized:
   # - obj_error: reconstruction metric value
   # - obj_efficiency: efficiency backend value
-  # - obj_pdm: 1 - auprc_premaint
+  # - obj_pdm: 1 - window_auprc
   #
   # MetroPT PdM labeling semantics (aligned with metropt-pdm-framework):
   # - evaluate only test windows from phases 0 and 1
@@ -63,7 +63,10 @@ objectives:
 
   pdm:
     # Fixed PdM metric key currently supported by contract.
-    metric: auprc_premaint
+    # window_auprc is computed globally over all phase-aware test windows
+    # in the current cycle. If a cycle has only one label class, the value is
+    # undefined and obj_pdm uses worst-case quality (1.0) while diagnostics are stored.
+    metric: window_auprc
 
   selection:
     # Deterministic winner selection after search:
@@ -92,8 +95,8 @@ workflow:
     # Fine-tune policy used only in mode=per_maint_finetune for cycle_id > 0.
     # finetune_learning_rate = exp_params.learning_rate * learning_rate_scale
     learning_rate_scale: 0.1
-    min_epochs: 3
-    max_epochs: 3
+    min_epochs: 5
+    max_epochs: 5
 
 # Model constructor parameters passed into RNNVAE.
 model_params:
@@ -102,13 +105,15 @@ model_params:
 # Trainer defaults for candidate and final training passes.
 # Lower values reduce runtime; higher values may improve fit quality.
 trainer_params:
-  min_epochs: 5
-  max_epochs: 5
+  min_epochs: 6
+  max_epochs: 6
 
-# Optimization hyperparameters and global seed.
+# Shared training policy and global seed.
+# In the architecture-only methodology, optimizer is fixed for all candidates.
 exp_params:
-  learning_rate: 0.01
-  weight_decay: 0.001
+  optimizer: Adam
+  learning_rate: 0.003
+  weight_decay: 0.0
   kld_weight: 0.1
   manual_seed: 42
 
@@ -128,8 +133,8 @@ data_loader_params:
   data_percentage: 100   # use subset (<100) for quick debug runs
   batch_size: 64
   val_size: 10           # percent of train windows for validation
-  num_workers: 0
-  persistent_workers: False
+  num_workers: 8
+  persistent_workers: True
   pin_memory: True
 
 # Dataset profile file selected at startup.

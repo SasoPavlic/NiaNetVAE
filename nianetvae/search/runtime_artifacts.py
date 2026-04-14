@@ -134,7 +134,7 @@ def _run_training_with_model(
     Log.info(
         "TRAINING_POLICY "
         f"alg={algorithm_name} optimizer={model.optimizer_name} "
-        f"learning_rate={experiment.learning_rate} scheduler=none "
+        f"learning_rate={experiment.learning_rate} weight_decay={experiment.weight_decay} scheduler=none "
         f"min_epochs={effective_trainer_params.get('min_epochs')} "
         f"max_epochs={effective_trainer_params.get('max_epochs')}"
     )
@@ -221,6 +221,7 @@ def _export_cycle_artifacts(
     torch.save(model.state_dict(), model_path)
 
     data_params = config.get("data_params", {})
+    exp_params = config.get("exp_params", {})
     workflow_mode = str((config.get("workflow") or {}).get("mode", "")).strip().lower() or None
     seed_source = (config.get("exp_params") or {}).get("manual_seed")
     source_cycle = search_result.get("source_cycle_id")
@@ -259,6 +260,12 @@ def _export_cycle_artifacts(
         "run_uuid": run_uuid,
         "git_ref": _get_git_ref(),
         "weights_file": "model.pt",
+        "training_policy": {
+            "optimizer": str(model.optimizer_name),
+            "learning_rate": float(final_result["experiment"].learning_rate),
+            "weight_decay": float(final_result["experiment"].weight_decay),
+        },
+        "final_training_anomaly_metrics": _as_jsonable(final_result.get("anomaly_metrics") or {}),
         "provenance": provenance,
         "winner_selection": {
             "method": winner_selection.get("method"),
@@ -289,6 +296,11 @@ def _export_cycle_artifacts(
             "started_at": final_result["started_at"],
             "ended_at": final_result["ended_at"],
             "duration_s": final_result["duration_s"],
+            "training_policy": {
+                "optimizer": str(model.optimizer_name),
+                "learning_rate": float(final_result["experiment"].learning_rate),
+                "weight_decay": float(final_result["experiment"].weight_decay),
+            },
             "obj_error": final_result["obj_error"],
             "obj_efficiency": final_result["obj_efficiency"],
             "obj_pdm": final_result.get("obj_pdm"),
@@ -301,7 +313,12 @@ def _export_cycle_artifacts(
         "artifacts": {
             "weights_file": "model.pt",
             "meta_file": "model_meta.json",
-        }
+        },
+        "training_policy": {
+            "optimizer": str(exp_params.get("optimizer", model.optimizer_name)),
+            "learning_rate": float(exp_params.get("learning_rate", final_result["experiment"].learning_rate)),
+            "weight_decay": float(exp_params.get("weight_decay", final_result["experiment"].weight_decay)),
+        },
     }
     summary_path = export_dir / "search_summary.json"
     summary_path.write_text(json.dumps(_as_jsonable(summary), indent=2, sort_keys=True), encoding="utf-8")

@@ -69,7 +69,7 @@ def _resolve_winner_selection_contract(cfg: dict | None = None) -> dict:
     }
 
 
-def _parse_solution_array(raw_value):
+def _parse_solution_array(raw_value, expected_dim: int | None = None):
     if raw_value is None:
         return None
     parsed = None
@@ -86,6 +86,8 @@ def _parse_solution_array(raw_value):
     except Exception:
         return None
     if arr.size == 0:
+        return None
+    if expected_dim is not None and int(arr.size) != int(expected_dim):
         return None
     if not np.isfinite(arr).all():
         return None
@@ -142,6 +144,7 @@ def _select_deterministic_pareto_winner(
     selection_contract: dict,
     dataset_name: str,
     penalty: int | float,
+    expected_solution_dim: int | None = None,
 ):
     penalty_value = float(penalty)
 
@@ -163,7 +166,7 @@ def _select_deterministic_pareto_winner(
         obj_error = _safe_float(row.get("obj_error"))
         obj_efficiency = _safe_float(row.get("obj_efficiency"))
         obj_pdm = _safe_float(row.get("obj_pdm"))
-        solution = _parse_solution_array(row.get("solution_array"))
+        solution = _parse_solution_array(row.get("solution_array"), expected_dim=expected_solution_dim)
         if obj_error is None or obj_efficiency is None or obj_pdm is None or solution is None:
             continue
         if (

@@ -21,6 +21,36 @@ except Exception:  # pragma: no cover - optional dependency
 # Your “infinity” penalty constant
 infinity = int(9e10)
 
+LEGACY_ANOMALY_COLUMNS = {
+    "precision",
+    "recall",
+    "f1_score",
+    "_".join(("pr", "auc", "mean")),
+    "_".join(("pr", "auc", "std")),
+    "_".join(("roc", "auc", "mean")),
+    "_".join(("roc", "auc", "std")),
+}
+
+WINDOW_ANOMALY_COLUMNS = {
+    "window_auprc",
+    "window_roc_auc",
+    "ranking_metric_valid",
+    "ranking_metric_invalid_reason",
+    "window_count",
+    "positive_window_count",
+    "negative_window_count",
+    "positive_window_rate",
+    "score_min",
+    "score_max",
+    "score_mean",
+    "score_std",
+    "segment_count",
+    "best_f1_threshold",
+    "best_f1_precision",
+    "best_f1_recall",
+    "best_f1_score",
+}
+
 _DB_ENV_VAR_MAP = {
     "host": "NIANETVAE_DB_HOST",
     "port": "NIANETVAE_DB_PORT",
@@ -29,6 +59,76 @@ _DB_ENV_VAR_MAP = {
     "password": "NIANETVAE_DB_PASSWORD",
     "sslmode": "NIANETVAE_DB_SSLMODE",
 }
+
+
+def _optional_float(value):
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except Exception:
+        return None
+    return value if np.isfinite(value) else None
+
+
+def _optional_int(value):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _optional_bool(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+        return None
+    return bool(value)
+
+
+def _window_anomaly_payload(anomaly: dict | None) -> dict:
+    anomaly = anomaly or {}
+    return {
+        "window_auprc": _optional_float(anomaly.get("window_auprc")),
+        "window_roc_auc": _optional_float(anomaly.get("window_roc_auc")),
+        "ranking_metric_valid": _optional_bool(anomaly.get("ranking_metric_valid")),
+        "ranking_metric_invalid_reason": anomaly.get("ranking_metric_invalid_reason"),
+        "window_count": _optional_int(anomaly.get("window_count")),
+        "positive_window_count": _optional_int(anomaly.get("positive_window_count")),
+        "negative_window_count": _optional_int(anomaly.get("negative_window_count")),
+        "positive_window_rate": _optional_float(anomaly.get("positive_window_rate")),
+        "score_min": _optional_float(anomaly.get("score_min")),
+        "score_max": _optional_float(anomaly.get("score_max")),
+        "score_mean": _optional_float(anomaly.get("score_mean")),
+        "score_std": _optional_float(anomaly.get("score_std")),
+        "segment_count": _optional_int(anomaly.get("segment_count")),
+        "best_f1_threshold": _optional_float(anomaly.get("best_f1_threshold")),
+        "best_f1_precision": _optional_float(anomaly.get("best_f1_precision")),
+        "best_f1_recall": _optional_float(anomaly.get("best_f1_recall")),
+        "best_f1_score": _optional_float(anomaly.get("best_f1_score")),
+    }
+
+
+def _validate_metric_schema(columns: set[str], table_name: str) -> None:
+    legacy_present = sorted(LEGACY_ANOMALY_COLUMNS & columns)
+    missing = sorted(WINDOW_ANOMALY_COLUMNS - columns)
+    if legacy_present or missing:
+        details = []
+        if legacy_present:
+            details.append(f"legacy anomaly columns present={legacy_present}")
+        if missing:
+            details.append(f"missing window anomaly columns={missing}")
+        raise ValueError(
+            f"Existing table {table_name!r} does not match the WindowAnomalyRankingMetrics schema. "
+            f"{'; '.join(details)}. Drop/recreate the solutions table before running this code."
+        )
 
 
 def _load_dotenv_if_present(path: str = ".env") -> bool:
@@ -149,11 +249,11 @@ class SQLiteConnector:
     def __init__(self, db_file, table_name):
         self.db_file = db_file
         self.table_name = table_name
-        # Ensure tables exist on startup, but do not fail on error
         try:
             self._create_table()
         except Exception as e:
             Log.error(f"Error initializing database tables: {e}")
+            raise
 
     def _get_connection(self):
         """
@@ -194,15 +294,32 @@ class SQLiteConnector:
                     obj_error REAL, obj_efficiency REAL, obj_pdm REAL,
                     MAE REAL, MSE REAL, RMSE REAL, MAPE REAL,
                     RMAPE REAL, SMAPE REAL,
-                    precision REAL, recall REAL, f1_score REAL,
-                    pr_auc_mean REAL, pr_auc_std REAL,
-                    roc_auc_mean REAL, roc_auc_std REAL,
+                    window_auprc REAL,
+                    window_roc_auc REAL,
+                    ranking_metric_valid INTEGER,
+                    ranking_metric_invalid_reason TEXT,
+                    window_count INTEGER,
+                    positive_window_count INTEGER,
+                    negative_window_count INTEGER,
+                    positive_window_rate REAL,
+                    score_min REAL,
+                    score_max REAL,
+                    score_mean REAL,
+                    score_std REAL,
+                    segment_count INTEGER,
+                    best_f1_threshold REAL,
+                    best_f1_precision REAL,
+                    best_f1_recall REAL,
+                    best_f1_score REAL,
                     solution_array TEXT
                 );
             ''')
+            columns = {row[1] for row in cur.execute(f"PRAGMA table_info({self.table_name})").fetchall()}
+            _validate_metric_schema(columns, self.table_name)
             conn.commit()
         except Exception as e:
             Log.error(f"Error creating main table: {e}")
+            raise
         finally:
             if conn:
                 conn.close()
@@ -317,13 +434,7 @@ class SQLiteConnector:
                 start_time=start_time,
                 end_time=end_time,
                 duration=duration,
-                precision=anomaly.get('precision'),
-                recall=anomaly.get('recall'),
-                f1_score=anomaly.get('f1_score'),
-                pr_auc_mean=anomaly.get('pr_auc_mean'),
-                pr_auc_std=anomaly.get('pr_auc_std'),
-                roc_auc_mean=anomaly.get('roc_auc_mean'),
-                roc_auc_std=anomaly.get('roc_auc_std'),
+                anomaly_metrics=anomaly,
             )
 
             if model and path:
@@ -342,9 +453,7 @@ class SQLiteConnector:
             dataset_name, alg_name, iteration,
             mae, mse, rmse, mape, rmape, smape,
             start_time, end_time, duration,
-            precision=None, recall=None, f1_score=None,
-            pr_auc_mean=None, pr_auc_std=None,
-            roc_auc_mean=None, roc_auc_std=None
+            anomaly_metrics=None,
     ):
         """
         Core insertion logic, retried on SQLITE_BUSY, but will log and continue on errors.
@@ -380,15 +489,9 @@ class SQLiteConnector:
                 'MAPE': float(mape),
                 'RMAPE': float(rmape),
                 'SMAPE': float(smape),
-                'precision': float(precision) if precision is not None else None,
-                'recall': float(recall) if recall is not None else None,
-                'f1_score': float(f1_score) if f1_score is not None else None,
-                'pr_auc_mean': float(pr_auc_mean) if pr_auc_mean is not None else None,
-                'pr_auc_std': float(pr_auc_std) if pr_auc_std is not None else None,
-                'roc_auc_mean': float(roc_auc_mean) if roc_auc_mean is not None else None,
-                'roc_auc_std': float(roc_auc_std) if roc_auc_std is not None else None,
                 'solution_array': json.dumps(solution.tolist())
             }
+            data.update(_window_anomaly_payload(anomaly_metrics))
             cols = ','.join(data.keys())
             placeholders = ','.join('?' for _ in data)
             query = f"INSERT INTO {self.table_name} ({cols}) VALUES ({placeholders})"
@@ -413,6 +516,7 @@ class PostgresConnector:
             self._create_table()
         except Exception as e:
             Log.error(f"Error initializing Postgres tables: {e}")
+            raise
 
     def _get_connection(self):
         return psycopg2.connect(
@@ -445,15 +549,40 @@ class PostgresConnector:
                     obj_error REAL, obj_efficiency REAL, obj_pdm REAL,
                     MAE REAL, MSE REAL, RMSE REAL, MAPE REAL,
                     RMAPE REAL, SMAPE REAL,
-                    precision REAL, recall REAL, f1_score REAL,
-                    pr_auc_mean REAL, pr_auc_std REAL,
-                    roc_auc_mean REAL, roc_auc_std REAL,
+                    window_auprc REAL,
+                    window_roc_auc REAL,
+                    ranking_metric_valid BOOLEAN,
+                    ranking_metric_invalid_reason TEXT,
+                    window_count INTEGER,
+                    positive_window_count INTEGER,
+                    negative_window_count INTEGER,
+                    positive_window_rate REAL,
+                    score_min REAL,
+                    score_max REAL,
+                    score_mean REAL,
+                    score_std REAL,
+                    segment_count INTEGER,
+                    best_f1_threshold REAL,
+                    best_f1_precision REAL,
+                    best_f1_recall REAL,
+                    best_f1_score REAL,
                     solution_array TEXT
                 );
             ''')
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = %s
+                """,
+                (self.table_name,),
+            )
+            columns = {row[0] for row in cur.fetchall()}
+            _validate_metric_schema(columns, self.table_name)
             conn.commit()
         except Exception as e:
             Log.error(f"Error creating Postgres main table: {e}")
+            raise
         finally:
             if conn:
                 conn.close()
@@ -564,13 +693,7 @@ class PostgresConnector:
                 start_time=start_time,
                 end_time=end_time,
                 duration=duration,
-                precision=anomaly.get('precision'),
-                recall=anomaly.get('recall'),
-                f1_score=anomaly.get('f1_score'),
-                pr_auc_mean=anomaly.get('pr_auc_mean'),
-                pr_auc_std=anomaly.get('pr_auc_std'),
-                roc_auc_mean=anomaly.get('roc_auc_mean'),
-                roc_auc_std=anomaly.get('roc_auc_std'),
+                anomaly_metrics=anomaly,
             )
 
             if model and path:
@@ -589,9 +712,7 @@ class PostgresConnector:
             dataset_name, alg_name, iteration,
             mae, mse, rmse, mape, rmape, smape,
             start_time, end_time, duration,
-            precision=None, recall=None, f1_score=None,
-            pr_auc_mean=None, pr_auc_std=None,
-            roc_auc_mean=None, roc_auc_std=None
+            anomaly_metrics=None,
     ):
         conn = None
         try:
@@ -624,15 +745,9 @@ class PostgresConnector:
                 'MAPE': float(mape),
                 'RMAPE': float(rmape),
                 'SMAPE': float(smape),
-                'precision': float(precision) if precision is not None else None,
-                'recall': float(recall) if recall is not None else None,
-                'f1_score': float(f1_score) if f1_score is not None else None,
-                'pr_auc_mean': float(pr_auc_mean) if pr_auc_mean is not None else None,
-                'pr_auc_std': float(pr_auc_std) if pr_auc_std is not None else None,
-                'roc_auc_mean': float(roc_auc_mean) if roc_auc_mean is not None else None,
-                'roc_auc_std': float(roc_auc_std) if roc_auc_std is not None else None,
                 'solution_array': json.dumps(solution.tolist())
             }
+            data.update(_window_anomaly_payload(anomaly_metrics))
             cols = ','.join(data.keys())
             placeholders = ','.join(['%s'] * len(data))
             query = f"INSERT INTO {self.table_name} ({cols}) VALUES ({placeholders})"

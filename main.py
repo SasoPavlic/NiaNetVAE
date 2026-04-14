@@ -24,8 +24,9 @@ import nianetvae.experiments.metrics_evaluation
 ALLOWED_WORKFLOW_MODES = {"baseline_search", "per_maint_finetune", "per_maint_warmstart_search"}
 ALLOWED_ERROR_OBJECTIVE_METRICS = {"MAE", "MSE", "RMSE", "MAPE", "RMAPE", "SMAPE"}
 ALLOWED_EFFICIENCY_OBJECTIVE_METRICS = {"params", "macs", "latency_ms"}
-ALLOWED_PDM_OBJECTIVE_METRIC = "auprc_premaint"
+ALLOWED_PDM_OBJECTIVE_METRIC = "window_auprc"
 ALLOWED_SELECTION_METHODS = {"weighted_ideal_distance"}
+ALLOWED_FIXED_OPTIMIZERS = {"Adam"}
 
 
 def _load_yaml_file(path: str) -> dict:
@@ -103,6 +104,7 @@ def _config_summary_line(config: dict) -> str:
     nsga3_cfg = nia_search.get("nsga3") or {}
     logging_params = config.get("logging_params", {})
     trainer_params = config.get("trainer_params", {})
+    exp_params = config.get("exp_params", {})
     workflow_mode = ((config.get("workflow") or {}).get("mode"))
     parts = [
         "CONFIG_SUMMARY",
@@ -129,6 +131,9 @@ def _config_summary_line(config: dict) -> str:
         f"{_value_or_na(((((config.get('objectives') or {}).get('selection') or {}).get('weights') or {}).get('efficiency')))}"
         "/"
         f"{_value_or_na(((((config.get('objectives') or {}).get('selection') or {}).get('weights') or {}).get('pdm')))}",
+        f"fixed_optimizer={_value_or_na(exp_params.get('optimizer'))}",
+        f"base_learning_rate={_value_or_na(exp_params.get('learning_rate'))}",
+        f"weight_decay={_value_or_na(exp_params.get('weight_decay'))}",
         f"db_backend={_value_or_na(logging_params.get('db_backend', 'sqlite'))}",
     ]
     return " ".join(parts)
@@ -198,7 +203,7 @@ def _resolve_objective_contract(config: dict) -> dict:
     C13.1 contract lock:
       - obj_error: single selected reconstruction metric (min)
       - obj_efficiency: selected efficiency backend (min)
-      - obj_pdm: 1 - AUPRC_premaint (min), with phase semantics implemented in C13.2
+      - obj_pdm: 1 - window_auprc (min), with phase semantics implemented in C13.2
     """
     objectives = dict(config.get("objectives") or {})
     error_cfg = dict(objectives.get("error") or {})
@@ -299,6 +304,52 @@ def _resolve_winner_selection_contract(config: dict) -> dict:
     return normalized_selection
 
 
+def _resolve_training_policy(config: dict) -> dict:
+    exp_params = dict(config.get("exp_params") or {})
+
+    raw_optimizer = exp_params.get("optimizer", "Adam")
+    optimizer_name = str(raw_optimizer).strip() if raw_optimizer is not None else "Adam"
+    if optimizer_name not in ALLOWED_FIXED_OPTIMIZERS:
+        allowed = ", ".join(sorted(ALLOWED_FIXED_OPTIMIZERS))
+        raise ValueError(
+            f"Invalid exp_params.optimizer={raw_optimizer!r}. Allowed values: {allowed}."
+        )
+
+    raw_lr = exp_params.get("learning_rate", 0.003)
+    try:
+        learning_rate = float(raw_lr)
+    except Exception:
+        raise ValueError(
+            f"Invalid exp_params.learning_rate={raw_lr!r}. Expected finite float > 0."
+        ) from None
+    if not math.isfinite(learning_rate) or learning_rate <= 0:
+        raise ValueError(
+            f"Invalid exp_params.learning_rate={raw_lr!r}. Expected finite float > 0."
+        )
+
+    raw_weight_decay = exp_params.get("weight_decay", 0.0)
+    try:
+        weight_decay = float(raw_weight_decay)
+    except Exception:
+        raise ValueError(
+            f"Invalid exp_params.weight_decay={raw_weight_decay!r}. Expected finite float >= 0."
+        ) from None
+    if not math.isfinite(weight_decay) or weight_decay < 0:
+        raise ValueError(
+            f"Invalid exp_params.weight_decay={raw_weight_decay!r}. Expected finite float >= 0."
+        )
+
+    exp_params["optimizer"] = optimizer_name
+    exp_params["learning_rate"] = learning_rate
+    exp_params["weight_decay"] = weight_decay
+    config["exp_params"] = exp_params
+    return {
+        "optimizer": optimizer_name,
+        "learning_rate": learning_rate,
+        "weight_decay": weight_decay,
+    }
+
+
 def _objective_contract_line(contract: dict) -> str:
     error_metric = ((contract.get("error") or {}).get("metric"))
     efficiency_metric = ((contract.get("efficiency") or {}).get("metric"))
@@ -332,6 +383,16 @@ def _winner_selection_contract_line(contract: dict) -> str:
     )
 
 
+def _training_policy_contract_line(contract: dict) -> str:
+    return (
+        "TRAINING_POLICY_CONTRACT "
+        f"optimizer={_value_or_na(contract.get('optimizer'))} "
+        f"learning_rate={_value_or_na(contract.get('learning_rate'))} "
+        f"weight_decay={_value_or_na(contract.get('weight_decay'))} "
+        "search_space=architecture_only"
+    )
+
+
 def _enforce_anomaly_metrics_enabled(config: dict) -> None:
     """
     C13.3 policy lock:
@@ -359,7 +420,7 @@ def _validate_pdm_objective_scope(config: dict) -> None:
     regime = str(data_params.get("regime") or "").strip().lower()
     if dataset_name != "metropt" or regime != "per_maint":
         raise ValueError(
-            "objectives.pdm.metric='auprc_premaint' requires "
+            "objectives.pdm.metric='window_auprc' requires "
             "data_params.dataset_name='MetroPT' and data_params.regime='per_maint'."
         )
 
@@ -445,6 +506,7 @@ if __name__ == '__main__':
         workflow_mode = _resolve_workflow_mode(config)
         _resolve_nsga3_search_config(config)
         objective_contract = _resolve_objective_contract(config)
+        training_policy_contract = _resolve_training_policy(config)
         winner_selection_contract = _resolve_winner_selection_contract(config)
     except ValueError as exc:
         _err(str(exc))
@@ -510,6 +572,7 @@ if __name__ == '__main__':
     )
     Log.info(_config_summary_line(config))
     Log.info(_objective_contract_line(objective_contract))
+    Log.info(_training_policy_contract_line(training_policy_contract))
     Log.info(_winner_selection_contract_line(winner_selection_contract))
 
     conn = get_db_connector(config, "solutions")
