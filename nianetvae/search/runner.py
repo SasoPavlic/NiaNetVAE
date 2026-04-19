@@ -1,11 +1,14 @@
 import json
 import math
+import os
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
+import pandas as pd
 import torch
 from lightning.pytorch import Trainer, seed_everything
 from pymoo.algorithms.moo.nsga3 import NSGA3
@@ -91,6 +94,7 @@ class RNNVAEArchitectureMultiObj(Problem):
         self.penalty = runner.ctx.penalty
         self.iteration = 0
         self.stats = {"trained": 0, "cached": 0, "invalid": 0, "failed": 0}
+        self.local_candidate_rows: list[dict[str, Any]] = []
         super().__init__(n_var=dimension, n_obj=3, n_constr=0, xl=0, xu=1)
 
     def _to_int(self, value, default: int | None = None):
@@ -166,6 +170,51 @@ class RNNVAEArchitectureMultiObj(Problem):
         if metric_parts:
             parts.extend(metric_parts)
         Log.info(" ".join(parts))
+
+    def _store_local_candidate(
+        self,
+        iteration: int,
+        model_hash: str,
+        solution,
+        obj_error: float,
+        obj_efficiency: float,
+        obj_pdm: float,
+        status: str,
+    ) -> None:
+        """
+        Keep a local, in-memory candidate snapshot so winner selection can still complete
+        when DB connectivity is temporarily unavailable.
+        """
+        if solution is None:
+            return
+        try:
+            solution_arr = np.asarray(solution, dtype=float).reshape(-1)
+        except Exception:
+            return
+        if solution_arr.size != int(self.n_var):
+            return
+        if not np.isfinite(solution_arr).all():
+            return
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        safe_obj_error = float(obj_error) if math.isfinite(float(obj_error)) else float(self.penalty)
+        safe_obj_eff = float(obj_efficiency) if math.isfinite(float(obj_efficiency)) else float(self.penalty)
+        safe_obj_pdm = float(obj_pdm) if math.isfinite(float(obj_pdm)) else float(self.penalty)
+
+        self.local_candidate_rows.append(
+            {
+                "id": int(iteration),
+                "hash_id": str(model_hash),
+                "solution_array": json.dumps(solution_arr.tolist()),
+                "obj_error": safe_obj_error,
+                "obj_efficiency": safe_obj_eff,
+                "obj_pdm": safe_obj_pdm,
+                "algorithm_name": "NSGA3",
+                "timestamp": timestamp,
+                "source": "local_runtime_buffer",
+                "status": status,
+            }
+        )
 
     def _evaluate(self, X, out, *args, **kwargs):
         F = []
@@ -352,6 +401,16 @@ class RNNVAEArchitectureMultiObj(Problem):
                 metric_parts=metric_parts
             )
 
+            self._store_local_candidate(
+                iteration=self.iteration,
+                model_hash=model_hash,
+                solution=solution,
+                obj_error=obj_error,
+                obj_efficiency=obj_efficiency,
+                obj_pdm=obj_pdm,
+                status=status,
+            )
+
             F.append([obj_error, obj_efficiency, obj_pdm])
         out["F"] = np.array(F)
 
@@ -359,6 +418,74 @@ class RNNVAEArchitectureMultiObj(Problem):
 class SearchRunner:
     def __init__(self, context: SearchRuntimeContext):
         self.ctx = context
+
+    def _db_wait_budget_seconds(self) -> int:
+        raw_env = os.getenv("NIANETVAE_DB_WAIT_SECONDS")
+        if raw_env is not None and str(raw_env).strip():
+            try:
+                value = int(float(raw_env))
+                if value >= 0:
+                    return value
+            except Exception:
+                pass
+        logging_cfg = dict(self.ctx.config.get("logging_params") or {})
+        raw_cfg = logging_cfg.get("db_wait_seconds", 1800)
+        try:
+            value = int(float(raw_cfg))
+        except Exception:
+            value = 1800
+        return max(0, value)
+
+    def _db_wait_poll_seconds(self) -> int:
+        logging_cfg = dict(self.ctx.config.get("logging_params") or {})
+        raw_cfg = logging_cfg.get("db_wait_poll_seconds", 30)
+        try:
+            value = int(float(raw_cfg))
+        except Exception:
+            value = 30
+        return max(1, value)
+
+    def _fetch_cycle_candidates_with_wait(self, *, algorithm_name: str = "NSGA3") -> pd.DataFrame:
+        """
+        Fetch DB cycle candidates with a bounded wait window to tolerate transient DB outages.
+        """
+        wait_budget = self._db_wait_budget_seconds()
+        poll_seconds = self._db_wait_poll_seconds()
+        started = time.monotonic()
+        attempt = 0
+
+        while True:
+            attempt += 1
+            candidates_df = self.ctx.conn.get_cycle_candidates(
+                dataset_name=self.ctx.dataset_name,
+                algorithm_name=algorithm_name,
+            )
+            if candidates_df is not None and not candidates_df.empty:
+                if attempt > 1:
+                    elapsed = time.monotonic() - started
+                    Log.info(
+                        f"DB_RECOVERY_SUCCESS dataset={self.ctx.dataset_name} "
+                        f"attempt={attempt} elapsed_s={elapsed:.1f} "
+                        f"candidate_count={len(candidates_df)}"
+                    )
+                return candidates_df
+
+            elapsed = time.monotonic() - started
+            remaining = wait_budget - elapsed
+            if remaining <= 0:
+                Log.error(
+                    f"DB_RECOVERY_TIMEOUT dataset={self.ctx.dataset_name} "
+                    f"wait_budget_s={wait_budget} attempts={attempt}"
+                )
+                return candidates_df if candidates_df is not None else pd.DataFrame()
+
+            sleep_s = min(float(poll_seconds), max(1.0, remaining))
+            Log.warning(
+                f"DB_RECOVERY_WAIT dataset={self.ctx.dataset_name} "
+                f"attempt={attempt} elapsed_s={elapsed:.1f} remaining_s={remaining:.1f} "
+                f"sleep_s={sleep_s:.1f}"
+            )
+            time.sleep(sleep_s)
 
     def export_skipped_non_trainable_cycle(self, reason: str, detail: str = "", source: str = "runtime"):
         return _export_skipped_non_trainable_cycle(
@@ -581,7 +708,24 @@ class SearchRunner:
             n_jobs=n_jobs,
         )
 
-        candidate_rows = self.ctx.conn.get_cycle_candidates(dataset_name=self.ctx.dataset_name, algorithm_name="NSGA3")
+        candidate_rows = self._fetch_cycle_candidates_with_wait(algorithm_name="NSGA3")
+        candidate_source = "db"
+        if candidate_rows is None or candidate_rows.empty:
+            local_rows = list(problem.local_candidate_rows)
+            if local_rows:
+                candidate_rows = pd.DataFrame(local_rows)
+                candidate_source = "local_runtime_buffer"
+                Log.warning(
+                    f"WINNER_SELECTION_FALLBACK dataset={self.ctx.dataset_name} "
+                    f"source={candidate_source} row_count={len(candidate_rows)} "
+                    "reason=db_unavailable_or_empty_after_wait"
+                )
+            else:
+                raise ValueError(
+                    f"Winner selection failed for {self.ctx.dataset_name}: "
+                    "no DB candidates found after wait and local runtime buffer is empty."
+                )
+
         winner_selection = _select_deterministic_pareto_winner(
             candidates_df=candidate_rows,
             selection_contract=selection_contract,
@@ -595,6 +739,7 @@ class SearchRunner:
         Log.info(
             "WINNER_SELECTION "
             f"dataset={self.ctx.dataset_name} method={winner_selection['method']} "
+            f"source={candidate_source} "
             f"candidate_count={winner_selection['candidate_count']} "
             f"valid_count={winner_selection['valid_candidate_count']} "
             f"dedup_count={winner_selection['deduplicated_candidate_count']} "
@@ -636,6 +781,7 @@ class SearchRunner:
             "winner_selection": _as_jsonable(
                 {k: v for k, v in winner_selection.items() if k != "selected_solution"}
             ),
+            "winner_selection_source": candidate_source,
         }
 
         final_result = _run_final_training(

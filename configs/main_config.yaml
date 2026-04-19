@@ -124,6 +124,8 @@ logging_params:
   save_dir: "logs"                  # local run outputs
   db_storage: "logs/solutions.db"   # used when db_backend=sqlite
   db_backend: "postgres"            # postgres or sqlite
+  db_wait_seconds: 1800             # max wait for DB recovery before winner-selection fallback/fail
+  db_wait_poll_seconds: 30          # retry poll interval while waiting for DB recovery
   export_enabled: true               # write model/meta/summary export artifacts
   model_export_dir: "logs/per_maint_models"
 
