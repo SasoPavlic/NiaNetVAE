@@ -53,7 +53,13 @@ def _cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params") -> dict
         "objectives": {
             "error": {"metric": error_metric},
             "efficiency": {"metric": efficiency_metric},
-            "pdm": {"metric": "window_auprc"},
+            "pdm": {
+                "metric": "fixed_theta_fbeta_covpen",
+                "fixed_theta": 0.61,
+                "beta": 2.0,
+                "coverage_target": 0.20,
+                "coverage_penalty_lambda": 0.50,
+            },
             "selection": {
                 "method": "weighted_ideal_distance",
                 "weights": {"error": 0.30, "efficiency": 0.20, "pdm": 0.50},
@@ -63,12 +69,33 @@ def _cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params") -> dict
     }
 
 
+def _pdm_anomaly_payload(
+    *,
+    precision: float = 1.0,
+    recall: float = 1.0,
+    coverage: float = 0.2,
+    metric_valid: bool = True,
+    invalid_reason: str | None = None,
+) -> dict:
+    return {
+        "pdm_metric_valid": metric_valid,
+        "pdm_metric_invalid_reason": invalid_reason,
+        "pdm_fixed_theta": 0.61,
+        "pdm_beta": 2.0,
+        "pdm_coverage_target": 0.20,
+        "pdm_coverage_penalty_lambda": 0.50,
+        "pdm_fixed_theta_precision": precision,
+        "pdm_fixed_theta_recall": recall,
+        "pdm_fixed_theta_coverage": coverage,
+    }
+
+
 def test_objective_bundle_uses_selected_raw_error_metric():
     model = _TinyModel()
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"RMSE": 2.75},
-        anomaly_metrics={"window_auprc": 0.40},
+        anomaly_metrics=_pdm_anomaly_payload(precision=0.40, recall=0.40, coverage=0.20),
         seq_len=16,
         n_features=4,
         cfg=_cfg(error_metric="RMSE"),
@@ -79,23 +106,23 @@ def test_objective_bundle_uses_selected_raw_error_metric():
     assert bundle["obj_efficiency"] > 0
 
 
-def test_objective_bundle_computes_obj_pdm_from_window_auprc():
+def test_objective_bundle_computes_obj_pdm_from_fixed_theta_formula():
     model = _TinyModel()
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
-        anomaly_metrics={"window_auprc": 0.83},
+        anomaly_metrics=_pdm_anomaly_payload(precision=0.50, recall=0.80, coverage=0.30),
         seq_len=16,
         n_features=4,
         cfg=_cfg(),
     )
 
     assert bundle["valid"] is True
-    assert bundle["pdm_signal_quality"] == pytest.approx(0.83)
-    assert bundle["obj_pdm"] == pytest.approx(0.17)
+    assert bundle["pdm_signal_quality"] == pytest.approx(0.6517857, abs=1e-6)
+    assert bundle["obj_pdm"] == pytest.approx(0.3482143, abs=1e-6)
 
 
-def test_objective_bundle_uses_worst_case_when_window_auprc_missing():
+def test_objective_bundle_uses_worst_case_when_fixed_theta_diagnostics_missing():
     model = _TinyModel()
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
@@ -136,7 +163,7 @@ def test_efficiency_macs_backend_falls_back_to_params_when_unavailable(monkeypat
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
-        anomaly_metrics={"window_auprc": 0.5},
+        anomaly_metrics=_pdm_anomaly_payload(precision=0.5, recall=0.5, coverage=0.5),
         seq_len=16,
         n_features=4,
         cfg=_cfg(efficiency_metric="macs"),
@@ -157,7 +184,7 @@ def test_efficiency_latency_backend_penalizes_with_reason(monkeypatch):
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
-        anomaly_metrics={"window_auprc": 0.5},
+        anomaly_metrics=_pdm_anomaly_payload(precision=0.5, recall=0.5, coverage=0.5),
         seq_len=16,
         n_features=4,
         cfg=_cfg(efficiency_metric="latency_ms"),
@@ -227,6 +254,7 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
                         "RMAPE": 0.5,
                         "SMAPE": 1.5,
                         "window_auprc": 0.6,
+                        "objective_pdm_metric": "fixed_theta_fbeta_covpen",
                         "window_roc_auc": 0.7,
                         "ranking_metric_valid": True,
                         "ranking_metric_invalid_reason": None,
@@ -234,15 +262,28 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
                         "positive_window_count": 2,
                         "negative_window_count": 8,
                         "positive_window_rate": 0.2,
-                        "score_min": 0.1,
-                        "score_max": 1.0,
-                        "score_mean": 0.5,
-                        "score_std": 0.1,
+                        "window_reconstruction_error_min": 0.1,
+                        "window_reconstruction_error_max": 1.0,
+                        "window_reconstruction_error_mean": 0.5,
+                        "window_reconstruction_error_std": 0.1,
                         "segment_count": 1,
                         "best_f1_threshold": 0.4,
                         "best_f1_precision": 0.5,
                         "best_f1_recall": 1.0,
                         "best_f1_score": 0.6667,
+                        "pdm_fixed_theta": 0.61,
+                        "pdm_beta": 2.0,
+                        "pdm_coverage_target": 0.2,
+                        "pdm_coverage_penalty_lambda": 0.5,
+                        "pdm_fixed_theta_precision": 0.5,
+                        "pdm_fixed_theta_recall": 1.0,
+                        "pdm_fixed_theta_fbeta": 0.8333,
+                        "pdm_fixed_theta_coverage": 0.4,
+                        "pdm_coverage_excess": 0.25,
+                        "pdm_quality_raw": 0.7083,
+                        "pdm_quality_clipped": 0.7083,
+                        "pdm_metric_valid": True,
+                        "pdm_metric_invalid_reason": None,
                     }
                 ]
             )
@@ -271,6 +312,37 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
     assert "F" in out
     assert out["F"].shape == (2, 3)
     assert np.isfinite(out["F"]).all()
+
+
+def test_cached_objective_bundle_requires_contract_provenance_match():
+    model = _TinyModel()
+    cfg = _cfg()
+    cached_row = {
+        "SMAPE": 1.0,
+        "obj_error": 1.0,
+        "obj_efficiency": 10.0,
+        "obj_pdm": 0.2,
+        "objective_pdm_metric": None,
+        "pdm_fixed_theta": 0.61,
+        "pdm_beta": 2.0,
+        "pdm_coverage_target": 0.2,
+        "pdm_coverage_penalty_lambda": 0.5,
+        "pdm_metric_valid": True,
+        "pdm_fixed_theta_precision": 0.8,
+        "pdm_fixed_theta_recall": 0.8,
+        "pdm_fixed_theta_coverage": 0.2,
+    }
+
+    bundle = objective_engine.calculate_objective_bundle_from_cached_row(
+        model=model,
+        cached_row=cached_row,
+        seq_len=16,
+        n_features=4,
+        cfg=cfg,
+    )
+
+    assert bundle["valid"] is False
+    assert bundle["reason"].startswith("cached_objective_contract_mismatch")
 
 
 def test_warm_start_sampling_uses_effective_population(monkeypatch, tmp_path):
@@ -405,7 +477,7 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
             "objective_reason": None,
             "objective_contract": objective_engine._resolve_objective_contract(_cfg()),
             "metrics": {},
-            "anomaly_metrics": {"window_auprc": 0.8},
+            "anomaly_metrics": _pdm_anomaly_payload(precision=1.0, recall=1.0, coverage=0.2),
         },
     )
     monkeypatch.setattr(runner_module.torch, "save", lambda *args, **kwargs: None)

@@ -566,6 +566,21 @@ class MetroPTDataLoader(BaseDataLoader):
                 f"Not enough test windows: test_windows={len(test_ds)} (seq_len={self.seq_len})."
             )
 
+        # Type A policy: in per-maint cycles (>0), if phase-1 warnings are expected
+        # but no positive test windows exist, treat the cycle as non-trainable.
+        # This allows runtime skip/alias behavior to kick in consistently.
+        expects_positive_phase = 1 in set(int(p) for p in self.test_phases)
+        if (
+            self.regime == "per_maint"
+            and int(self.cycle_id) > 0
+            and expects_positive_phase
+            and int(test_ds.window_positive_count) <= 0
+        ):
+            raise ValueError(
+                "Test mask produced zero positive windows after phase filtering "
+                "(non_informative_cycle_no_positive_windows)."
+            )
+
         self.split_info.update(
             {
                 "n_features": self.n_features,

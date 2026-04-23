@@ -24,7 +24,8 @@ import nianetvae.experiments.metrics_evaluation
 ALLOWED_WORKFLOW_MODES = {"baseline_search", "per_maint_finetune", "per_maint_warmstart_search"}
 ALLOWED_ERROR_OBJECTIVE_METRICS = {"MAE", "MSE", "RMSE", "MAPE", "RMAPE", "SMAPE"}
 ALLOWED_EFFICIENCY_OBJECTIVE_METRICS = {"params", "macs", "latency_ms"}
-ALLOWED_PDM_OBJECTIVE_METRIC = "window_auprc"
+ALLOWED_PDM_OBJECTIVE_METRIC = "fixed_theta_fbeta_covpen"
+DEFAULT_DB_TABLE_NAME = "solutions_s1_t7"
 ALLOWED_SELECTION_METHODS = {"weighted_ideal_distance"}
 ALLOWED_FIXED_OPTIMIZERS = {"Adam"}
 
@@ -135,6 +136,7 @@ def _config_summary_line(config: dict) -> str:
         f"base_learning_rate={_value_or_na(exp_params.get('learning_rate'))}",
         f"weight_decay={_value_or_na(exp_params.get('weight_decay'))}",
         f"db_backend={_value_or_na(logging_params.get('db_backend', 'sqlite'))}",
+        f"db_table={_value_or_na(logging_params.get('db_table_name', DEFAULT_DB_TABLE_NAME))}",
     ]
     return " ".join(parts)
 
@@ -203,7 +205,7 @@ def _resolve_objective_contract(config: dict) -> dict:
     C13.1 contract lock:
       - obj_error: single selected reconstruction metric (min)
       - obj_efficiency: selected efficiency backend (min)
-      - obj_pdm: 1 - window_auprc (min), with phase semantics implemented in C13.2
+      - obj_pdm: 1 - clip(F_beta(theta)-lambda*coverage_excess, 0, 1) (min)
     """
     objectives = dict(config.get("objectives") or {})
     error_cfg = dict(objectives.get("error") or {})
@@ -237,10 +239,72 @@ def _resolve_objective_contract(config: dict) -> dict:
             f"Allowed value: {ALLOWED_PDM_OBJECTIVE_METRIC}."
         )
 
+    raw_fixed_theta = pdm_cfg.get("fixed_theta", 0.61)
+    try:
+        fixed_theta = float(raw_fixed_theta)
+    except Exception:
+        raise ValueError(
+            f"Invalid objectives.pdm.fixed_theta={raw_fixed_theta!r}. "
+            "Expected finite float in [0, 1]."
+        ) from None
+    if not math.isfinite(fixed_theta) or fixed_theta < 0.0 or fixed_theta > 1.0:
+        raise ValueError(
+            f"Invalid objectives.pdm.fixed_theta={raw_fixed_theta!r}. "
+            "Expected finite float in [0, 1]."
+        )
+
+    raw_beta = pdm_cfg.get("beta", 2.0)
+    try:
+        beta = float(raw_beta)
+    except Exception:
+        raise ValueError(
+            f"Invalid objectives.pdm.beta={raw_beta!r}. "
+            "Expected finite float > 0."
+        ) from None
+    if not math.isfinite(beta) or beta <= 0.0:
+        raise ValueError(
+            f"Invalid objectives.pdm.beta={raw_beta!r}. "
+            "Expected finite float > 0."
+        )
+
+    raw_coverage_target = pdm_cfg.get("coverage_target", 0.20)
+    try:
+        coverage_target = float(raw_coverage_target)
+    except Exception:
+        raise ValueError(
+            f"Invalid objectives.pdm.coverage_target={raw_coverage_target!r}. "
+            "Expected finite float in [0, 1)."
+        ) from None
+    if not math.isfinite(coverage_target) or coverage_target < 0.0 or coverage_target >= 1.0:
+        raise ValueError(
+            f"Invalid objectives.pdm.coverage_target={raw_coverage_target!r}. "
+            "Expected finite float in [0, 1)."
+        )
+
+    raw_cov_penalty = pdm_cfg.get("coverage_penalty_lambda", 0.50)
+    try:
+        coverage_penalty_lambda = float(raw_cov_penalty)
+    except Exception:
+        raise ValueError(
+            f"Invalid objectives.pdm.coverage_penalty_lambda={raw_cov_penalty!r}. "
+            "Expected finite float >= 0."
+        ) from None
+    if not math.isfinite(coverage_penalty_lambda) or coverage_penalty_lambda < 0.0:
+        raise ValueError(
+            f"Invalid objectives.pdm.coverage_penalty_lambda={raw_cov_penalty!r}. "
+            "Expected finite float >= 0."
+        )
+
     normalized_contract = {
         "error": {"metric": error_metric},
         "efficiency": {"metric": efficiency_metric},
-        "pdm": {"metric": pdm_metric},
+        "pdm": {
+            "metric": pdm_metric,
+            "fixed_theta": fixed_theta,
+            "beta": beta,
+            "coverage_target": coverage_target,
+            "coverage_penalty_lambda": coverage_penalty_lambda,
+        },
     }
     if "selection" in objectives:
         normalized_contract["selection"] = dict(objectives.get("selection") or {})
@@ -353,12 +417,22 @@ def _resolve_training_policy(config: dict) -> dict:
 def _objective_contract_line(contract: dict) -> str:
     error_metric = ((contract.get("error") or {}).get("metric"))
     efficiency_metric = ((contract.get("efficiency") or {}).get("metric"))
-    pdm_metric = ((contract.get("pdm") or {}).get("metric"))
+    pdm_cfg = contract.get("pdm") or {}
+    pdm_metric = pdm_cfg.get("metric")
+    fixed_theta = pdm_cfg.get("fixed_theta")
+    beta = pdm_cfg.get("beta")
+    coverage_target = pdm_cfg.get("coverage_target")
+    coverage_penalty_lambda = pdm_cfg.get("coverage_penalty_lambda")
     return (
         "OBJECTIVE_CONTRACT "
         f"obj_error={_value_or_na(error_metric)} direction=min "
         f"obj_efficiency={_value_or_na(efficiency_metric)} direction=min "
-        f"obj_pdm=1-{_value_or_na(pdm_metric)} direction=min "
+        "obj_pdm=1-clip(fbeta(theta)-lambda*coverage_excess,0,1) direction=min "
+        f"pdm_metric={_value_or_na(pdm_metric)} "
+        f"pdm_fixed_theta={_value_or_na(fixed_theta)} "
+        f"pdm_beta={_value_or_na(beta)} "
+        f"pdm_coverage_target={_value_or_na(coverage_target)} "
+        f"pdm_coverage_penalty_lambda={_value_or_na(coverage_penalty_lambda)} "
         "pdm_label_policy=phase0_or_phase1_positive_is_phase1_exclude_phase2 "
         "pdm_eval_slice=test_only"
     )
@@ -420,14 +494,30 @@ def _validate_pdm_objective_scope(config: dict) -> None:
     regime = str(data_params.get("regime") or "").strip().lower()
     if dataset_name != "metropt" or regime != "per_maint":
         raise ValueError(
-            "objectives.pdm.metric='window_auprc' requires "
+            f"objectives.pdm.metric='{ALLOWED_PDM_OBJECTIVE_METRIC}' requires "
             "data_params.dataset_name='MetroPT' and data_params.regime='per_maint'."
         )
 
 
+def _resolve_db_table_name(config: dict) -> str:
+    logging_params = dict(config.get("logging_params") or {})
+    raw_name = logging_params.get("db_table_name", DEFAULT_DB_TABLE_NAME)
+    table_name = str(raw_name).strip() if raw_name is not None else DEFAULT_DB_TABLE_NAME
+    if not table_name:
+        raise ValueError(
+            f"Invalid logging_params.db_table_name={raw_name!r}. Expected non-empty string."
+        )
+    logging_params["db_table_name"] = table_name
+    config["logging_params"] = logging_params
+    return table_name
+
+
 def _is_non_trainable_cycle_error(exc: Exception) -> bool:
     message = str(exc).lower()
-    return "zero rows after phase filtering" in message
+    return (
+        "zero rows after phase filtering" in message
+        or "zero positive windows after phase filtering" in message
+    )
 
 
 if __name__ == '__main__':
@@ -575,7 +665,9 @@ if __name__ == '__main__':
     Log.info(_training_policy_contract_line(training_policy_contract))
     Log.info(_winner_selection_contract_line(winner_selection_contract))
 
-    conn = get_db_connector(config, "solutions")
+    db_table_name = _resolve_db_table_name(config)
+    Log.info(f"DB_TABLE_ROUTING table_name={db_table_name}")
+    conn = get_db_connector(config, db_table_name)
     seed_everything(config['exp_params']['manual_seed'], True)
 
     datamodule = select_dataloader(config)

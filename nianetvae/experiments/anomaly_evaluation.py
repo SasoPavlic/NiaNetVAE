@@ -11,15 +11,27 @@ class WindowAnomalyRankingMetrics:
     """
     MetroPT-aligned window-ranking metrics.
 
-    Each test window receives one anomaly score: mean squared reconstruction error
+    Each test window receives one window reconstruction error score:
+    mean squared reconstruction error
     over sequence length and features. Metrics are computed globally across all test
     windows in the current cycle, not averaged per segment/time-series.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        fixed_theta: float = 0.61,
+        beta: float = 2.0,
+        coverage_target: float = 0.20,
+        coverage_penalty_lambda: float = 0.50,
+    ):
         self.all_scores = []
         self.all_labels = []
         self.all_ts_ids = []
+        self.fixed_theta = float(fixed_theta)
+        self.beta = float(beta)
+        self.coverage_target = float(coverage_target)
+        self.coverage_penalty_lambda = float(coverage_penalty_lambda)
 
     def to(self, device):
         # Data is accumulated on CPU by design.
@@ -61,25 +73,34 @@ class WindowAnomalyRankingMetrics:
         diagnostics = self._diagnostics(scores=scores, labels=labels, ts_ids=ts_ids)
 
         if not np.isfinite(scores).all():
-            diagnostics.update(self._invalid_ranking_payload("non_finite_scores"))
+            reason = "non_finite_scores"
+            diagnostics.update(self._invalid_ranking_payload(reason))
+            diagnostics.update(self._invalid_pdm_payload(reason))
             return diagnostics
 
         positive_count = int(np.sum(labels == 1))
         negative_count = int(np.sum(labels == 0))
         if positive_count <= 0:
-            diagnostics.update(self._invalid_ranking_payload("no_positive_windows"))
+            reason = "no_positive_windows"
+            diagnostics.update(self._invalid_ranking_payload(reason))
+            diagnostics.update(self._invalid_pdm_payload(reason))
             return diagnostics
         if negative_count <= 0:
-            diagnostics.update(self._invalid_ranking_payload("no_negative_windows"))
+            reason = "no_negative_windows"
+            diagnostics.update(self._invalid_ranking_payload(reason))
+            diagnostics.update(self._invalid_pdm_payload(reason))
             return diagnostics
 
         try:
             window_auprc = float(average_precision_score(labels, scores))
             window_roc_auc = float(roc_auc_score(labels, scores))
             best_f1 = self._best_f1_diagnostics(labels=labels, scores=scores)
+            pdm_diag = self._fixed_theta_pdm_diagnostics(labels=labels, scores=scores)
         except Exception as exc:
             Log.error(f"Error computing window anomaly ranking metrics: {exc}")
-            diagnostics.update(self._invalid_ranking_payload(f"ranking_metric_failed:{exc.__class__.__name__}"))
+            reason = f"ranking_metric_failed:{exc.__class__.__name__}"
+            diagnostics.update(self._invalid_ranking_payload(reason))
+            diagnostics.update(self._invalid_pdm_payload(reason))
             return diagnostics
 
         diagnostics.update(
@@ -89,9 +110,47 @@ class WindowAnomalyRankingMetrics:
                 "ranking_metric_valid": True,
                 "ranking_metric_invalid_reason": None,
                 **best_f1,
+                **pdm_diag,
             }
         )
         return diagnostics
+
+    def _fixed_theta_pdm_diagnostics(self, labels: np.ndarray, scores: np.ndarray) -> dict:
+        threshold = float(self.fixed_theta)
+        predicted_positive = scores >= threshold
+        true_positive = int(np.sum((predicted_positive == 1) & (labels == 1)))
+        false_positive = int(np.sum((predicted_positive == 1) & (labels == 0)))
+        false_negative = int(np.sum((predicted_positive == 0) & (labels == 1)))
+        total = int(labels.shape[0])
+
+        precision = float(true_positive / max(1, true_positive + false_positive))
+        recall = float(true_positive / max(1, true_positive + false_negative))
+        coverage = float((true_positive + false_positive) / max(1, total))
+
+        beta = float(self.beta)
+        beta_sq = beta * beta
+        f_beta = (
+            (1.0 + beta_sq) * precision * recall / (beta_sq * precision + recall + 1e-12)
+        )
+        coverage_excess = max(0.0, coverage - float(self.coverage_target)) / max(1e-12, 1.0 - float(self.coverage_target))
+        quality_raw = float(f_beta) - float(self.coverage_penalty_lambda) * float(coverage_excess)
+        quality_clipped = float(max(0.0, min(1.0, quality_raw)))
+
+        return {
+            "pdm_fixed_theta": round(threshold, 6),
+            "pdm_beta": round(beta, 6),
+            "pdm_coverage_target": round(float(self.coverage_target), 6),
+            "pdm_coverage_penalty_lambda": round(float(self.coverage_penalty_lambda), 6),
+            "pdm_fixed_theta_precision": round(precision, 6),
+            "pdm_fixed_theta_recall": round(recall, 6),
+            "pdm_fixed_theta_fbeta": round(float(f_beta), 6),
+            "pdm_fixed_theta_coverage": round(coverage, 6),
+            "pdm_coverage_excess": round(float(coverage_excess), 6),
+            "pdm_quality_raw": round(float(quality_raw), 6),
+            "pdm_quality_clipped": round(float(quality_clipped), 6),
+            "pdm_metric_valid": True,
+            "pdm_metric_invalid_reason": None,
+        }
 
     @staticmethod
     def _diagnostics(scores: np.ndarray, labels: np.ndarray, ts_ids: np.ndarray) -> dict:
@@ -105,10 +164,10 @@ class WindowAnomalyRankingMetrics:
             "positive_window_count": positive_count,
             "negative_window_count": negative_count,
             "positive_window_rate": round(positive_rate, 6) if positive_rate is not None else None,
-            "score_min": round(float(np.min(finite_scores)), 6) if finite_scores.size else None,
-            "score_max": round(float(np.max(finite_scores)), 6) if finite_scores.size else None,
-            "score_mean": round(float(np.mean(finite_scores)), 6) if finite_scores.size else None,
-            "score_std": round(float(np.std(finite_scores)), 6) if finite_scores.size else None,
+            "window_reconstruction_error_min": round(float(np.min(finite_scores)), 6) if finite_scores.size else None,
+            "window_reconstruction_error_max": round(float(np.max(finite_scores)), 6) if finite_scores.size else None,
+            "window_reconstruction_error_mean": round(float(np.mean(finite_scores)), 6) if finite_scores.size else None,
+            "window_reconstruction_error_std": round(float(np.std(finite_scores)), 6) if finite_scores.size else None,
             "segment_count": int(np.unique(ts_ids).shape[0]) if ts_ids.size else 0,
         }
 
@@ -160,10 +219,10 @@ class WindowAnomalyRankingMetrics:
             "positive_window_count": 0,
             "negative_window_count": 0,
             "positive_window_rate": None,
-            "score_min": None,
-            "score_max": None,
-            "score_mean": None,
-            "score_std": None,
+            "window_reconstruction_error_min": None,
+            "window_reconstruction_error_max": None,
+            "window_reconstruction_error_mean": None,
+            "window_reconstruction_error_std": None,
             "segment_count": 0,
         }
 
@@ -180,6 +239,23 @@ class WindowAnomalyRankingMetrics:
             "best_f1_score": None,
         }
 
+    def _invalid_pdm_payload(self, reason: str) -> dict:
+        return {
+            "pdm_fixed_theta": round(float(self.fixed_theta), 6),
+            "pdm_beta": round(float(self.beta), 6),
+            "pdm_coverage_target": round(float(self.coverage_target), 6),
+            "pdm_coverage_penalty_lambda": round(float(self.coverage_penalty_lambda), 6),
+            "pdm_fixed_theta_precision": None,
+            "pdm_fixed_theta_recall": None,
+            "pdm_fixed_theta_fbeta": None,
+            "pdm_fixed_theta_coverage": None,
+            "pdm_coverage_excess": None,
+            "pdm_quality_raw": None,
+            "pdm_quality_clipped": None,
+            "pdm_metric_valid": False,
+            "pdm_metric_invalid_reason": reason,
+        }
+
     @staticmethod
     def compute_reconstruction_errors(predictions, targets):
         """
@@ -191,5 +267,5 @@ class WindowAnomalyRankingMetrics:
 
     @staticmethod
     def calculate_anomaly_scores(scores, threshold: float):
-        """Convert anomaly scores to binary predictions using a threshold."""
+        """Convert window reconstruction error scores to binary predictions using a threshold."""
         return (scores >= threshold).int()

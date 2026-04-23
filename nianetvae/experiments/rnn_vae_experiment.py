@@ -32,7 +32,14 @@ class RNNVAExperiment(LightningModule):
         self.metrics = EvaluationMetrics()
         # C13.3 policy lock: anomaly metrics are always enabled because obj_pdm depends on them.
         self.compute_anomaly_metrics = True
-        self.anomaly_detection_metrics = WindowAnomalyRankingMetrics()
+        objectives_cfg = dict(kwargs.get("objectives") or {})
+        pdm_cfg = dict(objectives_cfg.get("pdm") or {})
+        self.anomaly_detection_metrics = WindowAnomalyRankingMetrics(
+            fixed_theta=float(pdm_cfg.get("fixed_theta", 0.61)),
+            beta=float(pdm_cfg.get("beta", 2.0)),
+            coverage_target=float(pdm_cfg.get("coverage_target", 0.20)),
+            coverage_penalty_lambda=float(pdm_cfg.get("coverage_penalty_lambda", 0.50)),
+        )
         self.anomaly_metrics = {}
         try:
             self.hold_graph = self.params['retain_first_backpass']
@@ -150,15 +157,28 @@ class RNNVAExperiment(LightningModule):
                 ["Positive Windows", self.anomaly_metrics.get('positive_window_count')],
                 ["Negative Windows", self.anomaly_metrics.get('negative_window_count')],
                 ["Positive Rate", safe_format(self.anomaly_metrics.get('positive_window_rate'))],
-                ["Score Min", safe_format(self.anomaly_metrics.get('score_min'))],
-                ["Score Max", safe_format(self.anomaly_metrics.get('score_max'))],
-                ["Score Mean", safe_format(self.anomaly_metrics.get('score_mean'))],
-                ["Score Std", safe_format(self.anomaly_metrics.get('score_std'))],
+                ["Window Reconstruction Error Min", safe_format(self.anomaly_metrics.get('window_reconstruction_error_min'))],
+                ["Window Reconstruction Error Max", safe_format(self.anomaly_metrics.get('window_reconstruction_error_max'))],
+                ["Window Reconstruction Error Mean", safe_format(self.anomaly_metrics.get('window_reconstruction_error_mean'))],
+                ["Window Reconstruction Error Std", safe_format(self.anomaly_metrics.get('window_reconstruction_error_std'))],
                 ["Segment Count", self.anomaly_metrics.get('segment_count')],
                 ["Best-F1 Threshold", safe_format(self.anomaly_metrics.get('best_f1_threshold'))],
                 ["Best-F1 Precision", safe_format(self.anomaly_metrics.get('best_f1_precision'))],
                 ["Best-F1 Recall", safe_format(self.anomaly_metrics.get('best_f1_recall'))],
                 ["Best-F1 Score", safe_format(self.anomaly_metrics.get('best_f1_score'))],
+                ["PdM Fixed Theta", safe_format(self.anomaly_metrics.get('pdm_fixed_theta'))],
+                ["PdM Beta", safe_format(self.anomaly_metrics.get('pdm_beta'))],
+                ["PdM Coverage Target", safe_format(self.anomaly_metrics.get('pdm_coverage_target'))],
+                ["PdM Coverage Penalty", safe_format(self.anomaly_metrics.get('pdm_coverage_penalty_lambda'))],
+                ["PdM Theta Precision", safe_format(self.anomaly_metrics.get('pdm_fixed_theta_precision'))],
+                ["PdM Theta Recall", safe_format(self.anomaly_metrics.get('pdm_fixed_theta_recall'))],
+                ["PdM Theta Fbeta", safe_format(self.anomaly_metrics.get('pdm_fixed_theta_fbeta'))],
+                ["PdM Theta Coverage", safe_format(self.anomaly_metrics.get('pdm_fixed_theta_coverage'))],
+                ["PdM Coverage Excess", safe_format(self.anomaly_metrics.get('pdm_coverage_excess'))],
+                ["PdM Quality Raw", safe_format(self.anomaly_metrics.get('pdm_quality_raw'))],
+                ["PdM Quality Clipped", safe_format(self.anomaly_metrics.get('pdm_quality_clipped'))],
+                ["PdM Metric Valid", str(self.anomaly_metrics.get('pdm_metric_valid'))],
+                ["PdM Invalid Reason", self.anomaly_metrics.get('pdm_metric_invalid_reason') or "N/A"],
             ]
             Log.info("\nWindow Anomaly Ranking Metrics:")
             Log.info(tabulate(metrics_list, headers=["Metric", "Value"], tablefmt="pretty"))

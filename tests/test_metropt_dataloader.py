@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from log import Log
 from nianetvae.dataloaders.metropt_dataloader import (
@@ -41,6 +42,25 @@ def _write_synth_metropt_csv(tmp_path: Path) -> Path:
         }
     )
     path = tmp_path / "MetroPT3.csv"
+    df.to_csv(path, index=False)
+    return path
+
+
+def _write_synth_metropt_csv_long(tmp_path: Path) -> Path:
+    start = pd.Timestamp("2020-04-11 00:00:00")
+    end = pd.Timestamp("2020-07-20 00:00:00")
+    ts = pd.date_range(start, end, freq="30min")
+    rng = np.random.RandomState(7)
+    data = rng.randn(len(ts), 3).astype(np.float32)
+    df = pd.DataFrame(
+        {
+            "timestamp": ts,
+            "TP2": data[:, 0],
+            "TP3": data[:, 1],
+            "H1": data[:, 2],
+        }
+    )
+    path = tmp_path / "MetroPT3_long.csv"
     df.to_csv(path, index=False)
     return path
 
@@ -174,6 +194,37 @@ def test_metropt_dataloader_per_maint_cycle_0_uses_phase01_test_filter_defaults(
     assert int(split["test_phase2_rows"]) == 0
     assert int(split["test_label_pos_windows"]) >= 0
     assert int(split["test_label_neg_windows"]) > 0
+
+
+def test_metropt_dataloader_per_maint_raises_on_zero_positive_windows_when_phase1_expected(tmp_path: Path) -> None:
+    _ensure_test_logger(tmp_path)
+    csv_path = _write_synth_metropt_csv_long(tmp_path)
+
+    dm = MetroPTDataLoader(
+        dataset_name="MetroPT",
+        data_path=str(csv_path),
+        batch_size=16,
+        seq_len=10,
+        num_workers=0,
+        persistent_workers=False,
+        pin_memory=False,
+        val_size=20,
+        data_percentage=100,
+        rolling_window="2h",
+        train_minutes=12 * 60,
+        post_train_minutes=12 * 60,
+        pre_maint_minutes=120,
+        regime="per_maint",
+        cycle_id=21,
+        stride=2,
+        timestamp_col="timestamp",
+        drop_unnamed_index=True,
+        train_phases=(0, 1),
+        test_phases=(0, 1),
+    )
+
+    with pytest.raises(ValueError, match="zero positive windows after phase filtering"):
+        dm.setup()
 
 
 def test_metropt_segmented_dataset_uses_end_anchor_phase_labels() -> None:

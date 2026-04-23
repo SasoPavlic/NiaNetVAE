@@ -81,7 +81,7 @@ class RNNVAEArchitectureMultiObj(Problem):
     The three objectives are:
       1. The error (from validation/test metrics)
       2. The efficiency objective (params|macs|latency_ms)
-      3. The PdM objective (1 - window_auprc)
+      3. The PdM objective (1 - clipped fixed-theta quality proxy)
     All are minimized.
     """
 
@@ -92,6 +92,7 @@ class RNNVAEArchitectureMultiObj(Problem):
         self.datamodule = runner.ctx.datamodule
         self.dataset_name = runner.ctx.dataset_name
         self.penalty = runner.ctx.penalty
+        self.objective_contract = _resolve_objective_contract(self.config)
         self.iteration = 0
         self.stats = {"trained": 0, "cached": 0, "invalid": 0, "failed": 0}
         self.local_candidate_rows: list[dict[str, Any]] = []
@@ -275,6 +276,7 @@ class RNNVAEArchitectureMultiObj(Problem):
                         obj_error=obj_error,
                         obj_efficiency=obj_efficiency,
                         obj_pdm=obj_pdm,
+                        objective_contract=self.objective_contract,
                     )
                 else:
                     trainer = None
@@ -341,6 +343,7 @@ class RNNVAEArchitectureMultiObj(Problem):
                             obj_error=obj_error,
                             obj_efficiency=obj_efficiency,
                             obj_pdm=obj_pdm,
+                            objective_contract=objective_bundle.get("objective_contract"),
                             start_time=start_time,
                             end_time=end_time,
                             duration=duration
@@ -372,6 +375,7 @@ class RNNVAEArchitectureMultiObj(Problem):
                             obj_error=obj_error,
                             obj_efficiency=obj_efficiency,
                             obj_pdm=obj_pdm,
+                            objective_contract=self.objective_contract,
                             start_time=start_time,
                             end_time=end_time,
                             duration=duration
@@ -692,7 +696,12 @@ class SearchRunner:
             f"fixed_optimizer={self.ctx.config['exp_params'].get('optimizer')} "
             f"obj_error={objective_contract['error_metric']} "
             f"obj_efficiency={objective_contract['efficiency_metric']} "
-            f"obj_pdm=1-{objective_contract['pdm_metric']} "
+            "obj_pdm=1-clip(fbeta(theta)-lambda*coverage_excess,0,1) "
+            f"pdm_metric={objective_contract['pdm_metric']} "
+            f"pdm_fixed_theta={objective_contract.get('pdm_fixed_theta')} "
+            f"pdm_beta={objective_contract.get('pdm_beta')} "
+            f"pdm_coverage_target={objective_contract.get('pdm_coverage_target')} "
+            f"pdm_coverage_penalty_lambda={objective_contract.get('pdm_coverage_penalty_lambda')} "
             f"winner_selection={selection_contract['method']} "
             f"winner_weights="
             f"{selection_contract['weights_normalized']['error']:.4f}/"

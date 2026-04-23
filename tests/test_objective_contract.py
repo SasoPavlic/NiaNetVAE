@@ -11,7 +11,13 @@ def test_resolve_objective_contract_defaults_when_missing() -> None:
     assert contract == {
         "error": {"metric": "SMAPE"},
         "efficiency": {"metric": "macs"},
-        "pdm": {"metric": "window_auprc"},
+        "pdm": {
+            "metric": "fixed_theta_fbeta_covpen",
+            "fixed_theta": 0.61,
+            "beta": 2.0,
+            "coverage_target": 0.2,
+            "coverage_penalty_lambda": 0.5,
+        },
     }
     assert cfg["objectives"] == contract
 
@@ -21,7 +27,7 @@ def test_resolve_objective_contract_normalizes_case() -> None:
         "objectives": {
             "error": {"metric": "rmse"},
             "efficiency": {"metric": "MACS"},
-            "pdm": {"metric": "WINDOW_AUPRC"},
+            "pdm": {"metric": "FIXED_THETA_FBETA_COVPEN"},
         }
     }
 
@@ -29,7 +35,7 @@ def test_resolve_objective_contract_normalizes_case() -> None:
 
     assert contract["error"]["metric"] == "RMSE"
     assert contract["efficiency"]["metric"] == "macs"
-    assert contract["pdm"]["metric"] == "window_auprc"
+    assert contract["pdm"]["metric"] == "fixed_theta_fbeta_covpen"
 
 
 def test_resolve_objective_contract_preserves_selection_block() -> None:
@@ -70,6 +76,12 @@ def test_resolve_objective_contract_invalid_pdm_metric_raises() -> None:
         main._resolve_objective_contract(cfg)
 
 
+def test_resolve_objective_contract_rejects_legacy_window_auprc_metric() -> None:
+    cfg = {"objectives": {"pdm": {"metric": "window_auprc"}}}
+    with pytest.raises(ValueError, match="objectives.pdm.metric"):
+        main._resolve_objective_contract(cfg)
+
+
 def test_config_summary_line_includes_objective_contract_fields() -> None:
     cfg = {
         "workflow": {"mode": "baseline_search"},
@@ -79,7 +91,7 @@ def test_config_summary_line_includes_objective_contract_fields() -> None:
         "objectives": {
             "error": {"metric": "SMAPE"},
             "efficiency": {"metric": "macs"},
-            "pdm": {"metric": "window_auprc"},
+            "pdm": {"metric": "fixed_theta_fbeta_covpen"},
         },
     }
 
@@ -87,7 +99,7 @@ def test_config_summary_line_includes_objective_contract_fields() -> None:
 
     assert "obj_error=SMAPE" in line
     assert "obj_efficiency=macs" in line
-    assert "obj_pdm=window_auprc" in line
+    assert "obj_pdm=fixed_theta_fbeta_covpen" in line
     assert "nsga3_n_partitions=5" in line
     assert "nsga3_effective_population=21" in line
     assert "fixed_optimizer=Adam" in line
@@ -99,7 +111,13 @@ def test_objective_contract_line_contains_locked_semantics() -> None:
     contract = {
         "error": {"metric": "SMAPE"},
         "efficiency": {"metric": "macs"},
-        "pdm": {"metric": "window_auprc"},
+        "pdm": {
+            "metric": "fixed_theta_fbeta_covpen",
+            "fixed_theta": 0.61,
+            "beta": 2.0,
+            "coverage_target": 0.2,
+            "coverage_penalty_lambda": 0.5,
+        },
     }
 
     line = main._objective_contract_line(contract)
@@ -107,7 +125,9 @@ def test_objective_contract_line_contains_locked_semantics() -> None:
     assert line.startswith("OBJECTIVE_CONTRACT ")
     assert "obj_error=SMAPE direction=min" in line
     assert "obj_efficiency=macs direction=min" in line
-    assert "obj_pdm=1-window_auprc direction=min" in line
+    assert "obj_pdm=1-clip(fbeta(theta)-lambda*coverage_excess,0,1) direction=min" in line
+    assert "pdm_metric=fixed_theta_fbeta_covpen" in line
+    assert "pdm_fixed_theta=0.61" in line
     assert "pdm_label_policy=phase0_or_phase1_positive_is_phase1_exclude_phase2" in line
     assert "pdm_eval_slice=test_only" in line
 
@@ -146,7 +166,7 @@ def test_resolve_training_policy_rejects_invalid_values() -> None:
 
 def test_validate_pdm_objective_scope_accepts_metropt_per_maint() -> None:
     cfg = {
-        "objectives": {"pdm": {"metric": "window_auprc"}},
+        "objectives": {"pdm": {"metric": "fixed_theta_fbeta_covpen"}},
         "data_params": {"dataset_name": "MetroPT", "regime": "per_maint"},
     }
 
@@ -155,7 +175,7 @@ def test_validate_pdm_objective_scope_accepts_metropt_per_maint() -> None:
 
 def test_validate_pdm_objective_scope_rejects_other_scope() -> None:
     cfg = {
-        "objectives": {"pdm": {"metric": "window_auprc"}},
+        "objectives": {"pdm": {"metric": "fixed_theta_fbeta_covpen"}},
         "data_params": {"dataset_name": "SMAP", "regime": "single"},
     }
 
@@ -222,3 +242,21 @@ def test_resolve_winner_selection_contract_invalid_weights_raise() -> None:
     }
     with pytest.raises(ValueError, match="sum\\(error, efficiency, pdm\\) must be > 0"):
         main._resolve_winner_selection_contract(cfg_zero_sum)
+
+
+def test_resolve_db_table_name_defaults_and_normalizes() -> None:
+    cfg = {"logging_params": {}}
+    table_name = main._resolve_db_table_name(cfg)
+    assert table_name == "solutions_s1_t7"
+    assert cfg["logging_params"]["db_table_name"] == "solutions_s1_t7"
+
+    cfg_custom = {"logging_params": {"db_table_name": "  my_table  "}}
+    table_name_custom = main._resolve_db_table_name(cfg_custom)
+    assert table_name_custom == "my_table"
+    assert cfg_custom["logging_params"]["db_table_name"] == "my_table"
+
+
+def test_resolve_db_table_name_rejects_blank() -> None:
+    cfg = {"logging_params": {"db_table_name": "   "}}
+    with pytest.raises(ValueError, match="logging_params.db_table_name"):
+        main._resolve_db_table_name(cfg)

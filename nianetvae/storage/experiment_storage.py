@@ -40,15 +40,63 @@ WINDOW_ANOMALY_COLUMNS = {
     "positive_window_count",
     "negative_window_count",
     "positive_window_rate",
-    "score_min",
-    "score_max",
-    "score_mean",
-    "score_std",
+    "window_reconstruction_error_min",
+    "window_reconstruction_error_max",
+    "window_reconstruction_error_mean",
+    "window_reconstruction_error_std",
     "segment_count",
     "best_f1_threshold",
     "best_f1_precision",
     "best_f1_recall",
     "best_f1_score",
+    "pdm_fixed_theta",
+    "pdm_beta",
+    "pdm_coverage_target",
+    "pdm_coverage_penalty_lambda",
+    "pdm_fixed_theta_precision",
+    "pdm_fixed_theta_recall",
+    "pdm_fixed_theta_fbeta",
+    "pdm_fixed_theta_coverage",
+    "pdm_coverage_excess",
+    "pdm_quality_raw",
+    "pdm_quality_clipped",
+    "pdm_metric_valid",
+    "pdm_metric_invalid_reason",
+    "objective_pdm_metric",
+}
+
+WINDOW_ANOMALY_COLUMN_TYPES = {
+    "window_auprc": "REAL",
+    "window_roc_auc": "REAL",
+    "ranking_metric_valid": "BOOLEAN",
+    "ranking_metric_invalid_reason": "TEXT",
+    "window_count": "INTEGER",
+    "positive_window_count": "INTEGER",
+    "negative_window_count": "INTEGER",
+    "positive_window_rate": "REAL",
+    "window_reconstruction_error_min": "REAL",
+    "window_reconstruction_error_max": "REAL",
+    "window_reconstruction_error_mean": "REAL",
+    "window_reconstruction_error_std": "REAL",
+    "segment_count": "INTEGER",
+    "best_f1_threshold": "REAL",
+    "best_f1_precision": "REAL",
+    "best_f1_recall": "REAL",
+    "best_f1_score": "REAL",
+    "pdm_fixed_theta": "REAL",
+    "pdm_beta": "REAL",
+    "pdm_coverage_target": "REAL",
+    "pdm_coverage_penalty_lambda": "REAL",
+    "pdm_fixed_theta_precision": "REAL",
+    "pdm_fixed_theta_recall": "REAL",
+    "pdm_fixed_theta_fbeta": "REAL",
+    "pdm_fixed_theta_coverage": "REAL",
+    "pdm_coverage_excess": "REAL",
+    "pdm_quality_raw": "REAL",
+    "pdm_quality_clipped": "REAL",
+    "pdm_metric_valid": "BOOLEAN",
+    "pdm_metric_invalid_reason": "TEXT",
+    "objective_pdm_metric": "TEXT",
 }
 
 _DB_ENV_VAR_MAP = {
@@ -104,31 +152,64 @@ def _window_anomaly_payload(anomaly: dict | None) -> dict:
         "positive_window_count": _optional_int(anomaly.get("positive_window_count")),
         "negative_window_count": _optional_int(anomaly.get("negative_window_count")),
         "positive_window_rate": _optional_float(anomaly.get("positive_window_rate")),
-        "score_min": _optional_float(anomaly.get("score_min")),
-        "score_max": _optional_float(anomaly.get("score_max")),
-        "score_mean": _optional_float(anomaly.get("score_mean")),
-        "score_std": _optional_float(anomaly.get("score_std")),
+        "window_reconstruction_error_min": _optional_float(anomaly.get("window_reconstruction_error_min")),
+        "window_reconstruction_error_max": _optional_float(anomaly.get("window_reconstruction_error_max")),
+        "window_reconstruction_error_mean": _optional_float(anomaly.get("window_reconstruction_error_mean")),
+        "window_reconstruction_error_std": _optional_float(anomaly.get("window_reconstruction_error_std")),
         "segment_count": _optional_int(anomaly.get("segment_count")),
         "best_f1_threshold": _optional_float(anomaly.get("best_f1_threshold")),
         "best_f1_precision": _optional_float(anomaly.get("best_f1_precision")),
         "best_f1_recall": _optional_float(anomaly.get("best_f1_recall")),
         "best_f1_score": _optional_float(anomaly.get("best_f1_score")),
+        "pdm_fixed_theta": _optional_float(anomaly.get("pdm_fixed_theta")),
+        "pdm_beta": _optional_float(anomaly.get("pdm_beta")),
+        "pdm_coverage_target": _optional_float(anomaly.get("pdm_coverage_target")),
+        "pdm_coverage_penalty_lambda": _optional_float(anomaly.get("pdm_coverage_penalty_lambda")),
+        "pdm_fixed_theta_precision": _optional_float(anomaly.get("pdm_fixed_theta_precision")),
+        "pdm_fixed_theta_recall": _optional_float(anomaly.get("pdm_fixed_theta_recall")),
+        "pdm_fixed_theta_fbeta": _optional_float(anomaly.get("pdm_fixed_theta_fbeta")),
+        "pdm_fixed_theta_coverage": _optional_float(anomaly.get("pdm_fixed_theta_coverage")),
+        "pdm_coverage_excess": _optional_float(anomaly.get("pdm_coverage_excess")),
+        "pdm_quality_raw": _optional_float(anomaly.get("pdm_quality_raw")),
+        "pdm_quality_clipped": _optional_float(anomaly.get("pdm_quality_clipped")),
+        "pdm_metric_valid": _optional_bool(anomaly.get("pdm_metric_valid")),
+        "pdm_metric_invalid_reason": anomaly.get("pdm_metric_invalid_reason"),
     }
 
 
 def _validate_metric_schema(columns: set[str], table_name: str) -> None:
-    legacy_present = sorted(LEGACY_ANOMALY_COLUMNS & columns)
     missing = sorted(WINDOW_ANOMALY_COLUMNS - columns)
-    if legacy_present or missing:
-        details = []
-        if legacy_present:
-            details.append(f"legacy anomaly columns present={legacy_present}")
-        if missing:
-            details.append(f"missing window anomaly columns={missing}")
+    if missing:
         raise ValueError(
-            f"Existing table {table_name!r} does not match the WindowAnomalyRankingMetrics schema. "
-            f"{'; '.join(details)}. Drop/recreate the solutions table before running this code."
+            f"Existing table {table_name!r} is missing required window anomaly/objective columns={missing}."
         )
+    legacy_present = sorted(LEGACY_ANOMALY_COLUMNS & columns)
+    if legacy_present:
+        Log.warning(
+            f"Schema warning for {table_name!r}: legacy anomaly columns present={legacy_present} (kept for compatibility)."
+        )
+
+
+def _sqlite_add_missing_columns(cur, table_name: str, existing_columns: set[str]) -> list[str]:
+    added = []
+    for column_name in sorted(WINDOW_ANOMALY_COLUMNS):
+        if column_name in existing_columns:
+            continue
+        col_type = WINDOW_ANOMALY_COLUMN_TYPES[column_name]
+        cur.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {col_type}")
+        added.append(column_name)
+    return added
+
+
+def _postgres_add_missing_columns(cur, table_name: str, existing_columns: set[str]) -> list[str]:
+    added = []
+    for column_name in sorted(WINDOW_ANOMALY_COLUMNS):
+        if column_name in existing_columns:
+            continue
+        col_type = WINDOW_ANOMALY_COLUMN_TYPES[column_name]
+        cur.execute(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column_name} {col_type}")
+        added.append(column_name)
+    return added
 
 
 def _load_dotenv_if_present(path: str = ".env") -> bool:
@@ -302,19 +383,40 @@ class SQLiteConnector:
                     positive_window_count INTEGER,
                     negative_window_count INTEGER,
                     positive_window_rate REAL,
-                    score_min REAL,
-                    score_max REAL,
-                    score_mean REAL,
-                    score_std REAL,
+                    window_reconstruction_error_min REAL,
+                    window_reconstruction_error_max REAL,
+                    window_reconstruction_error_mean REAL,
+                    window_reconstruction_error_std REAL,
                     segment_count INTEGER,
                     best_f1_threshold REAL,
                     best_f1_precision REAL,
                     best_f1_recall REAL,
                     best_f1_score REAL,
+                    pdm_fixed_theta REAL,
+                    pdm_beta REAL,
+                    pdm_coverage_target REAL,
+                    pdm_coverage_penalty_lambda REAL,
+                    pdm_fixed_theta_precision REAL,
+                    pdm_fixed_theta_recall REAL,
+                    pdm_fixed_theta_fbeta REAL,
+                    pdm_fixed_theta_coverage REAL,
+                    pdm_coverage_excess REAL,
+                    pdm_quality_raw REAL,
+                    pdm_quality_clipped REAL,
+                    pdm_metric_valid INTEGER,
+                    pdm_metric_invalid_reason TEXT,
+                    objective_pdm_metric TEXT,
                     solution_array TEXT
                 );
             ''')
             columns = {row[1] for row in cur.execute(f"PRAGMA table_info({self.table_name})").fetchall()}
+            added_columns = _sqlite_add_missing_columns(cur, self.table_name, columns)
+            if added_columns:
+                Log.info(
+                    f"DB_AUTO_MIGRATION backend=sqlite table={self.table_name} "
+                    f"added_columns={','.join(added_columns)}"
+                )
+                columns = {row[1] for row in cur.execute(f"PRAGMA table_info({self.table_name})").fetchall()}
             _validate_metric_schema(columns, self.table_name)
             conn.commit()
         except Exception as e:
@@ -389,6 +491,7 @@ class SQLiteConnector:
             obj_pdm=None,
             model=None,
             experiment=None,
+            objective_contract=None,
             path=None,
             start_time=None,
             end_time=None,
@@ -435,6 +538,7 @@ class SQLiteConnector:
                 end_time=end_time,
                 duration=duration,
                 anomaly_metrics=anomaly,
+                objective_contract=objective_contract,
             )
 
             if model and path:
@@ -454,6 +558,7 @@ class SQLiteConnector:
             mae, mse, rmse, mape, rmape, smape,
             start_time, end_time, duration,
             anomaly_metrics=None,
+            objective_contract=None,
     ):
         """
         Core insertion logic, retried on SQLITE_BUSY, but will log and continue on errors.
@@ -489,6 +594,7 @@ class SQLiteConnector:
                 'MAPE': float(mape),
                 'RMAPE': float(rmape),
                 'SMAPE': float(smape),
+                'objective_pdm_metric': (objective_contract or {}).get("pdm_metric"),
                 'solution_array': json.dumps(solution.tolist())
             }
             data.update(_window_anomaly_payload(anomaly_metrics))
@@ -557,15 +663,29 @@ class PostgresConnector:
                     positive_window_count INTEGER,
                     negative_window_count INTEGER,
                     positive_window_rate REAL,
-                    score_min REAL,
-                    score_max REAL,
-                    score_mean REAL,
-                    score_std REAL,
+                    window_reconstruction_error_min REAL,
+                    window_reconstruction_error_max REAL,
+                    window_reconstruction_error_mean REAL,
+                    window_reconstruction_error_std REAL,
                     segment_count INTEGER,
                     best_f1_threshold REAL,
                     best_f1_precision REAL,
                     best_f1_recall REAL,
                     best_f1_score REAL,
+                    pdm_fixed_theta REAL,
+                    pdm_beta REAL,
+                    pdm_coverage_target REAL,
+                    pdm_coverage_penalty_lambda REAL,
+                    pdm_fixed_theta_precision REAL,
+                    pdm_fixed_theta_recall REAL,
+                    pdm_fixed_theta_fbeta REAL,
+                    pdm_fixed_theta_coverage REAL,
+                    pdm_coverage_excess REAL,
+                    pdm_quality_raw REAL,
+                    pdm_quality_clipped REAL,
+                    pdm_metric_valid BOOLEAN,
+                    pdm_metric_invalid_reason TEXT,
+                    objective_pdm_metric TEXT,
                     solution_array TEXT
                 );
             ''')
@@ -578,6 +698,21 @@ class PostgresConnector:
                 (self.table_name,),
             )
             columns = {row[0] for row in cur.fetchall()}
+            added_columns = _postgres_add_missing_columns(cur, self.table_name, columns)
+            if added_columns:
+                Log.info(
+                    f"DB_AUTO_MIGRATION backend=postgres table={self.table_name} "
+                    f"added_columns={','.join(added_columns)}"
+                )
+                cur.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = %s
+                    """,
+                    (self.table_name,),
+                )
+                columns = {row[0] for row in cur.fetchall()}
             _validate_metric_schema(columns, self.table_name)
             conn.commit()
         except Exception as e:
@@ -652,6 +787,7 @@ class PostgresConnector:
             obj_pdm=None,
             model=None,
             experiment=None,
+            objective_contract=None,
             path=None,
             start_time=None,
             end_time=None,
@@ -694,6 +830,7 @@ class PostgresConnector:
                 end_time=end_time,
                 duration=duration,
                 anomaly_metrics=anomaly,
+                objective_contract=objective_contract,
             )
 
             if model and path:
@@ -713,6 +850,7 @@ class PostgresConnector:
             mae, mse, rmse, mape, rmape, smape,
             start_time, end_time, duration,
             anomaly_metrics=None,
+            objective_contract=None,
     ):
         conn = None
         try:
@@ -745,6 +883,7 @@ class PostgresConnector:
                 'MAPE': float(mape),
                 'RMAPE': float(rmape),
                 'SMAPE': float(smape),
+                'objective_pdm_metric': (objective_contract or {}).get("pdm_metric"),
                 'solution_array': json.dumps(solution.tolist())
             }
             data.update(_window_anomaly_payload(anomaly_metrics))

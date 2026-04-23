@@ -43,11 +43,11 @@ class _DummyMetrics:
 
 def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
     db_path = tmp_path / "objective_only.sqlite"
-    connector = SQLiteConnector(str(db_path), "solutions")
+    connector = SQLiteConnector(str(db_path), "solutions_s1_t7")
 
     conn = sqlite3.connect(str(db_path))
     try:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(solutions)").fetchall()}
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(solutions_s1_t7)").fetchall()}
         assert {"obj_error", "obj_efficiency", "obj_pdm"}.issubset(columns)
         assert {
             "window_auprc",
@@ -58,15 +58,29 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
             "positive_window_count",
             "negative_window_count",
             "positive_window_rate",
-            "score_min",
-            "score_max",
-            "score_mean",
-            "score_std",
+            "window_reconstruction_error_min",
+            "window_reconstruction_error_max",
+            "window_reconstruction_error_mean",
+            "window_reconstruction_error_std",
             "segment_count",
             "best_f1_threshold",
             "best_f1_precision",
             "best_f1_recall",
             "best_f1_score",
+            "pdm_fixed_theta",
+            "pdm_beta",
+            "pdm_coverage_target",
+            "pdm_coverage_penalty_lambda",
+            "pdm_fixed_theta_precision",
+            "pdm_fixed_theta_recall",
+            "pdm_fixed_theta_fbeta",
+            "pdm_fixed_theta_coverage",
+            "pdm_coverage_excess",
+            "pdm_quality_raw",
+            "pdm_quality_clipped",
+            "pdm_metric_valid",
+            "pdm_metric_invalid_reason",
+            "objective_pdm_metric",
         }.issubset(columns)
         assert "error" not in columns
         assert "complexity" not in columns
@@ -91,15 +105,28 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
             "positive_window_count": 10,
             "negative_window_count": 90,
             "positive_window_rate": 0.1,
-            "score_min": 0.01,
-            "score_max": 1.5,
-            "score_mean": 0.4,
-            "score_std": 0.2,
+            "window_reconstruction_error_min": 0.01,
+            "window_reconstruction_error_max": 1.5,
+            "window_reconstruction_error_mean": 0.4,
+            "window_reconstruction_error_std": 0.2,
             "segment_count": 2,
             "best_f1_threshold": 0.5,
             "best_f1_precision": 0.3,
             "best_f1_recall": 0.8,
             "best_f1_score": 0.4364,
+            "pdm_fixed_theta": 0.61,
+            "pdm_beta": 2.0,
+            "pdm_coverage_target": 0.2,
+            "pdm_coverage_penalty_lambda": 0.5,
+            "pdm_fixed_theta_precision": 0.3,
+            "pdm_fixed_theta_recall": 0.8,
+            "pdm_fixed_theta_fbeta": 0.6250,
+            "pdm_fixed_theta_coverage": 0.1,
+            "pdm_coverage_excess": 0.0,
+            "pdm_quality_raw": 0.6250,
+            "pdm_quality_clipped": 0.6250,
+            "pdm_metric_valid": True,
+            "pdm_metric_invalid_reason": None,
         },
     )
     connector.save_model_and_entry(
@@ -112,14 +139,18 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
         obj_error=1.25,
         obj_efficiency=1234.0,
         obj_pdm=0.33,
+        objective_contract={
+            "pdm_metric": "fixed_theta_fbeta_covpen",
+        },
     )
 
     conn = sqlite3.connect(str(db_path))
     try:
         row = conn.execute(
             "SELECT obj_error, obj_efficiency, obj_pdm, window_auprc, window_roc_auc, "
-            "ranking_metric_valid, window_count, positive_window_count, best_f1_score "
-            "FROM solutions LIMIT 1"
+            "ranking_metric_valid, window_count, positive_window_count, best_f1_score, "
+            "pdm_quality_clipped, objective_pdm_metric "
+            "FROM solutions_s1_t7 LIMIT 1"
         ).fetchone()
         assert row is not None
         assert float(row[0]) == 1.25
@@ -131,6 +162,8 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
         assert int(row[6]) == 100
         assert int(row[7]) == 10
         assert float(row[8]) == 0.4364
+        assert float(row[9]) == 0.625
+        assert str(row[10]) == "fixed_theta_fbeta_covpen"
     finally:
         conn.close()
 
@@ -141,7 +174,7 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
     assert "fitness" not in set(df.columns)
 
 
-def test_sqlite_schema_mismatch_fails_fast_for_old_anomaly_columns(tmp_path: Path):
+def test_sqlite_schema_mismatch_auto_migrates_for_old_anomaly_columns(tmp_path: Path):
     db_path = tmp_path / "old_schema.sqlite"
     conn = sqlite3.connect(str(db_path))
     try:
@@ -159,8 +192,15 @@ def test_sqlite_schema_mismatch_fails_fast_for_old_anomaly_columns(tmp_path: Pat
     finally:
         conn.close()
 
-    with pytest.raises(ValueError, match="WindowAnomalyRankingMetrics schema"):
-        SQLiteConnector(str(db_path), "solutions")
+    SQLiteConnector(str(db_path), "solutions")
+    conn = sqlite3.connect(str(db_path))
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(solutions)").fetchall()}
+        assert "objective_pdm_metric" in columns
+        assert "pdm_fixed_theta" in columns
+        assert "pdm_metric_valid" in columns
+    finally:
+        conn.close()
 
 
 def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: Path):
@@ -214,10 +254,22 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
         "objective_contract": {
             "error_metric": "SMAPE",
             "efficiency_metric": "macs",
-            "pdm_metric": "window_auprc",
+            "pdm_metric": "fixed_theta_fbeta_covpen",
+            "pdm_fixed_theta": 0.61,
+            "pdm_beta": 2.0,
+            "pdm_coverage_target": 0.2,
+            "pdm_coverage_penalty_lambda": 0.5,
         },
         "metrics": {"SMAPE": 1.25},
-        "anomaly_metrics": {"window_auprc": 0.67},
+        "anomaly_metrics": {
+            "window_auprc": 0.67,
+            "pdm_fixed_theta": 0.61,
+            "pdm_fixed_theta_precision": 0.7,
+            "pdm_fixed_theta_recall": 0.8,
+            "pdm_fixed_theta_coverage": 0.3,
+            "pdm_quality_clipped": 0.67,
+            "pdm_metric_valid": True,
+        },
     }
 
     _, meta_path, summary_path = _export_cycle_artifacts(

@@ -44,15 +44,35 @@ def _objective_cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params
         "objectives": {
             "error": {"metric": error_metric},
             "efficiency": {"metric": efficiency_metric},
-            "pdm": {"metric": "window_auprc"},
+            "pdm": {
+                "metric": "fixed_theta_fbeta_covpen",
+                "fixed_theta": 0.61,
+                "beta": 2.0,
+                "coverage_target": 0.20,
+                "coverage_penalty_lambda": 0.50,
+            },
         },
+    }
+
+
+def _pdm_payload(precision: float, recall: float, coverage: float) -> dict:
+    return {
+        "pdm_metric_valid": True,
+        "pdm_metric_invalid_reason": None,
+        "pdm_fixed_theta": 0.61,
+        "pdm_beta": 2.0,
+        "pdm_coverage_target": 0.20,
+        "pdm_coverage_penalty_lambda": 0.50,
+        "pdm_fixed_theta_precision": precision,
+        "pdm_fixed_theta_recall": recall,
+        "pdm_fixed_theta_coverage": coverage,
     }
 
 
 def test_objective_bundle_zero_error_is_valid():
     experiment = SimpleNamespace(
         metrics=_DummyMetrics({"SMAPE": 0.0}),
-        anomaly_metrics={"window_auprc": 0.70},
+        anomaly_metrics=_pdm_payload(precision=0.7, recall=0.7, coverage=0.2),
     )
     model = _TinyModel()
 
@@ -73,7 +93,7 @@ def test_objective_bundle_zero_error_is_valid():
 def test_objective_bundle_uses_raw_smape_value():
     experiment = SimpleNamespace(
         metrics=_DummyMetrics({"SMAPE": 1.23456789}),
-        anomaly_metrics={"window_auprc": 0.80},
+        anomaly_metrics=_pdm_payload(precision=1.0, recall=1.0, coverage=0.2),
     )
     model = _TinyModel()
 
@@ -87,13 +107,13 @@ def test_objective_bundle_uses_raw_smape_value():
 
     assert bundle["obj_error"] == pytest.approx(1.23456789)
     assert bundle["obj_efficiency"] > 0
-    assert bundle["obj_pdm"] == pytest.approx(0.2)
+    assert bundle["obj_pdm"] == pytest.approx(0.0)
 
 
 def test_objective_bundle_penalizes_when_smape_missing():
     experiment = SimpleNamespace(
         metrics=_DummyMetrics({"MAE": 0.1}),
-        anomaly_metrics={"window_auprc": 0.75},
+        anomaly_metrics=_pdm_payload(precision=0.75, recall=0.75, coverage=0.2),
     )
     model = _TinyModel()
 
