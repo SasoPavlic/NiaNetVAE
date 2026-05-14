@@ -45,34 +45,27 @@ def _objective_cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params
             "error": {"metric": error_metric},
             "efficiency": {"metric": efficiency_metric},
             "pdm": {
-                "metric": "fixed_theta_fbeta_covpen",
-                "fixed_theta": 0.61,
-                "beta": 2.0,
-                "coverage_target": 0.20,
-                "coverage_penalty_lambda": 0.50,
+                "metric": "calibrated_risk_gap",
             },
         },
     }
 
 
-def _pdm_payload(precision: float, recall: float, coverage: float) -> dict:
+def _pdm_payload(positive_risk_mean: float, negative_risk_mean: float) -> dict:
+    risk_gap = float(positive_risk_mean) - float(negative_risk_mean)
     return {
         "pdm_metric_valid": True,
         "pdm_metric_invalid_reason": None,
-        "pdm_fixed_theta": 0.61,
-        "pdm_beta": 2.0,
-        "pdm_coverage_target": 0.20,
-        "pdm_coverage_penalty_lambda": 0.50,
-        "pdm_fixed_theta_precision": precision,
-        "pdm_fixed_theta_recall": recall,
-        "pdm_fixed_theta_coverage": coverage,
+        "pdm_positive_risk_mean": positive_risk_mean,
+        "pdm_negative_risk_mean": negative_risk_mean,
+        "pdm_risk_gap": risk_gap,
     }
 
 
 def test_objective_bundle_zero_error_is_valid():
     experiment = SimpleNamespace(
         metrics=_DummyMetrics({"SMAPE": 0.0}),
-        anomaly_metrics=_pdm_payload(precision=0.7, recall=0.7, coverage=0.2),
+        anomaly_metrics=_pdm_payload(positive_risk_mean=0.7, negative_risk_mean=0.2),
     )
     model = _TinyModel()
 
@@ -93,7 +86,7 @@ def test_objective_bundle_zero_error_is_valid():
 def test_objective_bundle_uses_raw_smape_value():
     experiment = SimpleNamespace(
         metrics=_DummyMetrics({"SMAPE": 1.23456789}),
-        anomaly_metrics=_pdm_payload(precision=1.0, recall=1.0, coverage=0.2),
+        anomaly_metrics=_pdm_payload(positive_risk_mean=1.0, negative_risk_mean=0.0),
     )
     model = _TinyModel()
 
@@ -113,7 +106,7 @@ def test_objective_bundle_uses_raw_smape_value():
 def test_objective_bundle_penalizes_when_smape_missing():
     experiment = SimpleNamespace(
         metrics=_DummyMetrics({"MAE": 0.1}),
-        anomaly_metrics=_pdm_payload(precision=0.75, recall=0.75, coverage=0.2),
+        anomaly_metrics=_pdm_payload(positive_risk_mean=0.75, negative_risk_mean=0.25),
     )
     model = _TinyModel()
 

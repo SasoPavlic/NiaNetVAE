@@ -146,6 +146,7 @@ def _run_training_with_model(
 
     started_at = datetime.now()
     trainer.fit(experiment, datamodule=datamodule)
+    experiment.collect_calibration_scores(datamodule.train_dataloader())
     trainer.test(experiment, datamodule=datamodule)
     ended_at = datetime.now()
     duration_s = (ended_at - started_at).total_seconds()

@@ -1,14 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=nianetvae-metropt                             # Job name
-#SBATCH --output=/dev/null                                       # Standard output file
+#SBATCH --output=/d/hpc/home/sasop/outputs/nianetvae-metropt%j.out # Standard output file
 #SBATCH --error=/d/hpc/home/sasop/outputs/nianetvae-metropt%j.err # Standard error file
 #SBATCH --partition=gpu                                          # GPU partition
 #SBATCH --nodes=1                                                # Number of nodes
 #SBATCH --ntasks=1                                               # Number of tasks
 #SBATCH --gres=gpu:1                                             # Request 1 GPU
 #SBATCH --mem-per-gpu=32GB                                       # Memory per GPU
-#SBATCH --time=02:00:00                                          # Maximum runtime
-#SBATCH --cpus-per-task=8
+#SBATCH --time=07:00:00                                          # Maximum runtime
+#SBATCH --cpus-per-task=10
+#SBATCH --exclude=wn211                                          # Avoid node with observed CUDA illegal memory access failures
 
 set -euo pipefail
 

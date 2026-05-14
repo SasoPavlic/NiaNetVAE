@@ -14,60 +14,65 @@ def _targets_and_predictions(scores):
     return targets, predictions
 
 
-def test_window_anomaly_ranking_metrics_compute_global_auc_and_diagnostics():
-    targets, predictions = _targets_and_predictions([0.1, 0.2, 0.8, 0.9])
-    labels = torch.tensor([0, 0, 1, 1], dtype=torch.int64)
-    ts_ids = torch.tensor([0, 0, 1, 1], dtype=torch.int64)
+def _compute_with_calibration(test_scores, labels):
     metrics = WindowAnomalyRankingMetrics()
+    cal_targets, cal_predictions = _targets_and_predictions([0.1, 0.2, 0.3, 0.4])
+    targets, predictions = _targets_and_predictions(test_scores)
+    metrics.update_calibration(predictions=cal_predictions, targets=cal_targets)
+    metrics.update(
+        predictions=predictions,
+        targets=targets,
+        labels=torch.tensor(labels, dtype=torch.int64),
+        ts_ids=torch.arange(len(labels), dtype=torch.int64),
+    )
+    return metrics.compute()
 
-    metrics.update(predictions=predictions, targets=targets, labels=labels, ts_ids=ts_ids)
-    out = metrics.compute()
 
-    assert out["ranking_metric_valid"] is True
-    assert out["ranking_metric_invalid_reason"] is None
-    assert out["window_auprc"] == pytest.approx(1.0)
-    assert out["window_roc_auc"] == pytest.approx(1.0)
+def test_window_anomaly_ranking_metrics_compute_calibrated_risk_gap_diagnostics():
+    out = _compute_with_calibration([0.0, 0.0, 0.5, 0.5], [0, 0, 1, 1])
+
     assert out["window_count"] == 4
     assert out["positive_window_count"] == 2
     assert out["negative_window_count"] == 2
     assert out["positive_window_rate"] == pytest.approx(0.5)
-    assert out["window_reconstruction_error_min"] == pytest.approx(0.1)
-    assert out["window_reconstruction_error_max"] == pytest.approx(0.9)
-    assert out["window_reconstruction_error_mean"] == pytest.approx(0.5)
-    assert out["segment_count"] == 2
-    assert out["best_f1_threshold"] is not None
-    assert out["best_f1_precision"] == pytest.approx(1.0)
-    assert out["best_f1_recall"] == pytest.approx(1.0)
-    assert out["best_f1_score"] == pytest.approx(1.0)
+    assert out["window_reconstruction_error_min"] == pytest.approx(0.0)
+    assert out["window_reconstruction_error_max"] == pytest.approx(0.5)
+    assert out["segment_count"] == 4
+    assert out["calibration_window_count"] == 4
+    assert out["risk_score_min"] == pytest.approx(0.0)
+    assert out["risk_score_max"] == pytest.approx(1.0)
+    assert out["pdm_positive_risk_mean"] == pytest.approx(1.0)
+    assert out["pdm_negative_risk_mean"] == pytest.approx(0.0)
+    assert out["pdm_risk_gap"] == pytest.approx(1.0)
     assert out["pdm_metric_valid"] is True
     assert out["pdm_metric_invalid_reason"] is None
-    assert out["pdm_fixed_theta"] == pytest.approx(0.61)
-    assert out["pdm_fixed_theta_precision"] == pytest.approx(1.0)
-    assert out["pdm_fixed_theta_recall"] == pytest.approx(1.0)
-    assert out["pdm_fixed_theta_coverage"] == pytest.approx(0.5)
-    assert out["pdm_fixed_theta_fbeta"] == pytest.approx(1.0)
-    assert out["pdm_quality_clipped"] == pytest.approx(0.8125, abs=1e-4)
+
+
+def test_window_anomaly_ranking_metrics_no_separation_has_zero_gap():
+    out = _compute_with_calibration([0.2, 0.2, 0.2, 0.2], [0, 0, 1, 1])
+
+    assert out["pdm_positive_risk_mean"] == pytest.approx(0.5)
+    assert out["pdm_negative_risk_mean"] == pytest.approx(0.5)
+    assert out["pdm_risk_gap"] == pytest.approx(0.0)
+
+
+def test_window_anomaly_ranking_metrics_inverted_signal_has_negative_gap():
+    out = _compute_with_calibration([0.5, 0.5, 0.0, 0.0], [0, 0, 1, 1])
+
+    assert out["pdm_positive_risk_mean"] == pytest.approx(0.0)
+    assert out["pdm_negative_risk_mean"] == pytest.approx(1.0)
+    assert out["pdm_risk_gap"] == pytest.approx(-1.0)
 
 
 def test_window_anomaly_ranking_metrics_single_class_is_invalid_with_diagnostics():
-    targets, predictions = _targets_and_predictions([0.1, 0.2, 0.3])
-    labels = torch.tensor([0, 0, 0], dtype=torch.int64)
-    metrics = WindowAnomalyRankingMetrics()
+    out = _compute_with_calibration([0.1, 0.2, 0.3], [0, 0, 0])
 
-    metrics.update(predictions=predictions, targets=targets, labels=labels)
-    out = metrics.compute()
-
-    assert out["ranking_metric_valid"] is False
-    assert out["ranking_metric_invalid_reason"] == "no_positive_windows"
-    assert out["window_auprc"] is None
-    assert out["window_roc_auc"] is None
-    assert out["best_f1_threshold"] is None
     assert out["pdm_metric_valid"] is False
     assert out["pdm_metric_invalid_reason"] == "no_positive_windows"
     assert out["window_count"] == 3
     assert out["positive_window_count"] == 0
     assert out["negative_window_count"] == 3
-    assert out["segment_count"] == 1
+    assert out["segment_count"] == 3
 
 
 def test_window_anomaly_ranking_metrics_detects_non_finite_scores():
@@ -76,10 +81,22 @@ def test_window_anomaly_ranking_metrics_detects_non_finite_scores():
     labels = torch.tensor([0, 1, 0], dtype=torch.int64)
     metrics = WindowAnomalyRankingMetrics()
 
+    cal_targets, cal_predictions = _targets_and_predictions([0.1, 0.2, 0.3])
+    metrics.update_calibration(predictions=cal_predictions, targets=cal_targets)
     metrics.update(predictions=predictions, targets=targets, labels=labels)
     out = metrics.compute()
 
-    assert out["ranking_metric_valid"] is False
-    assert out["ranking_metric_invalid_reason"] == "non_finite_scores"
-    assert out["window_auprc"] is None
-    assert out["window_roc_auc"] is None
+    assert out["pdm_metric_valid"] is False
+    assert out["pdm_metric_invalid_reason"] == "non_finite_scores"
+
+
+def test_window_anomaly_ranking_metrics_missing_calibration_is_invalid():
+    targets, predictions = _targets_and_predictions([0.1, 0.2, 0.3])
+    labels = torch.tensor([0, 1, 0], dtype=torch.int64)
+    metrics = WindowAnomalyRankingMetrics()
+
+    metrics.update(predictions=predictions, targets=targets, labels=labels)
+    out = metrics.compute()
+
+    assert out["pdm_metric_valid"] is False
+    assert out["pdm_metric_invalid_reason"] == "missing_calibration_scores"

@@ -54,11 +54,7 @@ def _cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params") -> dict
             "error": {"metric": error_metric},
             "efficiency": {"metric": efficiency_metric},
             "pdm": {
-                "metric": "fixed_theta_fbeta_covpen",
-                "fixed_theta": 0.61,
-                "beta": 2.0,
-                "coverage_target": 0.20,
-                "coverage_penalty_lambda": 0.50,
+                "metric": "calibrated_risk_gap",
             },
             "selection": {
                 "method": "weighted_ideal_distance",
@@ -71,22 +67,18 @@ def _cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params") -> dict
 
 def _pdm_anomaly_payload(
     *,
-    precision: float = 1.0,
-    recall: float = 1.0,
-    coverage: float = 0.2,
+    positive_risk_mean: float = 0.8,
+    negative_risk_mean: float = 0.2,
     metric_valid: bool = True,
     invalid_reason: str | None = None,
 ) -> dict:
+    risk_gap = float(positive_risk_mean) - float(negative_risk_mean)
     return {
         "pdm_metric_valid": metric_valid,
         "pdm_metric_invalid_reason": invalid_reason,
-        "pdm_fixed_theta": 0.61,
-        "pdm_beta": 2.0,
-        "pdm_coverage_target": 0.20,
-        "pdm_coverage_penalty_lambda": 0.50,
-        "pdm_fixed_theta_precision": precision,
-        "pdm_fixed_theta_recall": recall,
-        "pdm_fixed_theta_coverage": coverage,
+        "pdm_positive_risk_mean": positive_risk_mean,
+        "pdm_negative_risk_mean": negative_risk_mean,
+        "pdm_risk_gap": risk_gap,
     }
 
 
@@ -95,7 +87,7 @@ def test_objective_bundle_uses_selected_raw_error_metric():
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"RMSE": 2.75},
-        anomaly_metrics=_pdm_anomaly_payload(precision=0.40, recall=0.40, coverage=0.20),
+        anomaly_metrics=_pdm_anomaly_payload(positive_risk_mean=0.6, negative_risk_mean=0.4),
         seq_len=16,
         n_features=4,
         cfg=_cfg(error_metric="RMSE"),
@@ -106,23 +98,23 @@ def test_objective_bundle_uses_selected_raw_error_metric():
     assert bundle["obj_efficiency"] > 0
 
 
-def test_objective_bundle_computes_obj_pdm_from_fixed_theta_formula():
+def test_objective_bundle_computes_obj_pdm_from_calibrated_risk_gap_formula():
     model = _TinyModel()
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
-        anomaly_metrics=_pdm_anomaly_payload(precision=0.50, recall=0.80, coverage=0.30),
+        anomaly_metrics=_pdm_anomaly_payload(positive_risk_mean=0.9, negative_risk_mean=0.2),
         seq_len=16,
         n_features=4,
         cfg=_cfg(),
     )
 
     assert bundle["valid"] is True
-    assert bundle["pdm_signal_quality"] == pytest.approx(0.6517857, abs=1e-6)
-    assert bundle["obj_pdm"] == pytest.approx(0.3482143, abs=1e-6)
+    assert bundle["pdm_signal_quality"] == pytest.approx(0.7, abs=1e-6)
+    assert bundle["obj_pdm"] == pytest.approx(0.15, abs=1e-6)
 
 
-def test_objective_bundle_uses_worst_case_when_fixed_theta_diagnostics_missing():
+def test_objective_bundle_uses_worst_case_when_calibrated_risk_diagnostics_missing():
     model = _TinyModel()
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
@@ -135,7 +127,7 @@ def test_objective_bundle_uses_worst_case_when_fixed_theta_diagnostics_missing()
 
     assert bundle["valid"] is True
     assert bundle["reason"] is None
-    assert bundle["pdm_signal_quality"] == pytest.approx(0.0)
+    assert bundle["pdm_signal_quality"] is None
     assert bundle["obj_pdm"] == pytest.approx(1.0)
 
 
@@ -163,7 +155,7 @@ def test_efficiency_macs_backend_falls_back_to_params_when_unavailable(monkeypat
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
-        anomaly_metrics=_pdm_anomaly_payload(precision=0.5, recall=0.5, coverage=0.5),
+        anomaly_metrics=_pdm_anomaly_payload(),
         seq_len=16,
         n_features=4,
         cfg=_cfg(efficiency_metric="macs"),
@@ -184,7 +176,7 @@ def test_efficiency_latency_backend_penalizes_with_reason(monkeypatch):
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
-        anomaly_metrics=_pdm_anomaly_payload(precision=0.5, recall=0.5, coverage=0.5),
+        anomaly_metrics=_pdm_anomaly_payload(),
         seq_len=16,
         n_features=4,
         cfg=_cfg(efficiency_metric="latency_ms"),
@@ -216,7 +208,79 @@ def test_problem_initializes_with_three_objectives(tmp_path):
     assert problem.n_obj == 3
 
 
-def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
+@pytest.mark.parametrize("metric_key", ["SMAPE", "smape"])
+def test_cached_objective_bundle_accepts_case_insensitive_error_metric(metric_key):
+    model = _TinyModel()
+    cached_row = {
+        metric_key: 1.25,
+        "objective_pdm_metric": "calibrated_risk_gap",
+        "pdm_metric_valid": True,
+        "pdm_positive_risk_mean": 0.8,
+        "pdm_negative_risk_mean": 0.2,
+        "pdm_risk_gap": 0.6,
+    }
+
+    bundle = objective_engine.calculate_objective_bundle_from_cached_row(
+        model=model,
+        cached_row=cached_row,
+        seq_len=16,
+        n_features=4,
+        cfg=_cfg(error_metric="SMAPE"),
+    )
+
+    assert bundle["valid"] is True
+    assert bundle["obj_error"] == pytest.approx(1.25)
+    assert bundle["obj_pdm"] == pytest.approx(0.2)
+
+
+def test_cached_objective_bundle_prefers_exact_metric_key_over_lowercase_fallback():
+    model = _TinyModel()
+    cached_row = {
+        "SMAPE": 1.25,
+        "smape": 9.99,
+        "objective_pdm_metric": "calibrated_risk_gap",
+        "pdm_metric_valid": True,
+        "pdm_positive_risk_mean": 0.8,
+        "pdm_negative_risk_mean": 0.2,
+        "pdm_risk_gap": 0.6,
+    }
+
+    bundle = objective_engine.calculate_objective_bundle_from_cached_row(
+        model=model,
+        cached_row=cached_row,
+        seq_len=16,
+        n_features=4,
+        cfg=_cfg(error_metric="SMAPE"),
+    )
+
+    assert bundle["valid"] is True
+    assert bundle["obj_error"] == pytest.approx(1.25)
+
+
+def test_cached_objective_bundle_rejects_missing_error_metric():
+    model = _TinyModel()
+    cached_row = {
+        "MAE": 1.25,
+        "objective_pdm_metric": "calibrated_risk_gap",
+        "pdm_metric_valid": True,
+        "pdm_positive_risk_mean": 0.8,
+        "pdm_negative_risk_mean": 0.2,
+        "pdm_risk_gap": 0.6,
+    }
+
+    bundle = objective_engine.calculate_objective_bundle_from_cached_row(
+        model=model,
+        cached_row=cached_row,
+        seq_len=16,
+        n_features=4,
+        cfg=_cfg(error_metric="SMAPE"),
+    )
+
+    assert bundle["valid"] is False
+    assert bundle["reason"] == "missing_or_invalid_error_metric:SMAPE"
+
+
+def test_cached_evaluation_uses_db_then_memory_cache(monkeypatch, tmp_path):
     class _CachedModel(torch.nn.Module):
         def __init__(self, solution, **kwargs):
             super().__init__()
@@ -238,7 +302,12 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
             return {"signal": x, "reconstructed": x}
 
     class _DummyConn:
+        def __init__(self):
+            self.get_entries_calls = 0
+            self.save_calls = 0
+
         def get_entries(self, hash_id, dataset_name):
+            self.get_entries_calls += 1
             return pd.DataFrame(
                 [
                     {
@@ -247,17 +316,13 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
                         "obj_error": 1.5,
                         "obj_efficiency": 10.0,
                         "obj_pdm": 0.4,
-                        "MAE": 0.1,
-                        "MSE": 0.2,
-                        "RMSE": 0.3,
-                        "MAPE": 0.4,
-                        "RMAPE": 0.5,
-                        "SMAPE": 1.5,
-                        "window_auprc": 0.6,
-                        "objective_pdm_metric": "fixed_theta_fbeta_covpen",
-                        "window_roc_auc": 0.7,
-                        "ranking_metric_valid": True,
-                        "ranking_metric_invalid_reason": None,
+                        "mae": 0.1,
+                        "mse": 0.2,
+                        "rmse": 0.3,
+                        "mape": 0.4,
+                        "rmape": 0.5,
+                        "smape": 1.5,
+                        "objective_pdm_metric": "calibrated_risk_gap",
                         "window_count": 10,
                         "positive_window_count": 2,
                         "negative_window_count": 8,
@@ -267,21 +332,9 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
                         "window_reconstruction_error_mean": 0.5,
                         "window_reconstruction_error_std": 0.1,
                         "segment_count": 1,
-                        "best_f1_threshold": 0.4,
-                        "best_f1_precision": 0.5,
-                        "best_f1_recall": 1.0,
-                        "best_f1_score": 0.6667,
-                        "pdm_fixed_theta": 0.61,
-                        "pdm_beta": 2.0,
-                        "pdm_coverage_target": 0.2,
-                        "pdm_coverage_penalty_lambda": 0.5,
-                        "pdm_fixed_theta_precision": 0.5,
-                        "pdm_fixed_theta_recall": 1.0,
-                        "pdm_fixed_theta_fbeta": 0.8333,
-                        "pdm_fixed_theta_coverage": 0.4,
-                        "pdm_coverage_excess": 0.25,
-                        "pdm_quality_raw": 0.7083,
-                        "pdm_quality_clipped": 0.7083,
+                        "pdm_positive_risk_mean": 0.7,
+                        "pdm_negative_risk_mean": 0.5,
+                        "pdm_risk_gap": 0.2,
                         "pdm_metric_valid": True,
                         "pdm_metric_invalid_reason": None,
                     }
@@ -289,14 +342,16 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
             )
 
         def save_model_and_entry(self, **kwargs):
+            self.save_calls += 1
             return None
 
     monkeypatch.setattr(runner_module, "RNNVAE", _CachedModel)
     cfg = {**_cfg(), "logging_params": {"save_dir": str(tmp_path)}}
+    conn = _DummyConn()
     ctx = runner_module.SearchRuntimeContext(
         run_uuid="test-run",
         config=cfg,
-        conn=_DummyConn(),
+        conn=conn,
         datamodule=SimpleNamespace(),
         dataset_name="MetroPT_cycle00",
     )
@@ -312,6 +367,108 @@ def test_cached_evaluation_emits_three_objective_values(monkeypatch, tmp_path):
     assert "F" in out
     assert out["F"].shape == (2, 3)
     assert np.isfinite(out["F"]).all()
+    assert out["F"][0].tolist() == pytest.approx(out["F"][1].tolist())
+    assert conn.get_entries_calls == 1
+    assert conn.save_calls == 0
+    assert problem.stats["cached"] == 2
+    assert problem.stats["cached_db"] == 1
+    assert problem.stats["cached_memory"] == 1
+    assert problem.stats["cache_miss"] == 0
+
+
+def test_duplicate_hash_trains_once_then_uses_memory_cache(monkeypatch, tmp_path):
+    class _TrainableModel(torch.nn.Module):
+        def __init__(self, solution, **kwargs):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(4))
+            self.hash_id = "duplicate-hash"
+            self.is_valid = True
+            self.encoding_layers = [2]
+            self.decoding_layers = [2]
+            self.bottleneck_size = 2
+
+        def get_hash(self):
+            return self.hash_id
+
+        def forward(self, batch):
+            if isinstance(batch, dict):
+                x = batch["signal"]
+            else:
+                x = batch
+            return {"signal": x, "reconstructed": x}
+
+    class _DummyExperiment:
+        def __init__(self, *args, **kwargs):
+            self.metrics = _DummyMetrics({"SMAPE": 1.25})
+            self.anomaly_metrics = _pdm_anomaly_payload(
+                positive_risk_mean=0.7,
+                negative_risk_mean=0.5,
+            )
+
+        def collect_calibration_scores(self, *args, **kwargs):
+            return None
+
+    class _DummyTrainer:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def fit(self, *args, **kwargs):
+            return None
+
+        def test(self, *args, **kwargs):
+            return None
+
+    class _DummyDataModule:
+        def train_dataloader(self):
+            return []
+
+    class _EmptyConn:
+        def __init__(self):
+            self.get_entries_calls = 0
+            self.save_calls = 0
+
+        def get_entries(self, hash_id, dataset_name):
+            self.get_entries_calls += 1
+            return pd.DataFrame()
+
+        def save_model_and_entry(self, **kwargs):
+            self.save_calls += 1
+            return None
+
+    monkeypatch.setattr(runner_module, "RNNVAE", _TrainableModel)
+    monkeypatch.setattr(runner_module, "RNNVAExperiment", _DummyExperiment)
+    monkeypatch.setattr(runner_module, "Trainer", _DummyTrainer)
+
+    cfg = {
+        **_cfg(),
+        "logging_params": {"save_dir": str(tmp_path)},
+        "trainer_params": {},
+    }
+    conn = _EmptyConn()
+    ctx = runner_module.SearchRuntimeContext(
+        run_uuid="test-run",
+        config=cfg,
+        conn=conn,
+        datamodule=_DummyDataModule(),
+        dataset_name="MetroPT_cycle00",
+    )
+    runner = runner_module.SearchRunner(ctx)
+    problem = runner_module.RNNVAEArchitectureMultiObj(
+        dimension=RNNVAE.GENE_DIMENSION,
+        runner=runner,
+    )
+
+    out = {}
+    problem._evaluate(np.zeros((2, RNNVAE.GENE_DIMENSION), dtype=np.float32), out)
+
+    assert out["F"].shape == (2, 3)
+    assert out["F"][0].tolist() == pytest.approx(out["F"][1].tolist())
+    assert conn.get_entries_calls == 1
+    assert conn.save_calls == 1
+    assert problem.stats["trained"] == 1
+    assert problem.stats["cached"] == 1
+    assert problem.stats["cached_memory"] == 1
+    assert problem.stats["cached_db"] == 0
 
 
 def test_cached_objective_bundle_requires_contract_provenance_match():
@@ -323,14 +480,10 @@ def test_cached_objective_bundle_requires_contract_provenance_match():
         "obj_efficiency": 10.0,
         "obj_pdm": 0.2,
         "objective_pdm_metric": None,
-        "pdm_fixed_theta": 0.61,
-        "pdm_beta": 2.0,
-        "pdm_coverage_target": 0.2,
-        "pdm_coverage_penalty_lambda": 0.5,
         "pdm_metric_valid": True,
-        "pdm_fixed_theta_precision": 0.8,
-        "pdm_fixed_theta_recall": 0.8,
-        "pdm_fixed_theta_coverage": 0.2,
+        "pdm_positive_risk_mean": 0.8,
+        "pdm_negative_risk_mean": 0.2,
+        "pdm_risk_gap": 0.6,
     }
 
     bundle = objective_engine.calculate_objective_bundle_from_cached_row(
@@ -477,7 +630,7 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
             "objective_reason": None,
             "objective_contract": objective_engine._resolve_objective_contract(_cfg()),
             "metrics": {},
-            "anomaly_metrics": _pdm_anomaly_payload(precision=1.0, recall=1.0, coverage=0.2),
+            "anomaly_metrics": _pdm_anomaly_payload(positive_risk_mean=1.0, negative_risk_mean=0.0),
         },
     )
     monkeypatch.setattr(runner_module.torch, "save", lambda *args, **kwargs: None)

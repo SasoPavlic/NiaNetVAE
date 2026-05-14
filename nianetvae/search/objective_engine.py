@@ -7,7 +7,7 @@ import torch
 from log import Log
 
 DEFAULT_PENALTY = int(9e10)
-PDM_METRIC_FIXED_THETA = "fixed_theta_fbeta_covpen"
+PDM_METRIC_CALIBRATED_RISK_GAP = "calibrated_risk_gap"
 
 
 def _safe_float(value) -> float | None:
@@ -24,27 +24,11 @@ def _resolve_objective_contract(cfg: dict | None = None) -> dict:
     error_metric = str(((objectives.get("error") or {}).get("metric") or "SMAPE")).strip().upper()
     efficiency_metric = str(((objectives.get("efficiency") or {}).get("metric") or "macs")).strip().lower()
     pdm_cfg = dict(objectives.get("pdm") or {})
-    pdm_metric = str((pdm_cfg.get("metric") or PDM_METRIC_FIXED_THETA)).strip().lower()
-    pdm_fixed_theta = _safe_float(pdm_cfg.get("fixed_theta"))
-    if pdm_fixed_theta is None:
-        pdm_fixed_theta = 0.61
-    pdm_beta = _safe_float(pdm_cfg.get("beta"))
-    if pdm_beta is None:
-        pdm_beta = 2.0
-    pdm_coverage_target = _safe_float(pdm_cfg.get("coverage_target"))
-    if pdm_coverage_target is None:
-        pdm_coverage_target = 0.20
-    pdm_coverage_penalty_lambda = _safe_float(pdm_cfg.get("coverage_penalty_lambda"))
-    if pdm_coverage_penalty_lambda is None:
-        pdm_coverage_penalty_lambda = 0.50
+    pdm_metric = str((pdm_cfg.get("metric") or PDM_METRIC_CALIBRATED_RISK_GAP)).strip().lower()
     return {
         "error_metric": error_metric,
         "efficiency_metric": efficiency_metric,
         "pdm_metric": pdm_metric,
-        "pdm_fixed_theta": float(pdm_fixed_theta),
-        "pdm_beta": float(pdm_beta),
-        "pdm_coverage_target": float(pdm_coverage_target),
-        "pdm_coverage_penalty_lambda": float(pdm_coverage_penalty_lambda),
     }
 
 
@@ -208,16 +192,19 @@ def _compute_efficiency_objective(model, metric_name: str, seq_len: int, n_featu
 def _metrics_payload_from_cached_entry(entry: dict | None) -> dict:
     entry = entry or {}
     metric_keys = ("MAE", "MSE", "RMSE", "MAPE", "RMAPE", "SMAPE")
-    return {metric_key: entry.get(metric_key) for metric_key in metric_keys}
+    normalized_entry = {str(key).lower(): value for key, value in entry.items()}
+    payload = {}
+    for metric_key in metric_keys:
+        if metric_key in entry:
+            payload[metric_key] = entry.get(metric_key)
+        else:
+            payload[metric_key] = normalized_entry.get(metric_key.lower())
+    return payload
 
 
 def _anomaly_payload_from_cached_entry(entry: dict | None) -> dict:
     entry = entry or {}
     keys = (
-        "window_auprc",
-        "window_roc_auc",
-        "ranking_metric_valid",
-        "ranking_metric_invalid_reason",
         "window_count",
         "positive_window_count",
         "negative_window_count",
@@ -227,21 +214,9 @@ def _anomaly_payload_from_cached_entry(entry: dict | None) -> dict:
         "window_reconstruction_error_mean",
         "window_reconstruction_error_std",
         "segment_count",
-        "best_f1_threshold",
-        "best_f1_precision",
-        "best_f1_recall",
-        "best_f1_score",
-        "pdm_fixed_theta",
-        "pdm_beta",
-        "pdm_coverage_target",
-        "pdm_coverage_penalty_lambda",
-        "pdm_fixed_theta_precision",
-        "pdm_fixed_theta_recall",
-        "pdm_fixed_theta_fbeta",
-        "pdm_fixed_theta_coverage",
-        "pdm_coverage_excess",
-        "pdm_quality_raw",
-        "pdm_quality_clipped",
+        "pdm_positive_risk_mean",
+        "pdm_negative_risk_mean",
+        "pdm_risk_gap",
         "pdm_metric_valid",
         "pdm_metric_invalid_reason",
     )
@@ -263,68 +238,22 @@ def _validate_cached_row_objective_contract(cached_row: dict | None, objective_c
 
     if cached_metric != expected_metric:
         return False, "objective_pdm_metric_mismatch"
-    if not _isclose_optional(cached_row.get("pdm_fixed_theta"), objective_contract.get("pdm_fixed_theta")):
-        return False, "pdm_fixed_theta_mismatch"
-    if not _isclose_optional(cached_row.get("pdm_beta"), objective_contract.get("pdm_beta")):
-        return False, "pdm_beta_mismatch"
-    if not _isclose_optional(cached_row.get("pdm_coverage_target"), objective_contract.get("pdm_coverage_target")):
-        return False, "pdm_coverage_target_mismatch"
-    if not _isclose_optional(
-        cached_row.get("pdm_coverage_penalty_lambda"),
-        objective_contract.get("pdm_coverage_penalty_lambda"),
-    ):
-        return False, "pdm_coverage_penalty_lambda_mismatch"
     return True, None
 
 
-def _compute_fixed_theta_quality(anomaly_metrics: dict, objective_contract: dict) -> tuple[float, str | None]:
+def _compute_calibrated_risk_gap_objective(anomaly_metrics: dict) -> tuple[float, float | None, str | None]:
     anomaly_metrics = anomaly_metrics or {}
     metric_valid = anomaly_metrics.get("pdm_metric_valid")
     invalid_reason = anomaly_metrics.get("pdm_metric_invalid_reason")
     if metric_valid is False:
-        return 0.0, str(invalid_reason or "pdm_metric_invalid")
+        return 1.0, None, str(invalid_reason or "pdm_metric_invalid")
 
-    precision = _safe_float(anomaly_metrics.get("pdm_fixed_theta_precision"))
-    recall = _safe_float(anomaly_metrics.get("pdm_fixed_theta_recall"))
-    coverage = _safe_float(anomaly_metrics.get("pdm_fixed_theta_coverage"))
-    beta = _safe_float(objective_contract.get("pdm_beta"))
-    coverage_target = _safe_float(objective_contract.get("pdm_coverage_target"))
-    coverage_penalty_lambda = _safe_float(objective_contract.get("pdm_coverage_penalty_lambda"))
-    if (
-        precision is None
-        or recall is None
-        or coverage is None
-        or beta is None
-        or coverage_target is None
-        or coverage_penalty_lambda is None
-    ):
-        return 0.0, str(invalid_reason or "missing_fixed_theta_diagnostics")
-    if beta <= 0:
-        return 0.0, "invalid_beta"
-    if coverage_target < 0 or coverage_target >= 1:
-        return 0.0, "invalid_coverage_target"
-    if coverage_penalty_lambda < 0:
-        return 0.0, "invalid_coverage_penalty_lambda"
-    if not _isclose_optional(anomaly_metrics.get("pdm_fixed_theta"), objective_contract.get("pdm_fixed_theta")):
-        return 0.0, "pdm_fixed_theta_contract_mismatch"
-    if not _isclose_optional(anomaly_metrics.get("pdm_beta"), objective_contract.get("pdm_beta")):
-        return 0.0, "pdm_beta_contract_mismatch"
-    if not _isclose_optional(anomaly_metrics.get("pdm_coverage_target"), objective_contract.get("pdm_coverage_target")):
-        return 0.0, "pdm_coverage_target_contract_mismatch"
-    if not _isclose_optional(
-        anomaly_metrics.get("pdm_coverage_penalty_lambda"),
-        objective_contract.get("pdm_coverage_penalty_lambda"),
-    ):
-        return 0.0, "pdm_coverage_penalty_lambda_contract_mismatch"
-    beta_sq = float(beta) * float(beta)
-    denom = beta_sq * float(precision) + float(recall) + 1e-12
-    f_beta = ((1.0 + beta_sq) * float(precision) * float(recall)) / denom
-    if not math.isfinite(f_beta):
-        return 0.0, "invalid_fixed_theta_fbeta"
-    coverage_excess = max(0.0, float(coverage) - float(coverage_target)) / max(1e-12, 1.0 - float(coverage_target))
-    quality_raw = float(f_beta) - float(coverage_penalty_lambda) * float(coverage_excess)
-    quality = float(max(0.0, min(1.0, quality_raw)))
-    return quality, None
+    risk_gap = _safe_float(anomaly_metrics.get("pdm_risk_gap"))
+    if risk_gap is None:
+        return 1.0, None, str(invalid_reason or "missing_calibrated_risk_gap")
+
+    obj_pdm = float(max(0.0, min(1.0, 0.5 * (1.0 - float(risk_gap)))))
+    return obj_pdm, float(risk_gap), None
 
 
 def calculate_objective_bundle(
@@ -376,16 +305,15 @@ def calculate_objective_bundle(
         )
 
     pdm_metric_key = objective_contract["pdm_metric"]
-    if pdm_metric_key == PDM_METRIC_FIXED_THETA:
-        pdm_signal_quality, pdm_fallback_reason = _compute_fixed_theta_quality(
+    if pdm_metric_key == PDM_METRIC_CALIBRATED_RISK_GAP:
+        obj_pdm, pdm_signal_quality, pdm_fallback_reason = _compute_calibrated_risk_gap_objective(
             anomaly_metrics=anomaly_metrics,
-            objective_contract=objective_contract,
         )
         if pdm_fallback_reason:
             Log.warning(
                 "OBJECTIVE_PDM_FALLBACK "
                 f"metric={pdm_metric_key} reason={pdm_fallback_reason} "
-                "fallback_value=0.0 penalty=false"
+                "fallback_obj_pdm=1.0 penalty=false"
             )
     else:
         return _penalty_objective_bundle(
@@ -394,7 +322,7 @@ def calculate_objective_bundle(
             penalty=penalty,
         )
 
-    obj_pdm = _safe_float(1.0 - pdm_signal_quality)
+    obj_pdm = _safe_float(obj_pdm)
     if obj_pdm is None:
         return _penalty_objective_bundle(
             reason="invalid_obj_pdm",
@@ -409,7 +337,7 @@ def calculate_objective_bundle(
         "obj_error": float(obj_error),
         "obj_efficiency": float(obj_efficiency),
         "obj_pdm": float(obj_pdm),
-        "pdm_signal_quality": float(pdm_signal_quality),
+        "pdm_signal_quality": None if pdm_signal_quality is None else float(pdm_signal_quality),
     }
 
 

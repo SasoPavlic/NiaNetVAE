@@ -43,17 +43,13 @@ class _DummyMetrics:
 
 def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
     db_path = tmp_path / "objective_only.sqlite"
-    connector = SQLiteConnector(str(db_path), "solutions_s1_t7")
+    connector = SQLiteConnector(str(db_path), "solutions_finetune_riskgap")
 
     conn = sqlite3.connect(str(db_path))
     try:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(solutions_s1_t7)").fetchall()}
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(solutions_finetune_riskgap)").fetchall()}
         assert {"obj_error", "obj_efficiency", "obj_pdm"}.issubset(columns)
         assert {
-            "window_auprc",
-            "window_roc_auc",
-            "ranking_metric_valid",
-            "ranking_metric_invalid_reason",
             "window_count",
             "positive_window_count",
             "negative_window_count",
@@ -62,22 +58,19 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
             "window_reconstruction_error_max",
             "window_reconstruction_error_mean",
             "window_reconstruction_error_std",
+            "calibration_window_count",
+            "calibration_window_reconstruction_error_min",
+            "calibration_window_reconstruction_error_max",
+            "calibration_window_reconstruction_error_mean",
+            "calibration_window_reconstruction_error_std",
+            "risk_score_min",
+            "risk_score_max",
+            "risk_score_mean",
+            "risk_score_std",
             "segment_count",
-            "best_f1_threshold",
-            "best_f1_precision",
-            "best_f1_recall",
-            "best_f1_score",
-            "pdm_fixed_theta",
-            "pdm_beta",
-            "pdm_coverage_target",
-            "pdm_coverage_penalty_lambda",
-            "pdm_fixed_theta_precision",
-            "pdm_fixed_theta_recall",
-            "pdm_fixed_theta_fbeta",
-            "pdm_fixed_theta_coverage",
-            "pdm_coverage_excess",
-            "pdm_quality_raw",
-            "pdm_quality_clipped",
+            "pdm_positive_risk_mean",
+            "pdm_negative_risk_mean",
+            "pdm_risk_gap",
             "pdm_metric_valid",
             "pdm_metric_invalid_reason",
             "objective_pdm_metric",
@@ -90,6 +83,10 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
         assert "precision" not in columns
         assert "recall" not in columns
         assert "f1_score" not in columns
+        assert "window_auprc" not in columns
+        assert "window_roc_auc" not in columns
+        assert "ranking_metric_valid" not in columns
+        assert "best_f1_score" not in columns
     finally:
         conn.close()
 
@@ -97,10 +94,6 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
     experiment = SimpleNamespace(
         metrics=_DummyMetrics(),
         anomaly_metrics={
-            "window_auprc": 0.67,
-            "window_roc_auc": 0.72,
-            "ranking_metric_valid": True,
-            "ranking_metric_invalid_reason": None,
             "window_count": 100,
             "positive_window_count": 10,
             "negative_window_count": 90,
@@ -109,22 +102,19 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
             "window_reconstruction_error_max": 1.5,
             "window_reconstruction_error_mean": 0.4,
             "window_reconstruction_error_std": 0.2,
+            "calibration_window_count": 20,
+            "calibration_window_reconstruction_error_min": 0.01,
+            "calibration_window_reconstruction_error_max": 1.0,
+            "calibration_window_reconstruction_error_mean": 0.3,
+            "calibration_window_reconstruction_error_std": 0.1,
+            "risk_score_min": 0.05,
+            "risk_score_max": 1.0,
+            "risk_score_mean": 0.4,
+            "risk_score_std": 0.2,
             "segment_count": 2,
-            "best_f1_threshold": 0.5,
-            "best_f1_precision": 0.3,
-            "best_f1_recall": 0.8,
-            "best_f1_score": 0.4364,
-            "pdm_fixed_theta": 0.61,
-            "pdm_beta": 2.0,
-            "pdm_coverage_target": 0.2,
-            "pdm_coverage_penalty_lambda": 0.5,
-            "pdm_fixed_theta_precision": 0.3,
-            "pdm_fixed_theta_recall": 0.8,
-            "pdm_fixed_theta_fbeta": 0.6250,
-            "pdm_fixed_theta_coverage": 0.1,
-            "pdm_coverage_excess": 0.0,
-            "pdm_quality_raw": 0.6250,
-            "pdm_quality_clipped": 0.6250,
+            "pdm_positive_risk_mean": 0.8,
+            "pdm_negative_risk_mean": 0.2,
+            "pdm_risk_gap": 0.6,
             "pdm_metric_valid": True,
             "pdm_metric_invalid_reason": None,
         },
@@ -140,30 +130,26 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
         obj_efficiency=1234.0,
         obj_pdm=0.33,
         objective_contract={
-            "pdm_metric": "fixed_theta_fbeta_covpen",
+            "pdm_metric": "calibrated_risk_gap",
         },
     )
 
     conn = sqlite3.connect(str(db_path))
     try:
         row = conn.execute(
-            "SELECT obj_error, obj_efficiency, obj_pdm, window_auprc, window_roc_auc, "
-            "ranking_metric_valid, window_count, positive_window_count, best_f1_score, "
-            "pdm_quality_clipped, objective_pdm_metric "
-            "FROM solutions_s1_t7 LIMIT 1"
+            "SELECT obj_error, obj_efficiency, obj_pdm, "
+            "window_count, positive_window_count, "
+            "pdm_risk_gap, objective_pdm_metric "
+            "FROM solutions_finetune_riskgap LIMIT 1"
         ).fetchone()
         assert row is not None
         assert float(row[0]) == 1.25
         assert float(row[1]) == 1234.0
         assert float(row[2]) == 0.33
-        assert float(row[3]) == 0.67
-        assert float(row[4]) == 0.72
-        assert bool(row[5]) is True
-        assert int(row[6]) == 100
-        assert int(row[7]) == 10
-        assert float(row[8]) == 0.4364
-        assert float(row[9]) == 0.625
-        assert str(row[10]) == "fixed_theta_fbeta_covpen"
+        assert int(row[3]) == 100
+        assert int(row[4]) == 10
+        assert float(row[5]) == 0.6
+        assert str(row[6]) == "calibrated_risk_gap"
     finally:
         conn.close()
 
@@ -197,7 +183,8 @@ def test_sqlite_schema_mismatch_auto_migrates_for_old_anomaly_columns(tmp_path: 
     try:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(solutions)").fetchall()}
         assert "objective_pdm_metric" in columns
-        assert "pdm_fixed_theta" in columns
+        assert "pdm_risk_gap" in columns
+        assert "calibration_window_count" in columns
         assert "pdm_metric_valid" in columns
     finally:
         conn.close()
@@ -249,25 +236,18 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
         "obj_error": 1.25,
         "obj_efficiency": 1234.0,
         "obj_pdm": 0.33,
-        "pdm_signal_quality": 0.67,
+        "pdm_signal_quality": 0.6,
         "objective_reason": None,
         "objective_contract": {
             "error_metric": "SMAPE",
             "efficiency_metric": "macs",
-            "pdm_metric": "fixed_theta_fbeta_covpen",
-            "pdm_fixed_theta": 0.61,
-            "pdm_beta": 2.0,
-            "pdm_coverage_target": 0.2,
-            "pdm_coverage_penalty_lambda": 0.5,
+            "pdm_metric": "calibrated_risk_gap",
         },
         "metrics": {"SMAPE": 1.25},
         "anomaly_metrics": {
-            "window_auprc": 0.67,
-            "pdm_fixed_theta": 0.61,
-            "pdm_fixed_theta_precision": 0.7,
-            "pdm_fixed_theta_recall": 0.8,
-            "pdm_fixed_theta_coverage": 0.3,
-            "pdm_quality_clipped": 0.67,
+            "pdm_positive_risk_mean": 0.8,
+            "pdm_negative_risk_mean": 0.2,
+            "pdm_risk_gap": 0.6,
             "pdm_metric_valid": True,
         },
     }
@@ -292,8 +272,6 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
     assert meta["training_policy"]["optimizer"] == "Adam"
     assert meta["training_policy"]["learning_rate"] == 0.003
     assert meta["training_policy"]["weight_decay"] == 0.0
-    assert meta["final_training_anomaly_metrics"]["window_auprc"] == 0.67
-
     final_training = summary["final_training"]
     assert final_training["training_policy"]["optimizer"] == "Adam"
     assert final_training["obj_error"] == 1.25
@@ -302,7 +280,16 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
     assert "error" not in final_training
     assert "complexity" not in final_training
     assert "fitness" not in final_training
-    assert final_training["anomaly_metrics"]["window_auprc"] == 0.67
+    assert "window_auprc" not in final_training["anomaly_metrics"]
+
+
+def test_shareable_risk_gap_objective_markdown_exists():
+    doc_path = Path(__file__).resolve().parents[2] / "CALIBRATED_RISK_GAP_OBJECTIVE.md"
+    content = doc_path.read_text(encoding="utf-8")
+
+    assert "pdm_risk_gap" in content
+    assert "obj_pdm = clip(0.5 * (1 - pdm_risk_gap), 0, 1)" in content
+    assert "risk_gap =  1.0 -> obj_pdm = 0.0" in content
 
 
 def test_experiment_uses_fixed_adam_training_policy():

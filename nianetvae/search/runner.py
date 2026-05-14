@@ -94,7 +94,16 @@ class RNNVAEArchitectureMultiObj(Problem):
         self.penalty = runner.ctx.penalty
         self.objective_contract = _resolve_objective_contract(self.config)
         self.iteration = 0
-        self.stats = {"trained": 0, "cached": 0, "invalid": 0, "failed": 0}
+        self.stats = {
+            "trained": 0,
+            "cached": 0,
+            "cached_db": 0,
+            "cached_memory": 0,
+            "cache_miss": 0,
+            "invalid": 0,
+            "failed": 0,
+        }
+        self.objective_cache_by_hash: dict[str, dict[str, Any]] = {}
         self.local_candidate_rows: list[dict[str, Any]] = []
         super().__init__(n_var=dimension, n_obj=3, n_constr=0, xl=0, xu=1)
 
@@ -113,6 +122,32 @@ class RNNVAEArchitectureMultiObj(Problem):
         if isinstance(value, (int, np.integer)):
             return str(int(value))
         return str(value)
+
+    def _objectives_are_reusable(self, obj_error, obj_efficiency, obj_pdm) -> bool:
+        try:
+            values = [float(obj_error), float(obj_efficiency), float(obj_pdm)]
+        except Exception:
+            return False
+        return all(math.isfinite(value) and value < float(self.penalty) for value in values)
+
+    def _remember_objectives(
+        self,
+        model_hash: str,
+        obj_error,
+        obj_efficiency,
+        obj_pdm,
+        pdm_signal_quality=None,
+    ) -> None:
+        if not self._objectives_are_reusable(obj_error, obj_efficiency, obj_pdm):
+            return
+        self.objective_cache_by_hash[str(model_hash)] = {
+            "obj_error": float(obj_error),
+            "obj_efficiency": float(obj_efficiency),
+            "obj_pdm": float(obj_pdm),
+            "pdm_signal_quality": (
+                None if pdm_signal_quality is None else float(pdm_signal_quality)
+            ),
+        }
 
     def _selected_metrics(self, experiment):
         selected = self.config.get("nia_search", {}).get("metrics", [])
@@ -232,34 +267,63 @@ class RNNVAEArchitectureMultiObj(Problem):
 
             model = RNNVAE(solution, **self.config)
             model_hash = model.get_hash()
-            existing_entry = self.conn.get_entries(hash_id=model_hash, dataset_name=self.dataset_name)
 
             path = self.config['logging_params']['save_dir']
             Path(path).mkdir(parents=True, exist_ok=True)
 
-            if existing_entry.shape[0] > 0:
-                cached_row = existing_entry.iloc[0].to_dict()
-                cached_bundle = calculate_objective_bundle_from_cached_row(
-                    model=model,
-                    cached_row=cached_row,
-                    seq_len=self.config['data_params']['seq_len'],
-                    n_features=self.config['data_params']['n_features'],
-                    cfg=self.config,
-                    penalty=self.penalty,
-                )
-                if cached_bundle.get("valid"):
-                    status = "cached"
-                    reason = None
-                    self.stats["cached"] += 1
-                    obj_error = cached_bundle["obj_error"]
-                    obj_efficiency = cached_bundle["obj_efficiency"]
-                    obj_pdm = cached_bundle["obj_pdm"]
-                    pdm_signal_quality = cached_bundle.get("pdm_signal_quality")
-                else:
-                    reason = f"cached_objective_miss:{cached_bundle.get('reason') or 'invalid'}"
-                    existing_entry = existing_entry.iloc[0:0]
+            existing_entry = None
+            cached_objectives = self.objective_cache_by_hash.get(str(model_hash))
+            if cached_objectives is not None:
+                status = "cached_memory"
+                reason = None
+                self.stats["cached"] += 1
+                self.stats["cached_memory"] += 1
+                obj_error = cached_objectives["obj_error"]
+                obj_efficiency = cached_objectives["obj_efficiency"]
+                obj_pdm = cached_objectives["obj_pdm"]
+                pdm_signal_quality = cached_objectives.get("pdm_signal_quality")
+            else:
+                existing_entry = self.conn.get_entries(hash_id=model_hash, dataset_name=self.dataset_name)
+                if existing_entry.shape[0] > 0:
+                    cached_row = existing_entry.iloc[0].to_dict()
+                    cached_bundle = calculate_objective_bundle_from_cached_row(
+                        model=model,
+                        cached_row=cached_row,
+                        seq_len=self.config['data_params']['seq_len'],
+                        n_features=self.config['data_params']['n_features'],
+                        cfg=self.config,
+                        penalty=self.penalty,
+                    )
+                    cached_reusable = (
+                        cached_bundle.get("valid")
+                        and self._objectives_are_reusable(
+                            cached_bundle.get("obj_error"),
+                            cached_bundle.get("obj_efficiency"),
+                            cached_bundle.get("obj_pdm"),
+                        )
+                    )
+                    if cached_reusable:
+                        status = "cached_db"
+                        reason = None
+                        self.stats["cached"] += 1
+                        self.stats["cached_db"] += 1
+                        obj_error = cached_bundle["obj_error"]
+                        obj_efficiency = cached_bundle["obj_efficiency"]
+                        obj_pdm = cached_bundle["obj_pdm"]
+                        pdm_signal_quality = cached_bundle.get("pdm_signal_quality")
+                        self._remember_objectives(
+                            model_hash,
+                            obj_error,
+                            obj_efficiency,
+                            obj_pdm,
+                            pdm_signal_quality,
+                        )
+                    else:
+                        reason = f"cached_objective_miss:{cached_bundle.get('reason') or 'penalty_objectives'}"
+                        self.stats["cache_miss"] += 1
+                        existing_entry = existing_entry.iloc[0:0]
 
-            if existing_entry.shape[0] == 0:
+            if status not in {"cached_memory", "cached_db"}:
                 if not model.is_valid:
                     status = "invalid"
                     reason = reason or "invalid_architecture"
@@ -298,6 +362,7 @@ class RNNVAEArchitectureMultiObj(Problem):
                     try:
                         start_time = datetime.now()
                         trainer.fit(experiment, datamodule=self.datamodule)
+                        experiment.collect_calibration_scores(self.datamodule.train_dataloader())
                         trainer.test(experiment, datamodule=self.datamodule)
                         end_time = datetime.now()
                         duration = (end_time - start_time).total_seconds()
@@ -348,6 +413,14 @@ class RNNVAEArchitectureMultiObj(Problem):
                             end_time=end_time,
                             duration=duration
                         )
+                        if status == "trained":
+                            self._remember_objectives(
+                                model_hash,
+                                obj_error,
+                                obj_efficiency,
+                                obj_pdm,
+                                pdm_signal_quality,
+                            )
                     except Exception as e:
                         end_time = datetime.now()
                         if start_time is not None:
@@ -696,12 +769,8 @@ class SearchRunner:
             f"fixed_optimizer={self.ctx.config['exp_params'].get('optimizer')} "
             f"obj_error={objective_contract['error_metric']} "
             f"obj_efficiency={objective_contract['efficiency_metric']} "
-            "obj_pdm=1-clip(fbeta(theta)-lambda*coverage_excess,0,1) "
+            "obj_pdm=clip(0.5*(1-pdm_risk_gap),0,1) "
             f"pdm_metric={objective_contract['pdm_metric']} "
-            f"pdm_fixed_theta={objective_contract.get('pdm_fixed_theta')} "
-            f"pdm_beta={objective_contract.get('pdm_beta')} "
-            f"pdm_coverage_target={objective_contract.get('pdm_coverage_target')} "
-            f"pdm_coverage_penalty_lambda={objective_contract.get('pdm_coverage_penalty_lambda')} "
             f"winner_selection={selection_contract['method']} "
             f"winner_weights="
             f"{selection_contract['weights_normalized']['error']:.4f}/"
@@ -767,6 +836,9 @@ class SearchRunner:
             "iterations": problem.iteration,
             "trained": problem.stats["trained"],
             "cached": problem.stats["cached"],
+            "cached_db": problem.stats["cached_db"],
+            "cached_memory": problem.stats["cached_memory"],
+            "cache_miss": problem.stats["cache_miss"],
             "invalid": problem.stats["invalid"],
             "failed": problem.stats["failed"],
             "best_hash": winner_selection["selected_hash"],
@@ -808,7 +880,9 @@ class SearchRunner:
         torch.save(best_model.state_dict(), model_file)
         Log.info(
             f"SEARCH_DONE iterations={problem.iteration} trained={problem.stats['trained']} "
-            f"cached={problem.stats['cached']} invalid={problem.stats['invalid']} failed={problem.stats['failed']} "
+            f"cached={problem.stats['cached']} cached_db={problem.stats['cached_db']} "
+            f"cached_memory={problem.stats['cached_memory']} cache_miss={problem.stats['cache_miss']} "
+            f"invalid={problem.stats['invalid']} failed={problem.stats['failed']} "
             f"best_hash={best_model.hash_id} selected_distance={winner_selection['selected_distance']}"
         )
         Log.info(f"BEST_MODEL_SAVED path={model_file}")

@@ -24,8 +24,8 @@ import nianetvae.experiments.metrics_evaluation
 ALLOWED_WORKFLOW_MODES = {"baseline_search", "per_maint_finetune", "per_maint_warmstart_search"}
 ALLOWED_ERROR_OBJECTIVE_METRICS = {"MAE", "MSE", "RMSE", "MAPE", "RMAPE", "SMAPE"}
 ALLOWED_EFFICIENCY_OBJECTIVE_METRICS = {"params", "macs", "latency_ms"}
-ALLOWED_PDM_OBJECTIVE_METRIC = "fixed_theta_fbeta_covpen"
-DEFAULT_DB_TABLE_NAME = "solutions_s1_t7"
+ALLOWED_PDM_OBJECTIVE_METRIC = "calibrated_risk_gap"
+DEFAULT_DB_TABLE_NAME = "solutions_finetune_riskgap"
 ALLOWED_SELECTION_METHODS = {"weighted_ideal_distance"}
 ALLOWED_FIXED_OPTIMIZERS = {"Adam"}
 
@@ -205,7 +205,7 @@ def _resolve_objective_contract(config: dict) -> dict:
     C13.1 contract lock:
       - obj_error: single selected reconstruction metric (min)
       - obj_efficiency: selected efficiency backend (min)
-      - obj_pdm: 1 - clip(F_beta(theta)-lambda*coverage_excess, 0, 1) (min)
+      - obj_pdm: clip(0.5 * (1 - calibrated_risk_gap), 0, 1) (min)
     """
     objectives = dict(config.get("objectives") or {})
     error_cfg = dict(objectives.get("error") or {})
@@ -238,61 +238,23 @@ def _resolve_objective_contract(config: dict) -> dict:
             f"Invalid objectives.pdm.metric={raw_pdm_metric!r}. "
             f"Allowed value: {ALLOWED_PDM_OBJECTIVE_METRIC}."
         )
-
-    raw_fixed_theta = pdm_cfg.get("fixed_theta", 0.61)
-    try:
-        fixed_theta = float(raw_fixed_theta)
-    except Exception:
+    if "fixed_theta" in pdm_cfg:
         raise ValueError(
-            f"Invalid objectives.pdm.fixed_theta={raw_fixed_theta!r}. "
-            "Expected finite float in [0, 1]."
-        ) from None
-    if not math.isfinite(fixed_theta) or fixed_theta < 0.0 or fixed_theta > 1.0:
-        raise ValueError(
-            f"Invalid objectives.pdm.fixed_theta={raw_fixed_theta!r}. "
-            "Expected finite float in [0, 1]."
+            "Legacy objectives.pdm.fixed_theta is no longer supported for NiaNetVAE. "
+            "Downstream maintenance_risk_theta belongs to metropt-pdm-framework evaluation only."
         )
-
-    raw_beta = pdm_cfg.get("beta", 2.0)
-    try:
-        beta = float(raw_beta)
-    except Exception:
+    removed_keys = {
+        "risk_score_exceedance_quantile",
+        "beta",
+        "coverage_target",
+        "coverage_penalty_lambda",
+    }
+    present_removed_keys = sorted(key for key in removed_keys if key in pdm_cfg)
+    if present_removed_keys:
         raise ValueError(
-            f"Invalid objectives.pdm.beta={raw_beta!r}. "
-            "Expected finite float > 0."
-        ) from None
-    if not math.isfinite(beta) or beta <= 0.0:
-        raise ValueError(
-            f"Invalid objectives.pdm.beta={raw_beta!r}. "
-            "Expected finite float > 0."
-        )
-
-    raw_coverage_target = pdm_cfg.get("coverage_target", 0.20)
-    try:
-        coverage_target = float(raw_coverage_target)
-    except Exception:
-        raise ValueError(
-            f"Invalid objectives.pdm.coverage_target={raw_coverage_target!r}. "
-            "Expected finite float in [0, 1)."
-        ) from None
-    if not math.isfinite(coverage_target) or coverage_target < 0.0 or coverage_target >= 1.0:
-        raise ValueError(
-            f"Invalid objectives.pdm.coverage_target={raw_coverage_target!r}. "
-            "Expected finite float in [0, 1)."
-        )
-
-    raw_cov_penalty = pdm_cfg.get("coverage_penalty_lambda", 0.50)
-    try:
-        coverage_penalty_lambda = float(raw_cov_penalty)
-    except Exception:
-        raise ValueError(
-            f"Invalid objectives.pdm.coverage_penalty_lambda={raw_cov_penalty!r}. "
-            "Expected finite float >= 0."
-        ) from None
-    if not math.isfinite(coverage_penalty_lambda) or coverage_penalty_lambda < 0.0:
-        raise ValueError(
-            f"Invalid objectives.pdm.coverage_penalty_lambda={raw_cov_penalty!r}. "
-            "Expected finite float >= 0."
+            "Removed objectives.pdm keys are no longer supported for NiaNetVAE "
+            f"calibrated_risk_gap objective: {present_removed_keys}. "
+            "Coverage/recall targets belong to metropt-pdm-framework evaluation."
         )
 
     normalized_contract = {
@@ -300,10 +262,6 @@ def _resolve_objective_contract(config: dict) -> dict:
         "efficiency": {"metric": efficiency_metric},
         "pdm": {
             "metric": pdm_metric,
-            "fixed_theta": fixed_theta,
-            "beta": beta,
-            "coverage_target": coverage_target,
-            "coverage_penalty_lambda": coverage_penalty_lambda,
         },
     }
     if "selection" in objectives:
@@ -419,20 +377,13 @@ def _objective_contract_line(contract: dict) -> str:
     efficiency_metric = ((contract.get("efficiency") or {}).get("metric"))
     pdm_cfg = contract.get("pdm") or {}
     pdm_metric = pdm_cfg.get("metric")
-    fixed_theta = pdm_cfg.get("fixed_theta")
-    beta = pdm_cfg.get("beta")
-    coverage_target = pdm_cfg.get("coverage_target")
-    coverage_penalty_lambda = pdm_cfg.get("coverage_penalty_lambda")
     return (
         "OBJECTIVE_CONTRACT "
         f"obj_error={_value_or_na(error_metric)} direction=min "
         f"obj_efficiency={_value_or_na(efficiency_metric)} direction=min "
-        "obj_pdm=1-clip(fbeta(theta)-lambda*coverage_excess,0,1) direction=min "
+        "obj_pdm=clip(0.5*(1-pdm_risk_gap),0,1) direction=min "
         f"pdm_metric={_value_or_na(pdm_metric)} "
-        f"pdm_fixed_theta={_value_or_na(fixed_theta)} "
-        f"pdm_beta={_value_or_na(beta)} "
-        f"pdm_coverage_target={_value_or_na(coverage_target)} "
-        f"pdm_coverage_penalty_lambda={_value_or_na(coverage_penalty_lambda)} "
+        "pdm_score_pipeline=window_reconstruction_error->risk_score->risk_gap "
         "pdm_label_policy=phase0_or_phase1_positive_is_phase1_exclude_phase2 "
         "pdm_eval_slice=test_only"
     )

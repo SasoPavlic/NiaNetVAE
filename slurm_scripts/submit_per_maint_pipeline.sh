@@ -14,6 +14,8 @@ RESUME_FROM="${RESUME_FROM:-auto}"
 DATASET_NAME="${DATASET_NAME:-MetroPT}"
 EXPORT_ROOT="${EXPORT_ROOT:-logs/per_maint_models}"
 DETACHED_SUBMIT="${DETACHED_SUBMIT:-0}"
+CYCLE0_TIME="${CYCLE0_TIME:-3-19:00:00}"
+DEFAULT_CYCLE_TIME="${DEFAULT_CYCLE_TIME:-08:00:00}"
 
 # Optional detached mode:
 #   ./submit_per_maint_pipeline.sh --detach
@@ -128,6 +130,8 @@ echo "  resume_from=${RESUME_FROM}"
 echo "  submit_from=${SUBMIT_FROM}"
 echo "  export_root=${EXPORT_ROOT}"
 echo "  dataset_name=${DATASET_NAME}"
+echo "  cycle0_time=${CYCLE0_TIME}"
+echo "  default_cycle_time=${DEFAULT_CYCLE_TIME}"
 
 submitted_job_ids=()
 prev_job_id=""
@@ -137,19 +141,24 @@ prev_job_id=""
 for ((cid=SUBMIT_FROM; cid<=END_CYCLE; cid++)); do
     dep_args=()
     dep_info=""
+    job_time="${DEFAULT_CYCLE_TIME}"
+    if [ "${cid}" -eq 0 ]; then
+        job_time="${CYCLE0_TIME}"
+    fi
     if [ -n "${prev_job_id}" ]; then
         dep_args+=(--dependency="afterok:${prev_job_id}")
         dep_info=" (depends on afterok:${prev_job_id})"
     fi
     job_id=$(
         sbatch --parsable \
+            --time="${job_time}" \
             "${dep_args[@]}" \
             --export="ALL,CYCLE_ID=${cid}" \
             "${TRAIN_SCRIPT}"
     )
     submitted_job_ids+=("${job_id}")
     prev_job_id="${job_id}"
-    echo "Submitted cycle ${cid}: ${job_id}${dep_info}"
+    echo "Submitted cycle ${cid}: ${job_id} (time=${job_time})${dep_info}"
 done
 
 if [ "${#submitted_job_ids[@]}" -gt 0 ]; then
