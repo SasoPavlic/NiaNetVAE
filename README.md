@@ -97,12 +97,16 @@ docker run \
 
 Set `workflow.mode` in `configs/main_config.yaml`:
 
-- `baseline_search` (default): current architecture-search workflow.
-- `per_maint_finetune`: Experiment A workflow.
+- `per_maint_baseline_search` (default): independent per-cycle architecture-search workflow.
+- `per_maint_finetune_search`: Experiment A workflow.
+- `per_maint_warmstart_search`: per-cycle warm-started architecture search.
 
 Notes:
-- `per_maint_finetune` requires `data_params.regime: "per_maint"` and `data_params.cycle_id` to be set.
-- `per_maint_finetune` behavior:
+- All workflow modes are per-maintenance workflows and require `data_params.regime: "per_maint"` and `data_params.cycle_id` to be set. The Slurm pipeline sets these with `--cycle-id`.
+- `per_maint_baseline_search` behavior:
+  - Runs a full architecture search for the selected cycle.
+  - Does not reuse previous-cycle architecture or weights.
+- `per_maint_finetune_search` behavior:
   - `cycle_id=0`: runs baseline architecture search to initialize the first model.
   - `cycle_id>0`: reuses latest previous trained cycle architecture/weights and performs fine-tune training.
   - If a cycle is non-trainable (for example zero rows after phase filtering), run is skipped gracefully and `cycle_status.json` is written with `status=skipped_non_trainable`.
@@ -153,7 +157,7 @@ Notes:
    - `logs/per_maint_models/MetroPT/cycle_XX/cycle_status.json` (only for skipped non-trainable cycles)
    - `logs/per_maint_models/MetroPT/cycle_manifest.json`
 6. Manifest artifact paths are stored relative to the manifest directory for cross-platform portability (HPC Linux -> local Windows).
-7. Manifest now includes top-level `workflow_mode` (for example `per_maint_finetune`) to make run context explicit downstream.
+7. Manifest now includes top-level `workflow_mode` (for example `per_maint_finetune_search`) to make run context explicit downstream.
 
 ### HELP ⚠️
 

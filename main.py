@@ -21,7 +21,7 @@ from nianetvae.search.runner import SearchRunner, SearchRuntimeContext
 from nianetvae.storage.experiment_storage import get_db_connector
 import nianetvae.experiments.metrics_evaluation
 
-ALLOWED_WORKFLOW_MODES = {"baseline_search", "per_maint_finetune", "per_maint_warmstart_search"}
+ALLOWED_WORKFLOW_MODES = {"per_maint_baseline_search", "per_maint_finetune_search", "per_maint_warmstart_search"}
 ALLOWED_ERROR_OBJECTIVE_METRICS = {"MAE", "MSE", "RMSE", "MAPE", "RMAPE", "SMAPE"}
 ALLOWED_EFFICIENCY_OBJECTIVE_METRICS = {"params", "macs", "latency_ms"}
 ALLOWED_PDM_OBJECTIVE_METRIC = "calibrated_risk_gap"
@@ -143,10 +143,10 @@ def _config_summary_line(config: dict) -> str:
 
 def _resolve_workflow_mode(config: dict) -> str:
     workflow = config.get("workflow") or {}
-    raw_mode = workflow.get("mode", "baseline_search")
-    mode = str(raw_mode).strip().lower() if raw_mode is not None else "baseline_search"
+    raw_mode = workflow.get("mode", "per_maint_baseline_search")
+    mode = str(raw_mode).strip().lower() if raw_mode is not None else "per_maint_baseline_search"
     if not mode:
-        mode = "baseline_search"
+        mode = "per_maint_baseline_search"
     if mode not in ALLOWED_WORKFLOW_MODES:
         allowed = ", ".join(sorted(ALLOWED_WORKFLOW_MODES))
         raise ValueError(
@@ -579,7 +579,12 @@ if __name__ == '__main__':
         _err(str(exc))
         exit(1)
 
-    if workflow_mode in {"per_maint_finetune", "per_maint_warmstart_search"}:
+    per_maint_workflow_modes = {
+        "per_maint_baseline_search",
+        "per_maint_finetune_search",
+        "per_maint_warmstart_search",
+    }
+    if workflow_mode in per_maint_workflow_modes:
         if regime != "per_maint":
             _err(
                 f"workflow.mode='{workflow_mode}' requires "
@@ -639,7 +644,7 @@ if __name__ == '__main__':
         except Exception:
             finetune_cycle_id = None
         should_skip_non_trainable = (
-            workflow_mode in {"per_maint_finetune", "per_maint_warmstart_search"}
+            workflow_mode in per_maint_workflow_modes
             and regime == "per_maint"
             and finetune_cycle_id is not None
             and finetune_cycle_id > 0
@@ -667,12 +672,12 @@ if __name__ == '__main__':
     if hasattr(datamodule, "n_features") and getattr(datamodule, "n_features"):
         config["data_params"]["n_features"] = int(getattr(datamodule, "n_features"))
 
-    if workflow_mode == "baseline_search":
+    if workflow_mode == "per_maint_baseline_search":
         metrics = args.metrics if args.metrics else config['nia_search']['metrics']
         config['nia_search']['metrics'] = metrics
         runner.solve_architecture_problem()
-    elif workflow_mode == "per_maint_finetune":
-        runner.run_per_maint_finetune_cycle()
+    elif workflow_mode == "per_maint_finetune_search":
+        runner.run_per_maint_finetune_search_cycle()
     elif workflow_mode == "per_maint_warmstart_search":
         metrics = args.metrics if args.metrics else config['nia_search']['metrics']
         config['nia_search']['metrics'] = metrics

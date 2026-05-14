@@ -2,20 +2,25 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TRAIN_SCRIPT="${SCRIPT_DIR}/train_per_maint_cycles.sbatch"
-MANIFEST_SCRIPT="${SCRIPT_DIR}/build_cycle_manifest.sbatch"
+WORKER_SCRIPT="${SCRIPT_DIR}/run_per_maint_job.sbatch"
 IMAGE_DIR="/d/hpc/home/sasop/images"
 IMAGE_REF="docker://spartan300/nianet:vaepymoo"
 IMAGE_LATEST="${IMAGE_DIR}/nianet-vaepymoo-latest.sif"
 IMAGE_CURRENT="${IMAGE_DIR}/nianet-vaepymoo-current.sif"
+
+# Normal human workflow: edit CONFIG_PATH, then run this script.
+# START_CYCLE/END_CYCLE/RESUME_FROM are advanced operational overrides.
+CONFIG_PATH="${CONFIG_PATH:-configs/main_config.yaml}"
 START_CYCLE="${START_CYCLE:-0}"
 END_CYCLE="${END_CYCLE:-21}"
 RESUME_FROM="${RESUME_FROM:-auto}"
-DATASET_NAME="${DATASET_NAME:-MetroPT}"
-EXPORT_ROOT="${EXPORT_ROOT:-logs/per_maint_models}"
 DETACHED_SUBMIT="${DETACHED_SUBMIT:-0}"
-CYCLE0_TIME="${CYCLE0_TIME:-3-19:00:00}"
-DEFAULT_CYCLE_TIME="${DEFAULT_CYCLE_TIME:-08:00:00}"
+
+# Cluster policy constants. Research/runtime settings should come from CONFIG_PATH.
+SEARCH_WALLTIME_BUFFER="02:00:00"
+FINETUNE_WALLTIME="08:00:00"
+MANIFEST_WALLTIME="00:30:00"
+SAFE_MAX_WALLTIME="3-19:00:00"
 
 # Optional detached mode:
 #   ./submit_per_maint_pipeline.sh --detach
@@ -24,7 +29,12 @@ if [ "${1:-}" = "--detach" ] && [ "${DETACHED_SUBMIT}" != "1" ]; then
     mkdir -p outputs
     ts=$(date +%Y%m%d_%H%M%S)
     detach_log="outputs/submit_per_maint_pipeline_${ts}.log"
-    nohup env DETACHED_SUBMIT=1 bash "$0" > "${detach_log}" 2>&1 < /dev/null &
+    nohup env DETACHED_SUBMIT=1 \
+        CONFIG_PATH="${CONFIG_PATH}" \
+        START_CYCLE="${START_CYCLE}" \
+        END_CYCLE="${END_CYCLE}" \
+        RESUME_FROM="${RESUME_FROM}" \
+        bash "$0" > "${detach_log}" 2>&1 < /dev/null &
     detach_pid=$!
     echo "Detached submission started."
     echo "  pid=${detach_pid}"
@@ -33,23 +43,13 @@ if [ "${1:-}" = "--detach" ] && [ "${DETACHED_SUBMIT}" != "1" ]; then
     exit 0
 fi
 
-if [ ! -f "${TRAIN_SCRIPT}" ]; then
-    echo "Missing ${TRAIN_SCRIPT}"
+if [ ! -f "${WORKER_SCRIPT}" ]; then
+    echo "Missing ${WORKER_SCRIPT}"
     exit 1
 fi
 
-if [ ! -f "${MANIFEST_SCRIPT}" ]; then
-    echo "Missing ${MANIFEST_SCRIPT}"
-    exit 1
-fi
-
-if ! command -v singularity >/dev/null 2>&1; then
-    echo "singularity command not found in PATH."
-    exit 1
-fi
-
-if ! command -v sbatch >/dev/null 2>&1; then
-    echo "sbatch command not found in PATH."
+if [ ! -f "${CONFIG_PATH}" ]; then
+    echo "Missing CONFIG_PATH=${CONFIG_PATH} in $(pwd)"
     exit 1
 fi
 
@@ -63,13 +63,16 @@ if [ "${START_CYCLE}" -gt "${END_CYCLE}" ]; then
     exit 1
 fi
 
-echo "Syncing image from ${IMAGE_REF} ..."
-mkdir -p "${IMAGE_DIR}"
-singularity pull --force "${IMAGE_LATEST}" "${IMAGE_REF}"
-ln -sfn "${IMAGE_LATEST}" "${IMAGE_CURRENT}"
-echo "Active image symlink: ${IMAGE_CURRENT} -> $(readlink -f "${IMAGE_CURRENT}")"
+if ! command -v singularity >/dev/null 2>&1; then
+    echo "singularity command not found in PATH."
+    exit 1
+fi
 
-mkdir -p outputs logs
+if ! command -v sbatch >/dev/null 2>&1; then
+    echo "sbatch command not found in PATH."
+    exit 1
+fi
+
 if [ ! -d "configs" ]; then
     echo "Missing ./configs directory in $(pwd)"
     exit 1
@@ -79,11 +82,132 @@ if [ ! -d "data" ]; then
     exit 1
 fi
 
+mkdir -p "${IMAGE_DIR}" outputs logs
+
+echo "Syncing image from ${IMAGE_REF} ..."
+singularity pull --force "${IMAGE_LATEST}" "${IMAGE_REF}"
+ln -sfn "${IMAGE_LATEST}" "${IMAGE_CURRENT}"
+echo "Active image symlink: ${IMAGE_CURRENT} -> $(readlink -f "${IMAGE_CURRENT}")"
+
+read_config_assignments() {
+    singularity exec \
+        -e \
+        --pwd /app \
+        -B "$(pwd)/configs:/app/configs" \
+        "${IMAGE_CURRENT}" \
+        env \
+            CONFIG_PATH="${CONFIG_PATH}" \
+            SEARCH_WALLTIME_BUFFER="${SEARCH_WALLTIME_BUFFER}" \
+            FINETUNE_WALLTIME="${FINETUNE_WALLTIME}" \
+            MANIFEST_WALLTIME="${MANIFEST_WALLTIME}" \
+            SAFE_MAX_WALLTIME="${SAFE_MAX_WALLTIME}" \
+            python - <<'PY'
+import os
+import shlex
+from pathlib import Path
+import yaml
+
+
+def load_yaml(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.load(handle, Loader=yaml.Loader) or {}
+
+
+def load_merged_config(config_path: Path) -> dict:
+    config = load_yaml(config_path)
+    seen = set()
+    for _ in range(5):
+        dataset_cfg = (config.get("dataset") or {}).get("config_file")
+        if not dataset_cfg:
+            break
+        candidate = Path(str(dataset_cfg))
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        candidate = candidate.resolve()
+        key = str(candidate)
+        if key in seen:
+            raise SystemExit(f"Recursive dataset config_file reference detected: {dataset_cfg}")
+        seen.add(key)
+        payload = load_yaml(candidate)
+        config.update(payload)
+        next_cfg = (payload.get("dataset") or {}).get("config_file")
+        if not next_cfg:
+            if isinstance(config.get("dataset"), dict):
+                config["dataset"].pop("config_file", None)
+            break
+    config.setdefault("data_params", {})
+    config["data_params"].update(config.get("data_loader_params", {}) or {})
+    return config
+
+
+def parse_time_seconds(value: str) -> int:
+    text = str(value).strip()
+    if not text:
+        raise ValueError("empty time value")
+    days = 0
+    if "-" in text:
+        day_part, text = text.split("-", 1)
+        days = int(day_part)
+    parts = text.split(":")
+    if len(parts) != 3:
+        raise ValueError(f"time must be HH:MM:SS or D-HH:MM:SS, got {value!r}")
+    hours, minutes, seconds = (int(part) for part in parts)
+    if minutes < 0 or minutes >= 60 or seconds < 0 or seconds >= 60 or hours < 0 or days < 0:
+        raise ValueError(f"invalid time value {value!r}")
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def format_slurm_time(total_seconds: int) -> str:
+    total_seconds = int(total_seconds)
+    days, rem = divmod(total_seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, seconds = divmod(rem, 60)
+    if days:
+        return f"{days}-{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+config_path = Path(os.environ["CONFIG_PATH"])
+if not config_path.is_absolute():
+    config_path = Path.cwd() / config_path
+config = load_merged_config(config_path)
+workflow_mode = str((config.get("workflow") or {}).get("mode") or "per_maint_baseline_search").strip().lower()
+search_time = str((config.get("nia_search") or {}).get("time") or "01:00:00").strip()
+data_params = config.get("data_params") or {}
+logging_params = config.get("logging_params") or {}
+dataset_name = str(data_params.get("dataset_name") or "MetroPT").strip() or "MetroPT"
+export_root = str(logging_params.get("model_export_dir") or "logs/per_maint_models").strip() or "logs/per_maint_models"
+db_table_name = str(logging_params.get("db_table_name") or "").strip()
+
+search_seconds = parse_time_seconds(search_time)
+buffer_seconds = parse_time_seconds(os.environ["SEARCH_WALLTIME_BUFFER"])
+safe_max_seconds = parse_time_seconds(os.environ["SAFE_MAX_WALLTIME"])
+derived_search_seconds = min(search_seconds + buffer_seconds, safe_max_seconds)
+
+values = {
+    "WORKFLOW_MODE": workflow_mode,
+    "NIA_SEARCH_TIME": search_time,
+    "DERIVED_SEARCH_WALLTIME": format_slurm_time(derived_search_seconds),
+    "FINETUNE_WALLTIME_RESOLVED": os.environ["FINETUNE_WALLTIME"],
+    "MANIFEST_WALLTIME_RESOLVED": os.environ["MANIFEST_WALLTIME"],
+    "SAFE_MAX_WALLTIME_RESOLVED": os.environ["SAFE_MAX_WALLTIME"],
+    "DATASET_NAME_RESOLVED": dataset_name,
+    "EXPORT_ROOT_RESOLVED": export_root,
+    "DB_TABLE_NAME_RESOLVED": db_table_name,
+}
+for key, value in values.items():
+    print(f"{key}={shlex.quote(str(value))}")
+PY
+}
+
+CONFIG_ASSIGNMENTS="$(read_config_assignments)"
+eval "${CONFIG_ASSIGNMENTS}"
+
 cycle_complete() {
     local cycle_id="$1"
     local cycle_key
     cycle_key=$(printf "%02d" "${cycle_id}")
-    local cycle_dir="${EXPORT_ROOT}/${DATASET_NAME}/cycle_${cycle_key}"
+    local cycle_dir="${EXPORT_ROOT_RESOLVED}/${DATASET_NAME_RESOLVED}/cycle_${cycle_key}"
     local status_file="${cycle_dir}/cycle_status.json"
 
     # Trained cycle is complete when model + metadata exist.
@@ -92,7 +216,6 @@ cycle_complete() {
     fi
 
     # Non-trainable cycle is also treated as complete when skip marker exists.
-    # This prevents auto-resume from re-submitting known non-trainable cycles forever.
     if [ -f "${status_file}" ] && grep -q '"status"[[:space:]]*:[[:space:]]*"skipped_non_trainable"' "${status_file}"; then
         return 0
     fi
@@ -101,7 +224,6 @@ cycle_complete() {
 }
 
 # Auto-resume: find the first incomplete cycle in the requested range.
-# This keeps completed artifacts intact and starts from the first missing model/meta pair.
 SUBMIT_FROM="${START_CYCLE}"
 if [ "${RESUME_FROM}" = "auto" ]; then
     found_incomplete="false"
@@ -114,7 +236,7 @@ if [ "${RESUME_FROM}" = "auto" ]; then
     done
     if [ "${found_incomplete}" = "false" ]; then
         SUBMIT_FROM=$((END_CYCLE + 1))
-        echo "All cycles ${START_CYCLE}-${END_CYCLE} already have model.pt + model_meta.json."
+        echo "All cycles ${START_CYCLE}-${END_CYCLE} already have model.pt + model_meta.json or skipped_non_trainable status."
     fi
 else
     if ! [[ "${RESUME_FROM}" =~ ^[0-9]+$ ]]; then
@@ -124,37 +246,61 @@ else
     SUBMIT_FROM="${RESUME_FROM}"
 fi
 
+walltime_for_cycle() {
+    local cycle_id="$1"
+    case "${WORKFLOW_MODE}" in
+        per_maint_finetune_search)
+            if [ "${cycle_id}" -eq 0 ]; then
+                echo "${DERIVED_SEARCH_WALLTIME}"
+            else
+                echo "${FINETUNE_WALLTIME_RESOLVED}"
+            fi
+            ;;
+        per_maint_warmstart_search|per_maint_baseline_search)
+            echo "${DERIVED_SEARCH_WALLTIME}"
+            ;;
+        *)
+            echo "Unsupported workflow.mode='${WORKFLOW_MODE}' from ${CONFIG_PATH}."
+            exit 1
+            ;;
+    esac
+}
+
 echo "Sequential submission settings:"
+echo "  config_path=${CONFIG_PATH}"
+echo "  workflow_mode=${WORKFLOW_MODE}"
+echo "  dataset_name=${DATASET_NAME_RESOLVED}"
+echo "  db_table=${DB_TABLE_NAME_RESOLVED:-n/a}"
+echo "  export_root=${EXPORT_ROOT_RESOLVED}"
 echo "  requested_range=${START_CYCLE}-${END_CYCLE}"
 echo "  resume_from=${RESUME_FROM}"
 echo "  submit_from=${SUBMIT_FROM}"
-echo "  export_root=${EXPORT_ROOT}"
-echo "  dataset_name=${DATASET_NAME}"
-echo "  cycle0_time=${CYCLE0_TIME}"
-echo "  default_cycle_time=${DEFAULT_CYCLE_TIME}"
+echo "  nia_search_time=${NIA_SEARCH_TIME}"
+echo "  search_walltime_buffer=${SEARCH_WALLTIME_BUFFER}"
+echo "  derived_search_walltime=${DERIVED_SEARCH_WALLTIME}"
+echo "  finetune_walltime=${FINETUNE_WALLTIME_RESOLVED}"
+echo "  manifest_walltime=${MANIFEST_WALLTIME_RESOLVED}"
+echo "  safe_max_walltime=${SAFE_MAX_WALLTIME_RESOLVED}"
 
 submitted_job_ids=()
 prev_job_id=""
 
-# Sequential dependency chain for Experiment A:
-# cycle k starts only if cycle k-1 finished successfully (afterok).
+# Strict sequential order: cycle k starts only if cycle k-1 finished successfully.
 for ((cid=SUBMIT_FROM; cid<=END_CYCLE; cid++)); do
     dep_args=()
     dep_info=""
-    job_time="${DEFAULT_CYCLE_TIME}"
-    if [ "${cid}" -eq 0 ]; then
-        job_time="${CYCLE0_TIME}"
-    fi
+    job_time="$(walltime_for_cycle "${cid}")"
     if [ -n "${prev_job_id}" ]; then
         dep_args+=(--dependency="afterok:${prev_job_id}")
         dep_info=" (depends on afterok:${prev_job_id})"
     fi
     job_id=$(
         sbatch --parsable \
+            --job-name="nianetvae-metropt" \
             --time="${job_time}" \
             "${dep_args[@]}" \
-            --export="ALL,CYCLE_ID=${cid}" \
-            "${TRAIN_SCRIPT}"
+            --export="ALL,JOB_MODE=train,CONFIG_PATH=${CONFIG_PATH},CYCLE_ID=${cid}" \
+            "${WORKER_SCRIPT}"
     )
     submitted_job_ids+=("${job_id}")
     prev_job_id="${job_id}"
@@ -166,20 +312,24 @@ if [ "${#submitted_job_ids[@]}" -gt 0 ]; then
     manifest_dep="afterany:${dependency_chain}"
     MANIFEST_JOB_ID=$(
         sbatch --parsable \
+            --job-name="nianetvae-manifest" \
+            --time="${MANIFEST_WALLTIME_RESOLVED}" \
             --dependency="${manifest_dep}" \
-            --export="ALL,CYCLE_SPEC=${START_CYCLE}-${END_CYCLE}" \
-            "${MANIFEST_SCRIPT}"
+            --export="ALL,JOB_MODE=manifest,CONFIG_PATH=${CONFIG_PATH},CYCLE_SPEC=${START_CYCLE}-${END_CYCLE}" \
+            "${WORKER_SCRIPT}"
     )
     echo "Submitted training jobs: ${dependency_chain}"
-    echo "Submitted manifest job: ${MANIFEST_JOB_ID} (dependency: ${manifest_dep})"
+    echo "Submitted manifest job: ${MANIFEST_JOB_ID} (time=${MANIFEST_WALLTIME_RESOLVED}, dependency: ${manifest_dep})"
 else
     # If everything is already complete, still rebuild manifest to confirm trained/alias/missing statuses.
     MANIFEST_JOB_ID=$(
         sbatch --parsable \
-            --export="ALL,CYCLE_SPEC=${START_CYCLE}-${END_CYCLE}" \
-            "${MANIFEST_SCRIPT}"
+            --job-name="nianetvae-manifest" \
+            --time="${MANIFEST_WALLTIME_RESOLVED}" \
+            --export="ALL,JOB_MODE=manifest,CONFIG_PATH=${CONFIG_PATH},CYCLE_SPEC=${START_CYCLE}-${END_CYCLE}" \
+            "${WORKER_SCRIPT}"
     )
-    echo "No cycle jobs submitted. Submitted manifest-only job: ${MANIFEST_JOB_ID}"
+    echo "No cycle jobs submitted. Submitted manifest-only job: ${MANIFEST_JOB_ID} (time=${MANIFEST_WALLTIME_RESOLVED})"
 fi
 
 echo "Check status with: squeue --me"

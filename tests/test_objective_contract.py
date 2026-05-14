@@ -108,7 +108,7 @@ def test_resolve_objective_contract_rejects_removed_pdm_parameters(removed_key: 
 
 def test_config_summary_line_includes_objective_contract_fields() -> None:
     cfg = {
-        "workflow": {"mode": "baseline_search"},
+        "workflow": {"mode": "per_maint_baseline_search"},
         "data_params": {"dataset_name": "MetroPT"},
         "nia_search": {"metrics": ["SMAPE"], "nsga3": {"n_partitions": 5, "effective_population": 21}},
         "exp_params": {"optimizer": "Adam", "learning_rate": 0.003, "weight_decay": 0.0},

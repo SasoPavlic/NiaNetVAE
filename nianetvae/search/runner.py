@@ -573,15 +573,15 @@ class SearchRunner:
             run_uuid=self.ctx.run_uuid,
         )
 
-    def run_per_maint_finetune_cycle(self):
+    def run_per_maint_finetune_search_cycle(self):
         data_params = self.ctx.config.get("data_params", {})
         cycle_id = data_params.get("cycle_id")
         if cycle_id is None:
-            raise ValueError("per_maint_finetune requires data_params.cycle_id.")
+            raise ValueError("per_maint_finetune_search requires data_params.cycle_id.")
         cycle_id = int(cycle_id)
 
         if cycle_id == 0:
-            Log.info("FINETUNE_MODE cycle_id=0 uses baseline_search for initial architecture.")
+            Log.info("FINETUNE_MODE cycle_id=0 uses per_maint_baseline_search for initial architecture.")
             self.solve_architecture_problem()
             return
 
@@ -592,7 +592,7 @@ class SearchRunner:
         )
         if previous_source is None:
             raise FileNotFoundError(
-                "per_maint_finetune requires previous cycle artifacts. "
+                "per_maint_finetune_search requires previous cycle artifacts. "
                 f"No trained cycle artifacts found before cycle {cycle_id:02d}."
             )
         previous_cycle_id, _, previous_weights, previous_meta = previous_source
@@ -650,7 +650,7 @@ class SearchRunner:
             return
 
         search_result = {
-            "mode": "per_maint_finetune",
+            "mode": "per_maint_finetune_search",
             "search_performed": False,
             "source_cycle_id": previous_cycle_id,
             "source_cycle_key": f"{previous_cycle_id:02d}",

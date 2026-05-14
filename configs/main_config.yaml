@@ -85,13 +85,13 @@ objectives:
 
 workflow:
   # Runtime workflow mode:
-  # - baseline_search: standard architecture search
-  # - per_maint_finetune: per-cycle fine-tuning from previous trained cycle
+  # - per_maint_baseline_search: independent per-cycle architecture search
+  # - per_maint_finetune_search: per-cycle fine-tuning from previous trained cycle
   # - per_maint_warmstart_search: per-cycle warm-started NSGA-III search
-  mode: "per_maint_finetune"
+  mode: "per_maint_finetune_search"
 
   finetune:
-    # Fine-tune policy used only in mode=per_maint_finetune for cycle_id > 0.
+    # Fine-tune policy used only in mode=per_maint_finetune_search for cycle_id > 0.
     # finetune_learning_rate = exp_params.learning_rate * learning_rate_scale
     learning_rate_scale: 0.1
     min_epochs: 2
