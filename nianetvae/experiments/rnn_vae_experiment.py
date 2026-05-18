@@ -32,7 +32,11 @@ class RNNVAExperiment(LightningModule):
         self.metrics = EvaluationMetrics()
         # C13.3 policy lock: anomaly metrics are always enabled because obj_pdm depends on them.
         self.compute_anomaly_metrics = True
-        self.anomaly_detection_metrics = WindowAnomalyRankingMetrics()
+        pdm_cfg = (kwargs.get("objectives") or {}).get("pdm") or {}
+        smoothing_window_windows = int(pdm_cfg.get("smoothing_window_windows", 480))
+        self.anomaly_detection_metrics = WindowAnomalyRankingMetrics(
+            smoothing_window_windows=smoothing_window_windows,
+        )
         self.anomaly_metrics = {}
         try:
             self.hold_graph = self.params['retain_first_backpass']
@@ -176,9 +180,11 @@ class RNNVAExperiment(LightningModule):
                 ["Risk Score Min", safe_format(self.anomaly_metrics.get('risk_score_min'))],
                 ["Risk Score Max", safe_format(self.anomaly_metrics.get('risk_score_max'))],
                 ["Risk Score Mean", safe_format(self.anomaly_metrics.get('risk_score_mean'))],
-                ["PdM Positive Risk Mean", safe_format(self.anomaly_metrics.get('pdm_positive_risk_mean'))],
-                ["PdM Negative Risk Mean", safe_format(self.anomaly_metrics.get('pdm_negative_risk_mean'))],
-                ["PdM Risk Gap", safe_format(self.anomaly_metrics.get('pdm_risk_gap'))],
+                ["PdM Smoothing Window", self.anomaly_metrics.get('pdm_smoothing_window_windows')],
+                ["PdM Positive Smoothed Risk Mean", safe_format(self.anomaly_metrics.get('pdm_positive_smoothed_risk_mean'))],
+                ["PdM Negative Smoothed Risk Mean", safe_format(self.anomaly_metrics.get('pdm_negative_smoothed_risk_mean'))],
+                ["PdM Smoothed AUROC", safe_format(self.anomaly_metrics.get('pdm_smoothed_auroc'))],
+                ["PdM Smoothed Rank Gap", safe_format(self.anomaly_metrics.get('pdm_smoothed_rank_gap'))],
                 ["PdM Metric Valid", str(self.anomaly_metrics.get('pdm_metric_valid'))],
                 ["PdM Invalid Reason", self.anomaly_metrics.get('pdm_metric_invalid_reason') or "N/A"],
             ]

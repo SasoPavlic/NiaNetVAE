@@ -769,7 +769,7 @@ class SearchRunner:
             f"fixed_optimizer={self.ctx.config['exp_params'].get('optimizer')} "
             f"obj_error={objective_contract['error_metric']} "
             f"obj_efficiency={objective_contract['efficiency_metric']} "
-            "obj_pdm=clip(0.5*(1-pdm_risk_gap),0,1) "
+            "obj_pdm=1-pdm_smoothed_auroc "
             f"pdm_metric={objective_contract['pdm_metric']} "
             f"winner_selection={selection_contract['method']} "
             f"winner_weights="

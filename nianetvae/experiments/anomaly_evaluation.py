@@ -16,11 +16,12 @@ class WindowAnomalyRankingMetrics:
     percentile risk scores against the training-window calibration distribution.
     """
 
-    def __init__(self):
+    def __init__(self, smoothing_window_windows: int = 480):
         self.all_scores = []
         self.all_labels = []
         self.all_ts_ids = []
         self.calibration_scores = []
+        self.smoothing_window_windows = max(1, int(smoothing_window_windows))
 
     def to(self, device):
         # Data is accumulated on CPU by design.
@@ -88,7 +89,7 @@ class WindowAnomalyRankingMetrics:
             return diagnostics
 
         try:
-            pdm_diag = self._calibrated_risk_gap_diagnostics(labels=labels, scores=scores)
+            pdm_diag = self._smoothed_rank_gap_diagnostics(labels=labels, scores=scores, ts_ids=ts_ids)
         except Exception as exc:
             Log.error(f"Error computing calibrated PdM metrics: {exc}")
             reason = f"pdm_metric_failed:{exc.__class__.__name__}"
@@ -98,7 +99,7 @@ class WindowAnomalyRankingMetrics:
         diagnostics.update(pdm_diag)
         return diagnostics
 
-    def _calibrated_risk_gap_diagnostics(self, labels: np.ndarray, scores: np.ndarray) -> dict:
+    def _smoothed_rank_gap_diagnostics(self, labels: np.ndarray, scores: np.ndarray, ts_ids: np.ndarray) -> dict:
         calibration_scores = self._calibration_scores_array()
         if calibration_scores.size <= 0:
             reason = "missing_calibration_scores"
@@ -110,11 +111,17 @@ class WindowAnomalyRankingMetrics:
         sorted_calibration = np.sort(calibration_scores.astype(np.float64, copy=False))
         ranks = np.searchsorted(sorted_calibration, scores, side="right")
         risk_scores = np.clip(ranks / float(sorted_calibration.size), 0.0, 1.0)
-        positive_risk_scores = risk_scores[labels == 1]
-        negative_risk_scores = risk_scores[labels == 0]
-        positive_risk_mean = float(np.mean(positive_risk_scores))
-        negative_risk_mean = float(np.mean(negative_risk_scores))
-        risk_gap = float(positive_risk_mean - negative_risk_mean)
+        smoothed_risk_scores = self._trailing_segmented_rolling_mean(
+            values=risk_scores,
+            ts_ids=ts_ids,
+            window_size=self.smoothing_window_windows,
+        )
+        positive_smoothed = smoothed_risk_scores[labels == 1]
+        negative_smoothed = smoothed_risk_scores[labels == 0]
+        positive_smoothed_mean = float(np.mean(positive_smoothed))
+        negative_smoothed_mean = float(np.mean(negative_smoothed))
+        smoothed_auroc = float(self._binary_auroc(labels=labels, scores=smoothed_risk_scores))
+        smoothed_rank_gap = float(2.0 * smoothed_auroc - 1.0)
 
         return {
             "calibration_window_count": int(calibration_scores.shape[0]),
@@ -126,12 +133,65 @@ class WindowAnomalyRankingMetrics:
             "risk_score_max": round(float(np.max(risk_scores)), 6),
             "risk_score_mean": round(float(np.mean(risk_scores)), 6),
             "risk_score_std": round(float(np.std(risk_scores)), 6),
-            "pdm_positive_risk_mean": round(positive_risk_mean, 6),
-            "pdm_negative_risk_mean": round(negative_risk_mean, 6),
-            "pdm_risk_gap": round(risk_gap, 6),
+            "pdm_smoothing_window_windows": int(self.smoothing_window_windows),
+            "pdm_positive_smoothed_risk_mean": round(positive_smoothed_mean, 6),
+            "pdm_negative_smoothed_risk_mean": round(negative_smoothed_mean, 6),
+            "pdm_smoothed_auroc": round(smoothed_auroc, 6),
+            "pdm_smoothed_rank_gap": round(smoothed_rank_gap, 6),
             "pdm_metric_valid": True,
             "pdm_metric_invalid_reason": None,
         }
+
+    @staticmethod
+    def _trailing_segmented_rolling_mean(values: np.ndarray, ts_ids: np.ndarray, window_size: int) -> np.ndarray:
+        values = np.asarray(values, dtype=np.float64)
+        ts_ids = np.asarray(ts_ids, dtype=np.int64)
+        out = np.zeros_like(values, dtype=np.float64)
+        window_size = max(1, int(window_size))
+        if values.size == 0:
+            return out
+
+        start = 0
+        while start < values.size:
+            end = start + 1
+            while end < values.size and ts_ids[end] == ts_ids[start]:
+                end += 1
+            segment = values[start:end]
+            csum = np.cumsum(np.insert(segment, 0, 0.0))
+            positions = np.arange(segment.size)
+            left = np.maximum(0, positions + 1 - window_size)
+            sums = csum[positions + 1] - csum[left]
+            counts = positions + 1 - left
+            out[start:end] = sums / counts
+            start = end
+        return out
+
+    @staticmethod
+    def _binary_auroc(labels: np.ndarray, scores: np.ndarray) -> float:
+        labels = np.asarray(labels, dtype=np.int64)
+        scores = np.asarray(scores, dtype=np.float64)
+        positive = labels == 1
+        negative = labels == 0
+        n_pos = int(np.sum(positive))
+        n_neg = int(np.sum(negative))
+        if n_pos <= 0 or n_neg <= 0:
+            raise ValueError("AUROC requires positive and negative labels.")
+
+        order = np.argsort(scores, kind="mergesort")
+        sorted_scores = scores[order]
+        ranks = np.empty(scores.shape[0], dtype=np.float64)
+        start = 0
+        while start < sorted_scores.size:
+            end = start + 1
+            while end < sorted_scores.size and sorted_scores[end] == sorted_scores[start]:
+                end += 1
+            avg_rank = (start + 1 + end) / 2.0
+            ranks[order[start:end]] = avg_rank
+            start = end
+
+        pos_rank_sum = float(np.sum(ranks[positive]))
+        auroc = (pos_rank_sum - (n_pos * (n_pos + 1) / 2.0)) / float(n_pos * n_neg)
+        return float(np.clip(auroc, 0.0, 1.0))
 
     def _calibration_scores_array(self) -> np.ndarray:
         if not self.calibration_scores:
@@ -187,9 +247,11 @@ class WindowAnomalyRankingMetrics:
             "risk_score_max": None,
             "risk_score_mean": None,
             "risk_score_std": None,
-            "pdm_positive_risk_mean": None,
-            "pdm_negative_risk_mean": None,
-            "pdm_risk_gap": None,
+            "pdm_smoothing_window_windows": int(self.smoothing_window_windows),
+            "pdm_positive_smoothed_risk_mean": None,
+            "pdm_negative_smoothed_risk_mean": None,
+            "pdm_smoothed_auroc": None,
+            "pdm_smoothed_rank_gap": None,
             "pdm_metric_valid": False,
             "pdm_metric_invalid_reason": reason,
         }

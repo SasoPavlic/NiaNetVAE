@@ -42,7 +42,7 @@ objectives:
   # All objectives are minimized:
   # - obj_error: reconstruction metric value
   # - obj_efficiency: efficiency backend value
-  # - obj_pdm: clip(0.5 * (1 - pdm_risk_gap), 0, 1)
+  # - obj_pdm: 1 - pdm_smoothed_auroc
   #
   # MetroPT PdM labeling semantics (aligned with metropt-pdm-framework):
   # - evaluate only test windows from phases 0 and 1
@@ -62,10 +62,12 @@ objectives:
     metric: macs
 
   pdm:
-    # Calibrated risk-gap PdM proxy.
-    # Pipeline: window_reconstruction_error -> risk_score -> risk_gap.
+    # Smoothed ranking PdM proxy.
+    # Pipeline: window_reconstruction_error -> risk_score -> smoothed_risk_score -> smoothed_rank_gap.
     # Downstream metropt thresholds/coverage/recall remain evaluation-only.
-    metric: calibrated_risk_gap
+    metric: smoothed_rank_gap
+    # Trailing rolling mean window over ordered test windows, reset per segment.
+    smoothing_window_windows: 480
 
   selection:
     # Deterministic winner selection after search:
@@ -122,12 +124,12 @@ logging_params:
   logger_file: "RNNAutoencoder.log"
   save_dir: "logs"                  # local run outputs
   db_storage: "logs/solutions.db"   # used when db_backend=sqlite
-  db_table_name: "solutions_finetune_riskgap"  # isolated table for calibrated risk-gap objective runs
+  db_table_name: "solutions_finetune_smoothed_rankgap"  # isolated table for smoothed-rank objective runs
   db_backend: "postgres"            # postgres or sqlite
   db_wait_seconds: 1800             # max wait for DB recovery before winner-selection fallback/fail
   db_wait_poll_seconds: 30          # retry poll interval while waiting for DB recovery
   export_enabled: true               # write model/meta/summary export artifacts
-  model_export_dir: "logs/per_maint_models"
+  model_export_dir: "logs/per_maint_models_finetune_smoothed_rankgap"
 
 # DataLoader runtime settings.
 # num_workers is a major speed lever for CPU-side input pipeline throughput.

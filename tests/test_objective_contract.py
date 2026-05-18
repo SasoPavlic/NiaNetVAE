@@ -11,7 +11,7 @@ def test_resolve_objective_contract_defaults_when_missing() -> None:
     assert contract == {
         "error": {"metric": "SMAPE"},
         "efficiency": {"metric": "macs"},
-        "pdm": {"metric": "calibrated_risk_gap"},
+        "pdm": {"metric": "smoothed_rank_gap", "smoothing_window_windows": 480},
     }
     assert cfg["objectives"] == contract
 
@@ -21,7 +21,7 @@ def test_resolve_objective_contract_normalizes_case() -> None:
         "objectives": {
             "error": {"metric": "rmse"},
             "efficiency": {"metric": "MACS"},
-            "pdm": {"metric": "CALIBRATED_RISK_GAP"},
+            "pdm": {"metric": "SMOOTHED_RANK_GAP", "smoothing_window_windows": "240"},
         }
     }
 
@@ -29,7 +29,8 @@ def test_resolve_objective_contract_normalizes_case() -> None:
 
     assert contract["error"]["metric"] == "RMSE"
     assert contract["efficiency"]["metric"] == "macs"
-    assert contract["pdm"]["metric"] == "calibrated_risk_gap"
+    assert contract["pdm"]["metric"] == "smoothed_rank_gap"
+    assert contract["pdm"]["smoothing_window_windows"] == 240
 
 
 def test_resolve_objective_contract_preserves_selection_block() -> None:
@@ -76,7 +77,7 @@ def test_resolve_objective_contract_rejects_legacy_window_auprc_metric() -> None
         main._resolve_objective_contract(cfg)
 
 
-@pytest.mark.parametrize("legacy_metric", ["fixed_theta_fbeta_covpen", "calibrated_risk_fbeta_covpen"])
+@pytest.mark.parametrize("legacy_metric", ["fixed_theta_fbeta_covpen", "calibrated_risk_fbeta_covpen", "calibrated_risk_gap"])
 def test_resolve_objective_contract_rejects_old_pdm_metrics(legacy_metric: str) -> None:
     cfg = {"objectives": {"pdm": {"metric": legacy_metric}}}
     with pytest.raises(ValueError, match="objectives.pdm.metric"):
@@ -87,7 +88,7 @@ def test_resolve_objective_contract_rejects_legacy_fixed_theta_key() -> None:
     cfg = {
         "objectives": {
             "pdm": {
-                "metric": "calibrated_risk_gap",
+                "metric": "smoothed_rank_gap",
                 "fixed_theta": 0.61,
             }
         }
@@ -101,7 +102,7 @@ def test_resolve_objective_contract_rejects_legacy_fixed_theta_key() -> None:
     ["risk_score_exceedance_quantile", "beta", "coverage_target", "coverage_penalty_lambda"],
 )
 def test_resolve_objective_contract_rejects_removed_pdm_parameters(removed_key: str) -> None:
-    cfg = {"objectives": {"pdm": {"metric": "calibrated_risk_gap", removed_key: 0.5}}}
+    cfg = {"objectives": {"pdm": {"metric": "smoothed_rank_gap", removed_key: 0.5}}}
     with pytest.raises(ValueError, match="Removed objectives.pdm keys"):
         main._resolve_objective_contract(cfg)
 
@@ -115,7 +116,7 @@ def test_config_summary_line_includes_objective_contract_fields() -> None:
         "objectives": {
             "error": {"metric": "SMAPE"},
             "efficiency": {"metric": "macs"},
-            "pdm": {"metric": "calibrated_risk_gap"},
+            "pdm": {"metric": "smoothed_rank_gap", "smoothing_window_windows": 480},
         },
     }
 
@@ -123,7 +124,7 @@ def test_config_summary_line_includes_objective_contract_fields() -> None:
 
     assert "obj_error=SMAPE" in line
     assert "obj_efficiency=macs" in line
-    assert "obj_pdm=calibrated_risk_gap" in line
+    assert "obj_pdm=smoothed_rank_gap" in line
     assert "nsga3_n_partitions=5" in line
     assert "nsga3_effective_population=21" in line
     assert "fixed_optimizer=Adam" in line
@@ -135,7 +136,7 @@ def test_objective_contract_line_contains_locked_semantics() -> None:
     contract = {
         "error": {"metric": "SMAPE"},
         "efficiency": {"metric": "macs"},
-        "pdm": {"metric": "calibrated_risk_gap"},
+        "pdm": {"metric": "smoothed_rank_gap", "smoothing_window_windows": 480},
     }
 
     line = main._objective_contract_line(contract)
@@ -143,9 +144,10 @@ def test_objective_contract_line_contains_locked_semantics() -> None:
     assert line.startswith("OBJECTIVE_CONTRACT ")
     assert "obj_error=SMAPE direction=min" in line
     assert "obj_efficiency=macs direction=min" in line
-    assert "obj_pdm=clip(0.5*(1-pdm_risk_gap),0,1) direction=min" in line
-    assert "pdm_metric=calibrated_risk_gap" in line
-    assert "pdm_score_pipeline=window_reconstruction_error->risk_score->risk_gap" in line
+    assert "obj_pdm=1-pdm_smoothed_auroc direction=min" in line
+    assert "pdm_metric=smoothed_rank_gap" in line
+    assert "pdm_smoothing_window_windows=480" in line
+    assert "pdm_score_pipeline=window_reconstruction_error->risk_score->smoothed_risk_score->smoothed_rank_gap" in line
     assert "pdm_label_policy=phase0_or_phase1_positive_is_phase1_exclude_phase2" in line
     assert "pdm_eval_slice=test_only" in line
 
@@ -184,7 +186,7 @@ def test_resolve_training_policy_rejects_invalid_values() -> None:
 
 def test_validate_pdm_objective_scope_accepts_metropt_per_maint() -> None:
     cfg = {
-        "objectives": {"pdm": {"metric": "calibrated_risk_gap"}},
+        "objectives": {"pdm": {"metric": "smoothed_rank_gap"}},
         "data_params": {"dataset_name": "MetroPT", "regime": "per_maint"},
     }
 
@@ -193,7 +195,7 @@ def test_validate_pdm_objective_scope_accepts_metropt_per_maint() -> None:
 
 def test_validate_pdm_objective_scope_rejects_other_scope() -> None:
     cfg = {
-        "objectives": {"pdm": {"metric": "calibrated_risk_gap"}},
+        "objectives": {"pdm": {"metric": "smoothed_rank_gap"}},
         "data_params": {"dataset_name": "SMAP", "regime": "single"},
     }
 
@@ -265,8 +267,8 @@ def test_resolve_winner_selection_contract_invalid_weights_raise() -> None:
 def test_resolve_db_table_name_defaults_and_normalizes() -> None:
     cfg = {"logging_params": {}}
     table_name = main._resolve_db_table_name(cfg)
-    assert table_name == "solutions_finetune_riskgap"
-    assert cfg["logging_params"]["db_table_name"] == "solutions_finetune_riskgap"
+    assert table_name == "solutions_finetune_smoothed_rankgap"
+    assert cfg["logging_params"]["db_table_name"] == "solutions_finetune_smoothed_rankgap"
 
     cfg_custom = {"logging_params": {"db_table_name": "  my_table  "}}
     table_name_custom = main._resolve_db_table_name(cfg_custom)

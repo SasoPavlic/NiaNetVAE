@@ -24,8 +24,8 @@ import nianetvae.experiments.metrics_evaluation
 ALLOWED_WORKFLOW_MODES = {"per_maint_baseline_search", "per_maint_finetune_search", "per_maint_warmstart_search"}
 ALLOWED_ERROR_OBJECTIVE_METRICS = {"MAE", "MSE", "RMSE", "MAPE", "RMAPE", "SMAPE"}
 ALLOWED_EFFICIENCY_OBJECTIVE_METRICS = {"params", "macs", "latency_ms"}
-ALLOWED_PDM_OBJECTIVE_METRIC = "calibrated_risk_gap"
-DEFAULT_DB_TABLE_NAME = "solutions_finetune_riskgap"
+ALLOWED_PDM_OBJECTIVE_METRIC = "smoothed_rank_gap"
+DEFAULT_DB_TABLE_NAME = "solutions_finetune_smoothed_rankgap"
 ALLOWED_SELECTION_METHODS = {"weighted_ideal_distance"}
 ALLOWED_FIXED_OPTIMIZERS = {"Adam"}
 
@@ -205,7 +205,7 @@ def _resolve_objective_contract(config: dict) -> dict:
     C13.1 contract lock:
       - obj_error: single selected reconstruction metric (min)
       - obj_efficiency: selected efficiency backend (min)
-      - obj_pdm: clip(0.5 * (1 - calibrated_risk_gap), 0, 1) (min)
+      - obj_pdm: 1 - pdm_smoothed_auroc (min)
     """
     objectives = dict(config.get("objectives") or {})
     error_cfg = dict(objectives.get("error") or {})
@@ -243,6 +243,19 @@ def _resolve_objective_contract(config: dict) -> dict:
             "Legacy objectives.pdm.fixed_theta is no longer supported for NiaNetVAE. "
             "Downstream maintenance_risk_theta belongs to metropt-pdm-framework evaluation only."
         )
+    raw_smoothing_window = pdm_cfg.get("smoothing_window_windows", 480)
+    try:
+        smoothing_window_windows = int(raw_smoothing_window)
+    except Exception:
+        raise ValueError(
+            f"Invalid objectives.pdm.smoothing_window_windows={raw_smoothing_window!r}. "
+            "Expected integer >= 1."
+        ) from None
+    if smoothing_window_windows < 1:
+        raise ValueError(
+            f"Invalid objectives.pdm.smoothing_window_windows={raw_smoothing_window!r}. "
+            "Expected integer >= 1."
+        )
     removed_keys = {
         "risk_score_exceedance_quantile",
         "beta",
@@ -253,7 +266,7 @@ def _resolve_objective_contract(config: dict) -> dict:
     if present_removed_keys:
         raise ValueError(
             "Removed objectives.pdm keys are no longer supported for NiaNetVAE "
-            f"calibrated_risk_gap objective: {present_removed_keys}. "
+            f"smoothed_rank_gap objective: {present_removed_keys}. "
             "Coverage/recall targets belong to metropt-pdm-framework evaluation."
         )
 
@@ -262,6 +275,7 @@ def _resolve_objective_contract(config: dict) -> dict:
         "efficiency": {"metric": efficiency_metric},
         "pdm": {
             "metric": pdm_metric,
+            "smoothing_window_windows": smoothing_window_windows,
         },
     }
     if "selection" in objectives:
@@ -381,9 +395,10 @@ def _objective_contract_line(contract: dict) -> str:
         "OBJECTIVE_CONTRACT "
         f"obj_error={_value_or_na(error_metric)} direction=min "
         f"obj_efficiency={_value_or_na(efficiency_metric)} direction=min "
-        "obj_pdm=clip(0.5*(1-pdm_risk_gap),0,1) direction=min "
+        "obj_pdm=1-pdm_smoothed_auroc direction=min "
         f"pdm_metric={_value_or_na(pdm_metric)} "
-        "pdm_score_pipeline=window_reconstruction_error->risk_score->risk_gap "
+        f"pdm_smoothing_window_windows={_value_or_na(pdm_cfg.get('smoothing_window_windows'))} "
+        "pdm_score_pipeline=window_reconstruction_error->risk_score->smoothed_risk_score->smoothed_rank_gap "
         "pdm_label_policy=phase0_or_phase1_positive_is_phase1_exclude_phase2 "
         "pdm_eval_slice=test_only"
     )

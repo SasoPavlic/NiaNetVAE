@@ -54,7 +54,7 @@ def _cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params") -> dict
             "error": {"metric": error_metric},
             "efficiency": {"metric": efficiency_metric},
             "pdm": {
-                "metric": "calibrated_risk_gap",
+                "metric": "smoothed_rank_gap",
             },
             "selection": {
                 "method": "weighted_ideal_distance",
@@ -67,18 +67,24 @@ def _cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params") -> dict
 
 def _pdm_anomaly_payload(
     *,
-    positive_risk_mean: float = 0.8,
-    negative_risk_mean: float = 0.2,
+    smoothed_auroc: float = 0.8,
+    positive_risk_mean: float | None = None,
+    negative_risk_mean: float | None = None,
     metric_valid: bool = True,
     invalid_reason: str | None = None,
 ) -> dict:
-    risk_gap = float(positive_risk_mean) - float(negative_risk_mean)
+    if positive_risk_mean is not None and negative_risk_mean is not None:
+        smoothed_rank_gap = float(positive_risk_mean) - float(negative_risk_mean)
+        smoothed_auroc = 0.5 * (smoothed_rank_gap + 1.0)
+    smoothed_rank_gap = 2.0 * float(smoothed_auroc) - 1.0
     return {
         "pdm_metric_valid": metric_valid,
         "pdm_metric_invalid_reason": invalid_reason,
-        "pdm_positive_risk_mean": positive_risk_mean,
-        "pdm_negative_risk_mean": negative_risk_mean,
-        "pdm_risk_gap": risk_gap,
+        "pdm_smoothing_window_windows": 480,
+        "pdm_positive_smoothed_risk_mean": 0.8,
+        "pdm_negative_smoothed_risk_mean": 0.2,
+        "pdm_smoothed_auroc": smoothed_auroc,
+        "pdm_smoothed_rank_gap": smoothed_rank_gap,
     }
 
 
@@ -87,7 +93,7 @@ def test_objective_bundle_uses_selected_raw_error_metric():
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"RMSE": 2.75},
-        anomaly_metrics=_pdm_anomaly_payload(positive_risk_mean=0.6, negative_risk_mean=0.4),
+        anomaly_metrics=_pdm_anomaly_payload(smoothed_auroc=0.6),
         seq_len=16,
         n_features=4,
         cfg=_cfg(error_metric="RMSE"),
@@ -98,12 +104,12 @@ def test_objective_bundle_uses_selected_raw_error_metric():
     assert bundle["obj_efficiency"] > 0
 
 
-def test_objective_bundle_computes_obj_pdm_from_calibrated_risk_gap_formula():
+def test_objective_bundle_computes_obj_pdm_from_smoothed_rank_gap_formula():
     model = _TinyModel()
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
-        anomaly_metrics=_pdm_anomaly_payload(positive_risk_mean=0.9, negative_risk_mean=0.2),
+        anomaly_metrics=_pdm_anomaly_payload(smoothed_auroc=0.85),
         seq_len=16,
         n_features=4,
         cfg=_cfg(),
@@ -114,7 +120,7 @@ def test_objective_bundle_computes_obj_pdm_from_calibrated_risk_gap_formula():
     assert bundle["obj_pdm"] == pytest.approx(0.15, abs=1e-6)
 
 
-def test_objective_bundle_uses_worst_case_when_calibrated_risk_diagnostics_missing():
+def test_objective_bundle_uses_worst_case_when_smoothed_rank_diagnostics_missing():
     model = _TinyModel()
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
@@ -213,11 +219,13 @@ def test_cached_objective_bundle_accepts_case_insensitive_error_metric(metric_ke
     model = _TinyModel()
     cached_row = {
         metric_key: 1.25,
-        "objective_pdm_metric": "calibrated_risk_gap",
+        "objective_pdm_metric": "smoothed_rank_gap",
         "pdm_metric_valid": True,
-        "pdm_positive_risk_mean": 0.8,
-        "pdm_negative_risk_mean": 0.2,
-        "pdm_risk_gap": 0.6,
+        "pdm_smoothing_window_windows": 480,
+        "pdm_positive_smoothed_risk_mean": 0.8,
+        "pdm_negative_smoothed_risk_mean": 0.2,
+        "pdm_smoothed_auroc": 0.8,
+        "pdm_smoothed_rank_gap": 0.6,
     }
 
     bundle = objective_engine.calculate_objective_bundle_from_cached_row(
@@ -238,11 +246,13 @@ def test_cached_objective_bundle_prefers_exact_metric_key_over_lowercase_fallbac
     cached_row = {
         "SMAPE": 1.25,
         "smape": 9.99,
-        "objective_pdm_metric": "calibrated_risk_gap",
+        "objective_pdm_metric": "smoothed_rank_gap",
         "pdm_metric_valid": True,
-        "pdm_positive_risk_mean": 0.8,
-        "pdm_negative_risk_mean": 0.2,
-        "pdm_risk_gap": 0.6,
+        "pdm_smoothing_window_windows": 480,
+        "pdm_positive_smoothed_risk_mean": 0.8,
+        "pdm_negative_smoothed_risk_mean": 0.2,
+        "pdm_smoothed_auroc": 0.8,
+        "pdm_smoothed_rank_gap": 0.6,
     }
 
     bundle = objective_engine.calculate_objective_bundle_from_cached_row(
@@ -261,11 +271,13 @@ def test_cached_objective_bundle_rejects_missing_error_metric():
     model = _TinyModel()
     cached_row = {
         "MAE": 1.25,
-        "objective_pdm_metric": "calibrated_risk_gap",
+        "objective_pdm_metric": "smoothed_rank_gap",
         "pdm_metric_valid": True,
-        "pdm_positive_risk_mean": 0.8,
-        "pdm_negative_risk_mean": 0.2,
-        "pdm_risk_gap": 0.6,
+        "pdm_smoothing_window_windows": 480,
+        "pdm_positive_smoothed_risk_mean": 0.8,
+        "pdm_negative_smoothed_risk_mean": 0.2,
+        "pdm_smoothed_auroc": 0.8,
+        "pdm_smoothed_rank_gap": 0.6,
     }
 
     bundle = objective_engine.calculate_objective_bundle_from_cached_row(
@@ -322,7 +334,7 @@ def test_cached_evaluation_uses_db_then_memory_cache(monkeypatch, tmp_path):
                         "mape": 0.4,
                         "rmape": 0.5,
                         "smape": 1.5,
-                        "objective_pdm_metric": "calibrated_risk_gap",
+                        "objective_pdm_metric": "smoothed_rank_gap",
                         "window_count": 10,
                         "positive_window_count": 2,
                         "negative_window_count": 8,
@@ -332,9 +344,11 @@ def test_cached_evaluation_uses_db_then_memory_cache(monkeypatch, tmp_path):
                         "window_reconstruction_error_mean": 0.5,
                         "window_reconstruction_error_std": 0.1,
                         "segment_count": 1,
-                        "pdm_positive_risk_mean": 0.7,
-                        "pdm_negative_risk_mean": 0.5,
-                        "pdm_risk_gap": 0.2,
+                        "pdm_smoothing_window_windows": 480,
+                        "pdm_positive_smoothed_risk_mean": 0.7,
+                        "pdm_negative_smoothed_risk_mean": 0.5,
+                        "pdm_smoothed_auroc": 0.6,
+                        "pdm_smoothed_rank_gap": 0.2,
                         "pdm_metric_valid": True,
                         "pdm_metric_invalid_reason": None,
                     }
@@ -481,9 +495,11 @@ def test_cached_objective_bundle_requires_contract_provenance_match():
         "obj_pdm": 0.2,
         "objective_pdm_metric": None,
         "pdm_metric_valid": True,
-        "pdm_positive_risk_mean": 0.8,
-        "pdm_negative_risk_mean": 0.2,
-        "pdm_risk_gap": 0.6,
+        "pdm_smoothing_window_windows": 480,
+        "pdm_positive_smoothed_risk_mean": 0.8,
+        "pdm_negative_smoothed_risk_mean": 0.2,
+        "pdm_smoothed_auroc": 0.8,
+        "pdm_smoothed_rank_gap": 0.6,
     }
 
     bundle = objective_engine.calculate_objective_bundle_from_cached_row(

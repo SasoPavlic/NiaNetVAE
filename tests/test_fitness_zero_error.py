@@ -45,20 +45,23 @@ def _objective_cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params
             "error": {"metric": error_metric},
             "efficiency": {"metric": efficiency_metric},
             "pdm": {
-                "metric": "calibrated_risk_gap",
+                "metric": "smoothed_rank_gap",
             },
         },
     }
 
 
 def _pdm_payload(positive_risk_mean: float, negative_risk_mean: float) -> dict:
-    risk_gap = float(positive_risk_mean) - float(negative_risk_mean)
+    smoothed_rank_gap = float(positive_risk_mean) - float(negative_risk_mean)
+    smoothed_auroc = 0.5 * (smoothed_rank_gap + 1.0)
     return {
         "pdm_metric_valid": True,
         "pdm_metric_invalid_reason": None,
-        "pdm_positive_risk_mean": positive_risk_mean,
-        "pdm_negative_risk_mean": negative_risk_mean,
-        "pdm_risk_gap": risk_gap,
+        "pdm_smoothing_window_windows": 480,
+        "pdm_positive_smoothed_risk_mean": positive_risk_mean,
+        "pdm_negative_smoothed_risk_mean": negative_risk_mean,
+        "pdm_smoothed_auroc": smoothed_auroc,
+        "pdm_smoothed_rank_gap": smoothed_rank_gap,
     }
 
 

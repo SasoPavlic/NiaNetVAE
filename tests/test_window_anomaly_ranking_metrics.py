@@ -14,8 +14,8 @@ def _targets_and_predictions(scores):
     return targets, predictions
 
 
-def _compute_with_calibration(test_scores, labels):
-    metrics = WindowAnomalyRankingMetrics()
+def _compute_with_calibration(test_scores, labels, *, smoothing_window_windows=1, ts_ids=None):
+    metrics = WindowAnomalyRankingMetrics(smoothing_window_windows=smoothing_window_windows)
     cal_targets, cal_predictions = _targets_and_predictions([0.1, 0.2, 0.3, 0.4])
     targets, predictions = _targets_and_predictions(test_scores)
     metrics.update_calibration(predictions=cal_predictions, targets=cal_targets)
@@ -23,12 +23,12 @@ def _compute_with_calibration(test_scores, labels):
         predictions=predictions,
         targets=targets,
         labels=torch.tensor(labels, dtype=torch.int64),
-        ts_ids=torch.arange(len(labels), dtype=torch.int64),
+        ts_ids=torch.tensor(ts_ids, dtype=torch.int64) if ts_ids is not None else torch.arange(len(labels), dtype=torch.int64),
     )
     return metrics.compute()
 
 
-def test_window_anomaly_ranking_metrics_compute_calibrated_risk_gap_diagnostics():
+def test_window_anomaly_ranking_metrics_compute_smoothed_rank_gap_diagnostics():
     out = _compute_with_calibration([0.0, 0.0, 0.5, 0.5], [0, 0, 1, 1])
 
     assert out["window_count"] == 4
@@ -41,9 +41,11 @@ def test_window_anomaly_ranking_metrics_compute_calibrated_risk_gap_diagnostics(
     assert out["calibration_window_count"] == 4
     assert out["risk_score_min"] == pytest.approx(0.0)
     assert out["risk_score_max"] == pytest.approx(1.0)
-    assert out["pdm_positive_risk_mean"] == pytest.approx(1.0)
-    assert out["pdm_negative_risk_mean"] == pytest.approx(0.0)
-    assert out["pdm_risk_gap"] == pytest.approx(1.0)
+    assert out["pdm_smoothing_window_windows"] == 1
+    assert out["pdm_positive_smoothed_risk_mean"] == pytest.approx(1.0)
+    assert out["pdm_negative_smoothed_risk_mean"] == pytest.approx(0.0)
+    assert out["pdm_smoothed_auroc"] == pytest.approx(1.0)
+    assert out["pdm_smoothed_rank_gap"] == pytest.approx(1.0)
     assert out["pdm_metric_valid"] is True
     assert out["pdm_metric_invalid_reason"] is None
 
@@ -51,17 +53,33 @@ def test_window_anomaly_ranking_metrics_compute_calibrated_risk_gap_diagnostics(
 def test_window_anomaly_ranking_metrics_no_separation_has_zero_gap():
     out = _compute_with_calibration([0.2, 0.2, 0.2, 0.2], [0, 0, 1, 1])
 
-    assert out["pdm_positive_risk_mean"] == pytest.approx(0.5)
-    assert out["pdm_negative_risk_mean"] == pytest.approx(0.5)
-    assert out["pdm_risk_gap"] == pytest.approx(0.0)
+    assert out["pdm_positive_smoothed_risk_mean"] == pytest.approx(0.5)
+    assert out["pdm_negative_smoothed_risk_mean"] == pytest.approx(0.5)
+    assert out["pdm_smoothed_auroc"] == pytest.approx(0.5)
+    assert out["pdm_smoothed_rank_gap"] == pytest.approx(0.0)
 
 
 def test_window_anomaly_ranking_metrics_inverted_signal_has_negative_gap():
     out = _compute_with_calibration([0.5, 0.5, 0.0, 0.0], [0, 0, 1, 1])
 
-    assert out["pdm_positive_risk_mean"] == pytest.approx(0.0)
-    assert out["pdm_negative_risk_mean"] == pytest.approx(1.0)
-    assert out["pdm_risk_gap"] == pytest.approx(-1.0)
+    assert out["pdm_positive_smoothed_risk_mean"] == pytest.approx(0.0)
+    assert out["pdm_negative_smoothed_risk_mean"] == pytest.approx(1.0)
+    assert out["pdm_smoothed_auroc"] == pytest.approx(0.0)
+    assert out["pdm_smoothed_rank_gap"] == pytest.approx(-1.0)
+
+
+def test_window_anomaly_ranking_metrics_smoothing_resets_by_segment():
+    out = _compute_with_calibration(
+        [0.0, 0.5, 0.5, 0.0],
+        [0, 1, 1, 0],
+        smoothing_window_windows=2,
+        ts_ids=[0, 0, 1, 1],
+    )
+
+    assert out["pdm_positive_smoothed_risk_mean"] == pytest.approx(0.75)
+    assert out["pdm_negative_smoothed_risk_mean"] == pytest.approx(0.25)
+    assert out["pdm_smoothed_auroc"] == pytest.approx(0.875)
+    assert out["pdm_smoothed_rank_gap"] == pytest.approx(0.75)
 
 
 def test_window_anomaly_ranking_metrics_single_class_is_invalid_with_diagnostics():

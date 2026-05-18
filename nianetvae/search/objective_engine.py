@@ -7,7 +7,7 @@ import torch
 from log import Log
 
 DEFAULT_PENALTY = int(9e10)
-PDM_METRIC_CALIBRATED_RISK_GAP = "calibrated_risk_gap"
+PDM_METRIC_SMOOTHED_RANK_GAP = "smoothed_rank_gap"
 
 
 def _safe_float(value) -> float | None:
@@ -24,7 +24,7 @@ def _resolve_objective_contract(cfg: dict | None = None) -> dict:
     error_metric = str(((objectives.get("error") or {}).get("metric") or "SMAPE")).strip().upper()
     efficiency_metric = str(((objectives.get("efficiency") or {}).get("metric") or "macs")).strip().lower()
     pdm_cfg = dict(objectives.get("pdm") or {})
-    pdm_metric = str((pdm_cfg.get("metric") or PDM_METRIC_CALIBRATED_RISK_GAP)).strip().lower()
+    pdm_metric = str((pdm_cfg.get("metric") or PDM_METRIC_SMOOTHED_RANK_GAP)).strip().lower()
     return {
         "error_metric": error_metric,
         "efficiency_metric": efficiency_metric,
@@ -214,9 +214,11 @@ def _anomaly_payload_from_cached_entry(entry: dict | None) -> dict:
         "window_reconstruction_error_mean",
         "window_reconstruction_error_std",
         "segment_count",
-        "pdm_positive_risk_mean",
-        "pdm_negative_risk_mean",
-        "pdm_risk_gap",
+        "pdm_smoothing_window_windows",
+        "pdm_positive_smoothed_risk_mean",
+        "pdm_negative_smoothed_risk_mean",
+        "pdm_smoothed_auroc",
+        "pdm_smoothed_rank_gap",
         "pdm_metric_valid",
         "pdm_metric_invalid_reason",
     )
@@ -241,19 +243,22 @@ def _validate_cached_row_objective_contract(cached_row: dict | None, objective_c
     return True, None
 
 
-def _compute_calibrated_risk_gap_objective(anomaly_metrics: dict) -> tuple[float, float | None, str | None]:
+def _compute_smoothed_rank_gap_objective(anomaly_metrics: dict) -> tuple[float, float | None, str | None]:
     anomaly_metrics = anomaly_metrics or {}
     metric_valid = anomaly_metrics.get("pdm_metric_valid")
     invalid_reason = anomaly_metrics.get("pdm_metric_invalid_reason")
     if metric_valid is False:
         return 1.0, None, str(invalid_reason or "pdm_metric_invalid")
 
-    risk_gap = _safe_float(anomaly_metrics.get("pdm_risk_gap"))
-    if risk_gap is None:
-        return 1.0, None, str(invalid_reason or "missing_calibrated_risk_gap")
+    smoothed_auroc = _safe_float(anomaly_metrics.get("pdm_smoothed_auroc"))
+    smoothed_rank_gap = _safe_float(anomaly_metrics.get("pdm_smoothed_rank_gap"))
+    if smoothed_auroc is None:
+        return 1.0, None, str(invalid_reason or "missing_pdm_smoothed_auroc")
+    if smoothed_rank_gap is None:
+        smoothed_rank_gap = 2.0 * float(smoothed_auroc) - 1.0
 
-    obj_pdm = float(max(0.0, min(1.0, 0.5 * (1.0 - float(risk_gap)))))
-    return obj_pdm, float(risk_gap), None
+    obj_pdm = float(max(0.0, min(1.0, 1.0 - float(smoothed_auroc))))
+    return obj_pdm, float(smoothed_rank_gap), None
 
 
 def calculate_objective_bundle(
@@ -305,8 +310,8 @@ def calculate_objective_bundle(
         )
 
     pdm_metric_key = objective_contract["pdm_metric"]
-    if pdm_metric_key == PDM_METRIC_CALIBRATED_RISK_GAP:
-        obj_pdm, pdm_signal_quality, pdm_fallback_reason = _compute_calibrated_risk_gap_objective(
+    if pdm_metric_key == PDM_METRIC_SMOOTHED_RANK_GAP:
+        obj_pdm, pdm_signal_quality, pdm_fallback_reason = _compute_smoothed_rank_gap_objective(
             anomaly_metrics=anomaly_metrics,
         )
         if pdm_fallback_reason:

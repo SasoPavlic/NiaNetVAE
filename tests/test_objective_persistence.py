@@ -43,11 +43,11 @@ class _DummyMetrics:
 
 def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
     db_path = tmp_path / "objective_only.sqlite"
-    connector = SQLiteConnector(str(db_path), "solutions_finetune_riskgap")
+    connector = SQLiteConnector(str(db_path), "solutions_finetune_smoothed_rankgap")
 
     conn = sqlite3.connect(str(db_path))
     try:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(solutions_finetune_riskgap)").fetchall()}
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(solutions_finetune_smoothed_rankgap)").fetchall()}
         assert {"obj_error", "obj_efficiency", "obj_pdm"}.issubset(columns)
         assert {
             "window_count",
@@ -68,9 +68,11 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
             "risk_score_mean",
             "risk_score_std",
             "segment_count",
-            "pdm_positive_risk_mean",
-            "pdm_negative_risk_mean",
-            "pdm_risk_gap",
+            "pdm_smoothing_window_windows",
+            "pdm_positive_smoothed_risk_mean",
+            "pdm_negative_smoothed_risk_mean",
+            "pdm_smoothed_auroc",
+            "pdm_smoothed_rank_gap",
             "pdm_metric_valid",
             "pdm_metric_invalid_reason",
             "objective_pdm_metric",
@@ -112,9 +114,11 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
             "risk_score_mean": 0.4,
             "risk_score_std": 0.2,
             "segment_count": 2,
-            "pdm_positive_risk_mean": 0.8,
-            "pdm_negative_risk_mean": 0.2,
-            "pdm_risk_gap": 0.6,
+            "pdm_smoothing_window_windows": 480,
+            "pdm_positive_smoothed_risk_mean": 0.8,
+            "pdm_negative_smoothed_risk_mean": 0.2,
+            "pdm_smoothed_auroc": 0.8,
+            "pdm_smoothed_rank_gap": 0.6,
             "pdm_metric_valid": True,
             "pdm_metric_invalid_reason": None,
         },
@@ -130,7 +134,7 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
         obj_efficiency=1234.0,
         obj_pdm=0.33,
         objective_contract={
-            "pdm_metric": "calibrated_risk_gap",
+            "pdm_metric": "smoothed_rank_gap",
         },
     )
 
@@ -139,8 +143,8 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
         row = conn.execute(
             "SELECT obj_error, obj_efficiency, obj_pdm, "
             "window_count, positive_window_count, "
-            "pdm_risk_gap, objective_pdm_metric "
-            "FROM solutions_finetune_riskgap LIMIT 1"
+            "pdm_smoothed_auroc, objective_pdm_metric "
+            "FROM solutions_finetune_smoothed_rankgap LIMIT 1"
         ).fetchone()
         assert row is not None
         assert float(row[0]) == 1.25
@@ -148,8 +152,8 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
         assert float(row[2]) == 0.33
         assert int(row[3]) == 100
         assert int(row[4]) == 10
-        assert float(row[5]) == 0.6
-        assert str(row[6]) == "calibrated_risk_gap"
+        assert float(row[5]) == 0.8
+        assert str(row[6]) == "smoothed_rank_gap"
     finally:
         conn.close()
 
@@ -183,7 +187,8 @@ def test_sqlite_schema_mismatch_auto_migrates_for_old_anomaly_columns(tmp_path: 
     try:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(solutions)").fetchall()}
         assert "objective_pdm_metric" in columns
-        assert "pdm_risk_gap" in columns
+        assert "pdm_smoothed_rank_gap" in columns
+        assert "pdm_smoothed_auroc" in columns
         assert "calibration_window_count" in columns
         assert "pdm_metric_valid" in columns
     finally:
@@ -241,13 +246,15 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
         "objective_contract": {
             "error_metric": "SMAPE",
             "efficiency_metric": "macs",
-            "pdm_metric": "calibrated_risk_gap",
+            "pdm_metric": "smoothed_rank_gap",
         },
         "metrics": {"SMAPE": 1.25},
         "anomaly_metrics": {
-            "pdm_positive_risk_mean": 0.8,
-            "pdm_negative_risk_mean": 0.2,
-            "pdm_risk_gap": 0.6,
+            "pdm_smoothing_window_windows": 480,
+            "pdm_positive_smoothed_risk_mean": 0.8,
+            "pdm_negative_smoothed_risk_mean": 0.2,
+            "pdm_smoothed_auroc": 0.8,
+            "pdm_smoothed_rank_gap": 0.6,
             "pdm_metric_valid": True,
         },
     }
@@ -283,13 +290,14 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
     assert "window_auprc" not in final_training["anomaly_metrics"]
 
 
-def test_shareable_risk_gap_objective_markdown_exists():
-    doc_path = Path(__file__).resolve().parents[2] / "CALIBRATED_RISK_GAP_OBJECTIVE.md"
+def test_shareable_smoothed_rank_gap_objective_markdown_exists():
+    doc_path = Path(__file__).resolve().parents[2] / "SMOOTHED_RANK_GAP_OBJECTIVE.md"
     content = doc_path.read_text(encoding="utf-8")
 
-    assert "pdm_risk_gap" in content
-    assert "obj_pdm = clip(0.5 * (1 - pdm_risk_gap), 0, 1)" in content
-    assert "risk_gap =  1.0 -> obj_pdm = 0.0" in content
+    assert "pdm_smoothed_auroc" in content
+    assert "pdm_smoothed_rank_gap" in content
+    assert "obj_pdm = 1 - pdm_smoothed_auroc" in content
+    assert "AUROC = 1.0 -> obj_pdm = 0.0" in content
 
 
 def test_experiment_uses_fixed_adam_training_policy():
