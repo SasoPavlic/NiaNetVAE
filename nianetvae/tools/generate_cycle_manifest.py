@@ -14,6 +14,9 @@ import yaml
 from nianetvae.dataloaders.metropt_dataloader import MetroPTDataLoader
 
 
+ARTIFACT_CONTRACT_VERSION = "2.0"
+
+
 def _load_yaml(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.load(handle, Loader=yaml.Loader)
@@ -136,6 +139,11 @@ def _extract_meta_provenance(metadata: dict) -> dict:
 
 
 def _validate_manifest_contract(manifest: dict) -> None:
+    if str(manifest.get("schema_version")) != ARTIFACT_CONTRACT_VERSION:
+        raise ValueError(
+            "Manifest contract violation: schema_version must be "
+            f"{ARTIFACT_CONTRACT_VERSION!r}."
+        )
     if "cycles" not in manifest or not isinstance(manifest["cycles"], dict):
         raise ValueError("Manifest contract violation: missing top-level 'cycles' object.")
 
@@ -149,9 +157,15 @@ def _validate_manifest_contract(manifest: dict) -> None:
                 f"Manifest contract violation: cycle {key} has unsupported status={status!r}."
             )
         if status == "trained":
-            if not entry.get("model_path") or not entry.get("meta_path"):
+            if not entry.get("model_path") or not entry.get("meta_path") or not entry.get("scaler_path"):
                 raise ValueError(
-                    f"Manifest contract violation: cycle {key} status=trained requires model_path and meta_path."
+                    f"Manifest contract violation: cycle {key} status=trained requires "
+                    "model_path, meta_path, and scaler_path."
+                )
+            if str(entry.get("contract_version")) != ARTIFACT_CONTRACT_VERSION:
+                raise ValueError(
+                    f"Manifest contract violation: cycle {key} has "
+                    f"contract_version={entry.get('contract_version')!r}."
                 )
         if status == "alias":
             if entry.get("alias_to") is None:
@@ -169,7 +183,8 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
     paths_relative_to = paths_relative_to.resolve()
 
     manifest = {
-        "schema_version": "1.0",
+        "schema_version": ARTIFACT_CONTRACT_VERSION,
+        "contract_version": ARTIFACT_CONTRACT_VERSION,
         "dataset": dataset_name,
         "regime": regime,
         "workflow_mode": workflow_mode,
@@ -191,6 +206,7 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
         cycle_dir = dataset_root / f"cycle_{key}"
         model_path = cycle_dir / "model.pt"
         meta_path = cycle_dir / "model_meta.json"
+        scaler_path = cycle_dir / "scaler.joblib"
         summary_path = cycle_dir / "search_summary.json"
 
         has_artifacts = model_path.exists() and meta_path.exists()
@@ -198,16 +214,35 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
 
         if has_artifacts:
             metadata = _read_meta(meta_path)
+            if str(metadata.get("schema_version")) != ARTIFACT_CONTRACT_VERSION:
+                raise ValueError(
+                    f"Cycle {key} has legacy/unsupported model_meta schema_version="
+                    f"{metadata.get('schema_version')!r}; rerun NiaNetVAE export."
+                )
+            scaler_file = (
+                metadata.get("scaler_file")
+                or (metadata.get("preprocessing_contract") or {}).get("scaler_file")
+                or "scaler.joblib"
+            )
+            scaler_path = cycle_dir / str(scaler_file)
+            if not scaler_path.exists():
+                raise FileNotFoundError(
+                    f"Cycle {key} is missing required v2 scaler artifact: {scaler_path}"
+                )
             summary_payload = _read_meta(summary_path) if summary_path.exists() else {}
             status = "trained"
             artifact_dir_rel = os.path.relpath(cycle_dir, paths_relative_to).replace("\\", "/")
             model_path_rel = os.path.relpath(model_path, paths_relative_to).replace("\\", "/")
             meta_path_rel = os.path.relpath(meta_path, paths_relative_to).replace("\\", "/")
+            scaler_path_rel = os.path.relpath(scaler_path, paths_relative_to).replace("\\", "/")
             summary_path_rel = (
                 os.path.relpath(summary_path, paths_relative_to).replace("\\", "/")
                 if summary_path.exists()
                 else None
             )
+            feature_contract = metadata.get("feature_contract") or {}
+            sequence_contract = metadata.get("sequence_contract") or {}
+            split_contract = metadata.get("split_contract") or {}
             entry = {
                 "cycle_id": int(cycle_id),
                 "status": status,
@@ -215,7 +250,24 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
                 "artifact_dir": artifact_dir_rel,
                 "model_path": model_path_rel,
                 "meta_path": meta_path_rel,
+                "scaler_path": scaler_path_rel,
                 "summary_path": summary_path_rel,
+                "contract_version": metadata.get("contract_version") or metadata.get("schema_version"),
+                "feature_hash": feature_contract.get("feature_hash"),
+                "seq_len": sequence_contract.get("seq_len") or metadata.get("seq_len"),
+                "stride": sequence_contract.get("stride") or metadata.get("stride"),
+                "rolling_window": feature_contract.get("rolling_window") or metadata.get("rolling_window"),
+                "train_minutes": split_contract.get("train_minutes") or metadata.get("train_minutes"),
+                "post_train_minutes": split_contract.get("post_train_minutes") or metadata.get("post_train_minutes"),
+                "pre_maint_minutes": split_contract.get("pre_maint_minutes") or metadata.get("pre_maint_minutes"),
+                "baseline_start": split_contract.get("baseline_start"),
+                "baseline_end": split_contract.get("baseline_end"),
+                "maintenance_start": split_contract.get("maintenance_start"),
+                "maintenance_end": split_contract.get("maintenance_end"),
+                "post_train_start": split_contract.get("post_train_start"),
+                "post_train_end": split_contract.get("post_train_end"),
+                "test_start": split_contract.get("test_start"),
+                "test_end": split_contract.get("test_end"),
                 "hash_id": metadata.get("hash_id"),
                 "run_uuid": metadata.get("run_uuid"),
                 "created_at": metadata.get("created_at"),

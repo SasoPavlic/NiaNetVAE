@@ -24,6 +24,8 @@ An explicit goal is to prevent sequence windows from crossing gaps between disjo
 we build windows within each contiguous True-run of the selected masks (baseline/post-train/test) only.
 """
 
+import hashlib
+import json
 import os
 import platform
 import re
@@ -49,6 +51,8 @@ LIKELY_METROPT_FEATURES = [
     "Oil_temperature",
     "Caudal_impulses",
 ]
+
+ROLLING_AGGREGATIONS = ["mean", "median", "std", "skew", "min", "max"]
 
 
 # ===== MetroPT-3 failure windows (Davari et al., 2021) =====
@@ -136,7 +140,7 @@ def build_rolling_features(
     min_periods: int = 1,
 ) -> pd.DataFrame:
     rolled = df_num.rolling(rolling_window, min_periods=min_periods)
-    agg = rolled.aggregate(["mean", "median", "std", "skew", "min", "max"])
+    agg = rolled.aggregate(ROLLING_AGGREGATIONS)
     if isinstance(agg.columns, pd.MultiIndex):
         agg.columns = ["__".join(map(str, col)).strip() for col in agg.columns.values]
     else:
@@ -200,6 +204,11 @@ def _as_int_list(values: Optional[Iterable[object]], default: Sequence[int]) -> 
     return [int(v) for v in list(values)]
 
 
+def build_feature_hash(feature_names: Sequence[str]) -> str:
+    payload = json.dumps(list(feature_names), separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _segments_from_mask(values: np.ndarray, mask: np.ndarray) -> List[np.ndarray]:
     """Extract contiguous segments (slices) from values where mask is True."""
     if values.shape[0] != mask.shape[0]:
@@ -215,6 +224,53 @@ def _segments_from_mask(values: np.ndarray, mask: np.ndarray) -> List[np.ndarray
     if start is not None:
         segments.append(values[start:])
     return segments
+
+
+def _segment_metadata_from_mask(
+    index: pd.DatetimeIndex,
+    mask: np.ndarray,
+    op_phase: Optional[pd.Series] = None,
+) -> List[Dict[str, object]]:
+    """Describe contiguous True-runs in a mask without exposing data values."""
+    if len(index) != mask.shape[0]:
+        raise ValueError("Mask length does not match index length.")
+    phase_vals = None
+    if op_phase is not None:
+        phase_vals = op_phase.reindex(index).to_numpy(dtype=np.int8, copy=False)
+
+    segments: List[Dict[str, object]] = []
+    start: Optional[int] = None
+    for i, flag in enumerate(mask):
+        if flag and start is None:
+            start = i
+        elif not flag and start is not None:
+            segments.append(_build_segment_metadata(index, phase_vals, start, i))
+            start = None
+    if start is not None:
+        segments.append(_build_segment_metadata(index, phase_vals, start, len(index)))
+    return segments
+
+
+def _build_segment_metadata(
+    index: pd.DatetimeIndex,
+    phase_vals: Optional[np.ndarray],
+    start: int,
+    stop: int,
+) -> Dict[str, object]:
+    item: Dict[str, object] = {
+        "start": pd.to_datetime(index[start]).isoformat(),
+        "end": pd.to_datetime(index[stop - 1]).isoformat(),
+        "start_pos": int(start),
+        "end_pos": int(stop - 1),
+        "rows": int(stop - start),
+    }
+    if phase_vals is not None:
+        phase_slice = phase_vals[start:stop]
+        item["phase_counts"] = {
+            str(phase): int(np.sum(phase_slice == phase))
+            for phase in sorted(set(int(v) for v in phase_slice.tolist()))
+        }
+    return item
 
 
 class MetroPTSegmentedSequenceDataset(Dataset):
@@ -339,6 +395,13 @@ class MetroPTDataLoader(BaseDataLoader):
         self.test_phases = _as_int_list(test_phases, default=(0, 1))
 
         self.n_features: Optional[int] = None
+        self.base_feature_names: List[str] = []
+        self.rolling_feature_names: List[str] = []
+        self.rolling_aggregations: List[str] = list(ROLLING_AGGREGATIONS)
+        self.feature_hash: Optional[str] = None
+        self.scaler: Optional[StandardScaler] = None
+        self.train_segment_metadata: List[Dict[str, object]] = []
+        self.test_segment_metadata: List[Dict[str, object]] = []
         self.split_info: Dict[str, object] = {}
         self._summary_logged = False
 
@@ -511,6 +574,9 @@ class MetroPTDataLoader(BaseDataLoader):
         df_base = df_raw[base_feats].copy()
         X = build_rolling_features(df_base, rolling_window=self.rolling_window)
         self.n_features = int(X.shape[1])
+        self.base_feature_names = list(base_feats)
+        self.rolling_feature_names = [str(col) for col in X.columns]
+        self.feature_hash = build_feature_hash(self.rolling_feature_names)
 
         windows = self._default_windows()
         op_phase = build_operation_phase(
@@ -528,6 +594,12 @@ class MetroPTDataLoader(BaseDataLoader):
         test_segments_raw = _segments_from_mask(X_vals, test_mask_arr)
         train_phase_segments_raw = _segments_from_mask(op_phase_vals, train_mask_arr)
         test_phase_segments_raw = _segments_from_mask(op_phase_vals, test_mask_arr)
+        self.train_segment_metadata = _segment_metadata_from_mask(
+            X.index, train_mask_arr, op_phase=op_phase
+        )
+        self.test_segment_metadata = _segment_metadata_from_mask(
+            X.index, test_mask_arr, op_phase=op_phase
+        )
 
         if not train_segments_raw:
             raise ValueError("No contiguous training segments were produced (unexpected).")
@@ -542,6 +614,7 @@ class MetroPTDataLoader(BaseDataLoader):
         for seg in train_segments_raw:
             if seg.shape[0] > 0:
                 scaler.partial_fit(seg)
+        self.scaler = scaler
 
         train_segments = [scaler.transform(seg).astype(np.float32) for seg in train_segments_raw]
         test_segments = [scaler.transform(seg).astype(np.float32) for seg in test_segments_raw]
@@ -584,8 +657,14 @@ class MetroPTDataLoader(BaseDataLoader):
         self.split_info.update(
             {
                 "n_features": self.n_features,
+                "base_feature_names": list(self.base_feature_names),
+                "rolling_feature_names": list(self.rolling_feature_names),
+                "rolling_aggregations": list(self.rolling_aggregations),
+                "feature_hash": self.feature_hash,
                 "train_segments": int(len(train_segments)),
                 "test_segments": int(len(test_segments)),
+                "train_segment_metadata": self.train_segment_metadata,
+                "test_segment_metadata": self.test_segment_metadata,
                 "test_window_label_policy": "end_anchor_phase",
                 "test_label_pos_windows": int(test_ds.window_positive_count),
                 "test_label_neg_windows": int(test_ds.window_negative_count),

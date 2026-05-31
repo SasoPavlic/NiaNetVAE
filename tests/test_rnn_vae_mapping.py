@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import torch
 
 from nianetvae.models.rnn_vae import RNNVAE
 
@@ -70,3 +71,18 @@ def test_hash_does_not_depend_on_fixed_optimizer():
 
     assert model_a.hash_id == model_b.hash_id
     assert model_a.optimizer_name == "Adam"
+
+
+def test_reparameterize_is_deterministic_in_eval_mode():
+    solution = np.array([0.25, 0.8, 0.5, 0.75, 0.4, 0.2], dtype=float)
+    model = RNNVAE(solution, **_model_kwargs(n_features=12, seq_len=10))
+    mu = torch.randn(4, model.bottleneck_size)
+    logvar = torch.zeros_like(mu)
+
+    model.eval()
+    assert torch.equal(model.reparameterize(mu, logvar), mu)
+
+    model.train()
+    torch.manual_seed(123)
+    sampled = model.reparameterize(mu, logvar)
+    assert not torch.equal(sampled, mu)

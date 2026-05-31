@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
+from sklearn.preprocessing import StandardScaler
 
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
 from nianetvae.search.runtime_artifacts import _export_cycle_artifacts
@@ -198,6 +199,22 @@ def test_sqlite_schema_mismatch_auto_migrates_for_old_anomaly_columns(tmp_path: 
 def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: Path):
     model = _DummyModel()
     export_dir = tmp_path / "cycle_00"
+    rolling_feature_names = [f"sensor_{idx}__mean" for idx in range(90)]
+    scaler = StandardScaler().fit(np.random.default_rng(123).normal(size=(12, 90)))
+    datamodule = SimpleNamespace(
+        n_features=90,
+        base_feature_names=[f"sensor_{idx}" for idx in range(15)],
+        rolling_feature_names=rolling_feature_names,
+        rolling_aggregations=["mean", "median", "std", "skew", "min", "max"],
+        feature_hash=None,
+        scaler=scaler,
+        train_segment_metadata=[
+            {"start": "2020-04-11T00:00:00", "end": "2020-04-11T23:59:00", "rows": 10}
+        ],
+        test_segment_metadata=[
+            {"start": "2020-04-12T00:00:00", "end": "2020-04-12T23:59:00", "rows": 10}
+        ],
+    )
     config = {
         "data_params": {
             "dataset_name": "MetroPT",
@@ -205,6 +222,13 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
             "cycle_id": 0,
             "n_features": 90,
             "seq_len": 200,
+            "stride": 1,
+            "rolling_window": "60s",
+            "train_minutes": 1440,
+            "post_train_minutes": 1440,
+            "pre_maint_minutes": 120,
+            "train_phases": [0, 1],
+            "test_phases": [0, 1],
         },
         "workflow": {"mode": "per_maint_warmstart_search"},
         "exp_params": {"manual_seed": 42, "optimizer": "Adam", "learning_rate": 0.003, "weight_decay": 0.0},
@@ -269,11 +293,25 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
         config=config,
         dataset_name="MetroPT_cycle00",
         run_uuid="run-uuid-test",
+        datamodule=datamodule,
     )
 
+    assert (export_dir / "scaler.joblib").exists()
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
 
+    assert meta["schema_version"] == "2.0"
+    assert meta["contract_version"] == "2.0"
+    assert meta["scaler_file"] == "scaler.joblib"
+    assert meta["feature_contract"]["rolling_feature_names"] == rolling_feature_names
+    assert meta["feature_contract"]["rolling_window"] == "60s"
+    assert meta["preprocessing_contract"]["scaler_feature_count"] == 90
+    assert meta["preprocessing_contract"]["scaler_file"] == "scaler.joblib"
+    assert meta["sequence_contract"]["seq_len"] == 200
+    assert meta["sequence_contract"]["stride"] == 1
+    assert meta["split_contract"]["train_segments"] == datamodule.train_segment_metadata
+    assert summary["schema_version"] == "2.0"
+    assert summary["artifacts"]["scaler_file"] == "scaler.joblib"
     assert meta["winner_selection"]["method"] == "weighted_ideal_distance"
     assert meta["winner_selection"]["selected_objectives"]["obj_pdm"] == 0.33
     assert meta["training_policy"]["optimizer"] == "Adam"

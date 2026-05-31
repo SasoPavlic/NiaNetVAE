@@ -7,6 +7,8 @@ IMAGE_DIR="/d/hpc/home/sasop/images"
 IMAGE_REF="docker://spartan300/nianet:vaepymoo"
 IMAGE_LATEST="${IMAGE_DIR}/nianet-vaepymoo-latest.sif"
 IMAGE_CURRENT="${IMAGE_DIR}/nianet-vaepymoo-current.sif"
+IMAGE_SYNC="${IMAGE_SYNC:-1}"
+IMAGE_BUILD_FAKEROOT="${IMAGE_BUILD_FAKEROOT:-1}"
 
 # Normal human workflow: edit CONFIG_PATH, then run this script.
 # START_CYCLE/END_CYCLE/RESUME_FROM are advanced operational overrides.
@@ -34,6 +36,9 @@ if [ "${1:-}" = "--detach" ] && [ "${DETACHED_SUBMIT}" != "1" ]; then
         START_CYCLE="${START_CYCLE}" \
         END_CYCLE="${END_CYCLE}" \
         RESUME_FROM="${RESUME_FROM}" \
+        IMAGE_SYNC="${IMAGE_SYNC}" \
+        IMAGE_BUILD_FAKEROOT="${IMAGE_BUILD_FAKEROOT}" \
+        PROOT_NO_SECCOMP="${PROOT_NO_SECCOMP:-}" \
         bash "$0" > "${detach_log}" 2>&1 < /dev/null &
     detach_pid=$!
     echo "Detached submission started."
@@ -84,9 +89,32 @@ fi
 
 mkdir -p "${IMAGE_DIR}" outputs logs
 
-echo "Syncing image from ${IMAGE_REF} ..."
-singularity pull --force "${IMAGE_LATEST}" "${IMAGE_REF}"
-ln -sfn "${IMAGE_LATEST}" "${IMAGE_CURRENT}"
+if [ "${IMAGE_SYNC}" = "1" ]; then
+    echo "Syncing image from ${IMAGE_REF} ..."
+    if [ "${IMAGE_BUILD_FAKEROOT}" = "1" ]; then
+        singularity build --force --fakeroot "${IMAGE_LATEST}" "${IMAGE_REF}"
+    elif [ "${IMAGE_BUILD_FAKEROOT}" = "0" ]; then
+        singularity pull --force "${IMAGE_LATEST}" "${IMAGE_REF}"
+    else
+        echo "Invalid IMAGE_BUILD_FAKEROOT=${IMAGE_BUILD_FAKEROOT}. Use 1 for build --fakeroot or 0 for pull."
+        exit 1
+    fi
+    ln -sfn "${IMAGE_LATEST}" "${IMAGE_CURRENT}"
+elif [ "${IMAGE_SYNC}" = "0" ]; then
+    echo "Skipping image sync because IMAGE_SYNC=0."
+    if [ ! -e "${IMAGE_CURRENT}" ] && [ -f "${IMAGE_LATEST}" ]; then
+        ln -sfn "${IMAGE_LATEST}" "${IMAGE_CURRENT}"
+    fi
+else
+    echo "Invalid IMAGE_SYNC=${IMAGE_SYNC}. Use IMAGE_SYNC=1 to pull or IMAGE_SYNC=0 to use the existing SIF."
+    exit 1
+fi
+
+if [ ! -f "${IMAGE_CURRENT}" ]; then
+    echo "Missing active SIF image at ${IMAGE_CURRENT}."
+    echo "Either allow image sync with IMAGE_SYNC=1 or place a prebuilt SIF there and rerun with IMAGE_SYNC=0."
+    exit 1
+fi
 echo "Active image symlink: ${IMAGE_CURRENT} -> $(readlink -f "${IMAGE_CURRENT}")"
 
 read_config_assignments() {

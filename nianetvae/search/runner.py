@@ -666,6 +666,7 @@ class SearchRunner:
             config=self.ctx.config,
             dataset_name=self.ctx.dataset_name,
             run_uuid=self.ctx.run_uuid,
+            datamodule=self.ctx.datamodule,
         )
         Log.info(
             f"MODEL_EXPORT_READY dir={current_cycle_dir} "
@@ -900,6 +901,7 @@ class SearchRunner:
                 config=self.ctx.config,
                 dataset_name=self.ctx.dataset_name,
                 run_uuid=self.ctx.run_uuid,
+                datamodule=self.ctx.datamodule,
             )
             Log.info(
                 f"MODEL_EXPORT_READY dir={export_dir} "

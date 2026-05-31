@@ -1,4 +1,5 @@
 import gc
+import hashlib
 import json
 import subprocess
 from datetime import datetime
@@ -6,11 +7,15 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import joblib
 from lightning.pytorch import Trainer, seed_everything
 
 from log import Log
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
 from nianetvae.models.rnn_vae import RNNVAE
+
+
+ARTIFACT_CONTRACT_VERSION = "2.0"
 
 
 def _as_jsonable(value):
@@ -41,6 +46,95 @@ def _get_git_ref() -> str | None:
         return out or None
     except Exception:
         return None
+
+
+def _hash_json_payload(payload: object) -> str:
+    raw = json.dumps(_as_jsonable(payload), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _feature_hash(feature_names: list[str]) -> str:
+    raw = json.dumps(list(feature_names), separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _scaler_state_payload(scaler) -> dict:
+    payload = {
+        "class": f"{type(scaler).__module__}.{type(scaler).__name__}",
+    }
+    for attr in ("mean_", "scale_", "var_", "n_features_in_", "n_samples_seen_"):
+        if hasattr(scaler, attr):
+            payload[attr] = _as_jsonable(getattr(scaler, attr))
+    return payload
+
+
+def _build_artifact_contracts(datamodule, data_params: dict, scaler_file: str) -> dict:
+    if datamodule is None:
+        raise ValueError("Artifact contract v2 export requires an initialized datamodule.")
+
+    scaler = getattr(datamodule, "scaler", None)
+    if scaler is None:
+        raise ValueError("Artifact contract v2 export requires datamodule.scaler.")
+
+    rolling_feature_names = list(getattr(datamodule, "rolling_feature_names", []) or [])
+    if not rolling_feature_names:
+        raise ValueError("Artifact contract v2 export requires datamodule.rolling_feature_names.")
+
+    n_features = int(getattr(datamodule, "n_features", None) or data_params.get("n_features") or len(rolling_feature_names))
+    if len(rolling_feature_names) != n_features:
+        raise ValueError(
+            "Feature contract mismatch during export: "
+            f"rolling_feature_names={len(rolling_feature_names)} n_features={n_features}."
+        )
+
+    scaler_state = _scaler_state_payload(scaler)
+    split_info = dict(getattr(datamodule, "split_info", {}) or {})
+    feature_hash = getattr(datamodule, "feature_hash", None) or _feature_hash(rolling_feature_names)
+    return {
+        "feature_contract": {
+            "base_feature_names": list(getattr(datamodule, "base_feature_names", []) or []),
+            "rolling_feature_names": rolling_feature_names,
+            "rolling_aggregations": list(getattr(datamodule, "rolling_aggregations", []) or []),
+            "rolling_window": data_params.get("rolling_window") or getattr(datamodule, "rolling_window", None),
+            "feature_hash": feature_hash,
+            "n_features": n_features,
+        },
+        "preprocessing_contract": {
+            "scaler_type": scaler_state["class"],
+            "scaler_file": scaler_file,
+            "scaler_feature_count": int(getattr(scaler, "n_features_in_", n_features)),
+            "scaler_hash": _hash_json_payload(scaler_state),
+        },
+        "sequence_contract": {
+            "seq_len": data_params.get("seq_len") or getattr(datamodule, "seq_len", None),
+            "stride": data_params.get("stride") or getattr(datamodule, "stride", None),
+            "score_stride": data_params.get("stride") or getattr(datamodule, "stride", None),
+            "window_label_policy": "end_anchor_phase",
+            "cross_gap_windows_allowed": False,
+        },
+        "split_contract": {
+            "regime": data_params.get("regime") or getattr(datamodule, "regime", None),
+            "cycle_id": data_params.get("cycle_id") if data_params.get("cycle_id") is not None else getattr(datamodule, "cycle_id", None),
+            "train_minutes": data_params.get("train_minutes") or getattr(datamodule, "train_minutes", None),
+            "post_train_minutes": data_params.get("post_train_minutes") or getattr(datamodule, "post_train_minutes", None),
+            "pre_maint_minutes": data_params.get("pre_maint_minutes") or getattr(datamodule, "pre_maint_minutes", None),
+            "train_phases": data_params.get("train_phases") or getattr(datamodule, "train_phases", None),
+            "test_phases": data_params.get("test_phases") or getattr(datamodule, "test_phases", None),
+            "baseline_start": split_info.get("baseline_start"),
+            "baseline_end": split_info.get("baseline_end"),
+            "maintenance_id": split_info.get("maintenance_id"),
+            "maintenance_start": split_info.get("maintenance_start"),
+            "maintenance_end": split_info.get("maintenance_end"),
+            "post_train_start": split_info.get("post_train_start"),
+            "post_train_end": split_info.get("post_train_end"),
+            "test_start": split_info.get("test_start"),
+            "test_end": split_info.get("test_end"),
+            "train_rows": split_info.get("train_rows"),
+            "test_rows": split_info.get("test_rows"),
+            "train_segments": list(getattr(datamodule, "train_segment_metadata", []) or []),
+            "test_segments": list(getattr(datamodule, "test_segment_metadata", []) or []),
+        },
+    }
 
 
 def _resolve_export_dir(cfg: dict, run_uuid: str | None = None) -> Path:
@@ -216,12 +310,18 @@ def _export_cycle_artifacts(
         config: dict,
         dataset_name: str,
         run_uuid: str,
+        datamodule=None,
 ):
     export_dir.mkdir(parents=True, exist_ok=True)
     model_path = export_dir / "model.pt"
     torch.save(model.state_dict(), model_path)
 
     data_params = config.get("data_params", {})
+    scaler_file = "scaler.joblib"
+    contracts = _build_artifact_contracts(datamodule, data_params, scaler_file=scaler_file)
+    scaler_path = export_dir / scaler_file
+    joblib.dump(getattr(datamodule, "scaler"), scaler_path)
+
     exp_params = config.get("exp_params", {})
     workflow_mode = str((config.get("workflow") or {}).get("mode", "")).strip().lower() or None
     seed_source = (config.get("exp_params") or {}).get("manual_seed")
@@ -238,7 +338,8 @@ def _export_cycle_artifacts(
         provenance["warm_start"] = _as_jsonable(warm_start_payload)
     winner_selection = search_result.get("winner_selection")
     metadata = {
-        "schema_version": "1.0",
+        "schema_version": ARTIFACT_CONTRACT_VERSION,
+        "contract_version": ARTIFACT_CONTRACT_VERSION,
         "dataset_name": data_params.get("dataset_name"),
         "db_dataset_name": dataset_name,
         "regime": data_params.get("regime"),
@@ -261,6 +362,11 @@ def _export_cycle_artifacts(
         "run_uuid": run_uuid,
         "git_ref": _get_git_ref(),
         "weights_file": "model.pt",
+        "scaler_file": scaler_file,
+        "feature_contract": contracts["feature_contract"],
+        "preprocessing_contract": contracts["preprocessing_contract"],
+        "sequence_contract": contracts["sequence_contract"],
+        "split_contract": contracts["split_contract"],
         "training_policy": {
             "optimizer": str(model.optimizer_name),
             "learning_rate": float(final_result["experiment"].learning_rate),
@@ -280,7 +386,8 @@ def _export_cycle_artifacts(
     meta_path.write_text(json.dumps(_as_jsonable(metadata), indent=2, sort_keys=True), encoding="utf-8")
 
     summary = {
-        "schema_version": "1.0",
+        "schema_version": ARTIFACT_CONTRACT_VERSION,
+        "contract_version": ARTIFACT_CONTRACT_VERSION,
         "created_at": datetime.now().isoformat(),
         "run_uuid": run_uuid,
         "git_ref": _get_git_ref(),
@@ -314,7 +421,12 @@ def _export_cycle_artifacts(
         "artifacts": {
             "weights_file": "model.pt",
             "meta_file": "model_meta.json",
+            "scaler_file": scaler_file,
         },
+        "feature_contract": contracts["feature_contract"],
+        "preprocessing_contract": contracts["preprocessing_contract"],
+        "sequence_contract": contracts["sequence_contract"],
+        "split_contract": contracts["split_contract"],
         "training_policy": {
             "optimizer": str(exp_params.get("optimizer", model.optimizer_name)),
             "learning_rate": float(exp_params.get("learning_rate", final_result["experiment"].learning_rate)),

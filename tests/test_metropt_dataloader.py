@@ -10,6 +10,7 @@ from log import Log
 from nianetvae.dataloaders.metropt_dataloader import (
     MetroPTDataLoader,
     MetroPTSegmentedSequenceDataset,
+    build_feature_hash,
 )
 
 
@@ -97,6 +98,15 @@ def test_metropt_dataloader_single_smoke(tmp_path: Path) -> None:
     test_loader = dm.test_dataloader()
 
     batch = next(iter(train_loader))
+    assert dm.base_feature_names == ["TP2", "TP3", "H1"]
+    assert len(dm.rolling_feature_names) == dm.n_features
+    assert dm.feature_hash == build_feature_hash(dm.rolling_feature_names)
+    assert dm.scaler is not None
+    assert int(dm.scaler.n_features_in_) == int(dm.n_features)
+    assert dm.train_segment_metadata
+    assert dm.test_segment_metadata
+    assert dm.split_info["rolling_feature_names"] == dm.rolling_feature_names
+    assert dm.split_info["feature_hash"] == dm.feature_hash
     assert batch["signal"].ndim == 3
     assert batch["signal"].shape[1] == 10
     assert batch["signal"].shape[2] == dm.n_features

@@ -18,7 +18,7 @@ nia_search:
   # Format: HH:MM:SS
   # Note: total cycle wall time is usually longer than this because final
   # winner retraining and export run after search terminates.
-  time: "05:00:00"
+  time: "00:01:00"
 
   # Metrics printed in iteration logs for visibility.
   # Optimization objectives are configured under objectives.* below.
@@ -82,8 +82,8 @@ objectives:
       # Relative preference weights for winner selection.
       # Weights are normalized internally (sum to 1).
       error: 0.30
-      efficiency: 0.20
-      pdm: 0.50
+      efficiency: 0.01
+      pdm: 0.69
 
 workflow:
   # Runtime workflow mode:
@@ -124,12 +124,12 @@ logging_params:
   logger_file: "RNNAutoencoder.log"
   save_dir: "logs"                  # local run outputs
   db_storage: "logs/solutions.db"   # used when db_backend=sqlite
-  db_table_name: "solutions_finetune_smoothed_rankgap"  # isolated table for smoothed-rank objective runs
+  db_table_name: "per_maint_vae_finetune"  # isolated table for smoothed-rank objective runs
   db_backend: "postgres"            # postgres or sqlite
   db_wait_seconds: 1800             # max wait for DB recovery before winner-selection fallback/fail
   db_wait_poll_seconds: 30          # retry poll interval while waiting for DB recovery
   export_enabled: true               # write model/meta/summary export artifacts
-  model_export_dir: "logs/per_maint_models_finetune_smoothed_rankgap"
+  model_export_dir: "logs/per_maint_vae_finetune"
 
 # DataLoader runtime settings.
 # num_workers is a major speed lever for CPU-side input pipeline throughput.

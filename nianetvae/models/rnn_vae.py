@@ -165,6 +165,8 @@ class RNNVAE(BaseVAE, nn.Module):
         return x
 
     def reparameterize(self, mu: Tensor, logvar: Tensor) -> Tensor:
+        if not self.training:
+            return mu
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
