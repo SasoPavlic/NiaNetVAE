@@ -28,8 +28,6 @@ htmlcov/
 
 # Logs, checkpoints, outputs
 logs/
-results/
-helpers/sewerage_dataset/
 lightning_logs/
 checkpoints/
 *.ckpt

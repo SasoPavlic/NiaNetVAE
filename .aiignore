@@ -13,9 +13,7 @@ out/
 
 # Project folders
 data/
-helpers/
 logs/
-results/
 
 # Secrets
 .env

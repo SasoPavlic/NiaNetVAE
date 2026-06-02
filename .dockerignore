@@ -12,8 +12,6 @@ __pycache__/
 .ruff_cache/
 
 logs/
-results/
-helpers/sewerage_dataset/
 lightning_logs/
 checkpoints/
 *.ckpt

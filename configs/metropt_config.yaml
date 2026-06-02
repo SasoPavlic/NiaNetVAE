@@ -22,8 +22,8 @@ data_params:
   rolling_window: "60s"
 
   # Split semantics
-  train_minutes: 1440
-  post_train_minutes: 1440
+  train_minutes: 43200
+  post_train_minutes: 540
   pre_maint_minutes: 120
 
   # Regime: "single" or "per_maint"
