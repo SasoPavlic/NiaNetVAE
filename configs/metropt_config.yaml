@@ -23,7 +23,9 @@ data_params:
 
   # Split semantics
   train_minutes: 43200
-  post_train_minutes: 540
+  # 600 minutes improves post-maintenance normal calibration while preserving
+  # a small test gap for the short #8 -> #9 maintenance interval.
+  post_train_minutes: 600
   pre_maint_minutes: 120
 
   # Regime: "single" or "per_maint"

@@ -12,13 +12,18 @@ nia_search:
     #   n_partitions=1 -> 3 individuals
     #   n_partitions=5 -> 21 individuals
     # Larger values improve tradeoff exploration but increase runtime.
-    n_partitions: 1
+    # HPC resilient PdM profile: p=2 -> 6 candidates per NSGA-III generation.
+    # Previous p=8 and p=4 profiles exposed walltime risk because NSGA-III
+    # cannot terminate cleanly until the current generation finishes.
+    n_partitions: 2
 
   # Search-time budget per cycle (NSGA loop termination).
   # Format: HH:MM:SS
   # Note: total cycle wall time is usually longer than this because final
   # winner retraining and export run after search terminates.
-  time: "00:01:00"
+  # Keep the search target short; Slurm walltime adds a larger buffer because
+  # the first generation plus final retraining/export can exceed this value.
+  time: "01:00:00"
 
   # Metrics printed in iteration logs for visibility.
   # Optimization objectives are configured under objectives.* below.
@@ -33,9 +38,9 @@ nia_search:
     # - random candidates
     # Ratios are applied to effective_population.
     enabled: true
-    carry_over_ratio: 0.10
-    perturb_ratio: 0.40
-    perturbation_strength: 0.08
+    carry_over_ratio: 0.15
+    perturb_ratio: 0.45
+    perturbation_strength: 0.06
 
 objectives:
   # Multi-objective contract used by search and DB persistence.
@@ -67,7 +72,9 @@ objectives:
     # Downstream metropt thresholds/coverage/recall remain evaluation-only.
     metric: smoothed_rank_gap
     # Trailing rolling mean window over ordered test windows, reset per segment.
-    smoothing_window_windows: 480
+    # Larger than the debug/default 480 to make the search proxy more aware of
+    # broad alarm behavior seen in downstream 120-minute risk evaluation.
+    smoothing_window_windows: 1800
 
   selection:
     # Deterministic winner selection after search:
@@ -82,22 +89,22 @@ objectives:
       # Relative preference weights for winner selection.
       # Weights are normalized internally (sum to 1).
       error: 0.30
-      efficiency: 0.01
-      pdm: 0.69
+      efficiency: 0.05
+      pdm: 0.65
 
 workflow:
   # Runtime workflow mode:
   # - per_maint_baseline_search: independent per-cycle architecture search
   # - per_maint_finetune_search: per-cycle fine-tuning from previous trained cycle
   # - per_maint_warmstart_search: per-cycle warm-started NSGA-III search
-  mode: "per_maint_finetune_search"
+  mode: "per_maint_warmstart_search"
 
   finetune:
     # Fine-tune policy used only in mode=per_maint_finetune_search for cycle_id > 0.
     # finetune_learning_rate = exp_params.learning_rate * learning_rate_scale
     learning_rate_scale: 0.1
-    min_epochs: 2
-    max_epochs: 2
+    min_epochs: 3
+    max_epochs: 4
 
 # Model constructor parameters passed into RNNVAE.
 model_params:
@@ -106,16 +113,16 @@ model_params:
 # Trainer defaults for candidate and final training passes.
 # Lower values reduce runtime; higher values may improve fit quality.
 trainer_params:
-  min_epochs: 2
-  max_epochs: 2
+  min_epochs: 3
+  max_epochs: 4
 
 # Shared training policy and global seed.
 # In the architecture-only methodology, optimizer is fixed for all candidates.
 exp_params:
   optimizer: Adam
   learning_rate: 0.003
-  weight_decay: 0.0
-  kld_weight: 0.1
+  weight_decay: 1e-5
+  kld_weight: 0.01
   manual_seed: 42
 
 # Logging, DB backend, and artifact export settings.
@@ -124,12 +131,12 @@ logging_params:
   logger_file: "RNNAutoencoder.log"
   save_dir: "logs"                  # local run outputs
   db_storage: "logs/solutions.db"   # used when db_backend=sqlite
-  db_table_name: "per_maint_vae_finetune"  # isolated table for smoothed-rank objective runs
+  db_table_name: "per_maint_vae_warmstart"  # isolated table for this HPC recovery run
   db_backend: "postgres"            # postgres or sqlite
   db_wait_seconds: 1800             # max wait for DB recovery before winner-selection fallback/fail
   db_wait_poll_seconds: 30          # retry poll interval while waiting for DB recovery
   export_enabled: true               # write model/meta/summary export artifacts
-  model_export_dir: "logs/per_maint_vae_finetune"
+  model_export_dir: "logs/per_maint_vae_warmstart"
 
 # DataLoader runtime settings.
 # num_workers is a major speed lever for CPU-side input pipeline throughput.
@@ -137,9 +144,11 @@ data_loader_params:
   data_percentage: 100   # use subset (<100) for quick debug runs
   batch_size: 64
   val_size: 10           # percent of train windows for validation
-  num_workers: 8
-  persistent_workers: True
-  pin_memory: True
+  # Memory-stable HPC profile: repeated candidate training creates many
+  # DataLoader instances, so keep worker state modest between candidates.
+  num_workers: 2
+  persistent_workers: False
+  pin_memory: False
 
 # Dataset profile file selected at startup.
 # The referenced file defines data_params for the active dataset/regime.

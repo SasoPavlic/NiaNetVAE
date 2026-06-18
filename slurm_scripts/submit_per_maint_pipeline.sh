@@ -17,9 +17,10 @@ START_CYCLE="${START_CYCLE:-0}"
 END_CYCLE="${END_CYCLE:-21}"
 RESUME_FROM="${RESUME_FROM:-auto}"
 DETACHED_SUBMIT="${DETACHED_SUBMIT:-0}"
+CHAIN_DEPENDENCY_TYPE="${CHAIN_DEPENDENCY_TYPE:-afterany}"
 
 # Cluster policy constants. Research/runtime settings should come from CONFIG_PATH.
-SEARCH_WALLTIME_BUFFER="02:00:00"
+SEARCH_WALLTIME_BUFFER="10:00:00"
 FINETUNE_WALLTIME="08:00:00"
 MANIFEST_WALLTIME="00:30:00"
 SAFE_MAX_WALLTIME="3-19:00:00"
@@ -36,6 +37,7 @@ if [ "${1:-}" = "--detach" ] && [ "${DETACHED_SUBMIT}" != "1" ]; then
         START_CYCLE="${START_CYCLE}" \
         END_CYCLE="${END_CYCLE}" \
         RESUME_FROM="${RESUME_FROM}" \
+        CHAIN_DEPENDENCY_TYPE="${CHAIN_DEPENDENCY_TYPE}" \
         IMAGE_SYNC="${IMAGE_SYNC}" \
         IMAGE_BUILD_FAKEROOT="${IMAGE_BUILD_FAKEROOT}" \
         PROOT_NO_SECCOMP="${PROOT_NO_SECCOMP:-}" \
@@ -65,6 +67,11 @@ fi
 
 if [ "${START_CYCLE}" -gt "${END_CYCLE}" ]; then
     echo "Invalid cycle range: START_CYCLE=${START_CYCLE} > END_CYCLE=${END_CYCLE}"
+    exit 1
+fi
+
+if [ "${CHAIN_DEPENDENCY_TYPE}" != "afterok" ] && [ "${CHAIN_DEPENDENCY_TYPE}" != "afterany" ]; then
+    echo "CHAIN_DEPENDENCY_TYPE must be afterany or afterok. Received: ${CHAIN_DEPENDENCY_TYPE}"
     exit 1
 fi
 
@@ -309,18 +316,21 @@ echo "  derived_search_walltime=${DERIVED_SEARCH_WALLTIME}"
 echo "  finetune_walltime=${FINETUNE_WALLTIME_RESOLVED}"
 echo "  manifest_walltime=${MANIFEST_WALLTIME_RESOLVED}"
 echo "  safe_max_walltime=${SAFE_MAX_WALLTIME_RESOLVED}"
+echo "  chain_dependency_type=${CHAIN_DEPENDENCY_TYPE}"
 
 submitted_job_ids=()
 prev_job_id=""
 
-# Strict sequential order: cycle k starts only if cycle k-1 finished successfully.
+# Sequential order: cycle k starts after cycle k-1 ends. The default afterany
+# keeps the campaign moving if one cycle fails; rerun missing cycles later with
+# RESUME_FROM=auto. Use CHAIN_DEPENDENCY_TYPE=afterok for strict fail-fast runs.
 for ((cid=SUBMIT_FROM; cid<=END_CYCLE; cid++)); do
     dep_args=()
     dep_info=""
     job_time="$(walltime_for_cycle "${cid}")"
     if [ -n "${prev_job_id}" ]; then
-        dep_args+=(--dependency="afterok:${prev_job_id}")
-        dep_info=" (depends on afterok:${prev_job_id})"
+        dep_args+=(--dependency="${CHAIN_DEPENDENCY_TYPE}:${prev_job_id}")
+        dep_info=" (depends on ${CHAIN_DEPENDENCY_TYPE}:${prev_job_id})"
     fi
     job_id=$(
         sbatch --parsable \
