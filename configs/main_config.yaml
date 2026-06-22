@@ -12,18 +12,18 @@ nia_search:
     #   n_partitions=1 -> 3 individuals
     #   n_partitions=5 -> 21 individuals
     # Larger values improve tradeoff exploration but increase runtime.
-    # HPC resilient PdM profile: p=2 -> 6 candidates per NSGA-III generation.
-    # Previous p=8 and p=4 profiles exposed walltime risk because NSGA-III
-    # cannot terminate cleanly until the current generation finishes.
-    n_partitions: 2
+    # Alarm-burden finetune campaign: p=8 -> 45 candidates per NSGA-III generation.
+    # This is intended for the GPU partition's 4-day walltime cap. Only cycle 00
+    # performs architecture search; later per-maintenance cycles use fine-tuning.
+    n_partitions: 8
 
   # Search-time budget per cycle (NSGA loop termination).
   # Format: HH:MM:SS
   # Note: total cycle wall time is usually longer than this because final
   # winner retraining and export run after search terminates.
-  # Keep the search target short; Slurm walltime adds a larger buffer because
-  # the first generation plus final retraining/export can exceed this value.
-  time: "01:00:00"
+  # Cycle-00 search budget for the alarm-burden finetune campaign.
+  # The submit wrapper adds a 10h Slurm buffer, so 86h + 10h = 4 days.
+  time: "86:00:00"
 
   # Metrics printed in iteration logs for visibility.
   # Optimization objectives are configured under objectives.* below.
@@ -46,8 +46,8 @@ objectives:
   # Multi-objective contract used by search and DB persistence.
   # All objectives are minimized:
   # - obj_error: reconstruction metric value
-  # - obj_efficiency: efficiency backend value
   # - obj_pdm: 1 - pdm_smoothed_auroc
+  # - obj_alarm_burden: share of normal smoothed-risk windows above threshold
   #
   # MetroPT PdM labeling semantics (aligned with metropt-pdm-framework):
   # - evaluate only test windows from phases 0 and 1
@@ -58,14 +58,6 @@ objectives:
     # Allowed: MAE|MSE|RMSE|MAPE|RMAPE|SMAPE
     metric: SMAPE
 
-  efficiency:
-    # Efficiency backend for obj_efficiency.
-    # Allowed:
-    # - params: parameter count
-    # - macs: estimated multiply-accumulate cost
-    # - latency_ms: measured inference latency
-    metric: macs
-
   pdm:
     # Smoothed ranking PdM proxy.
     # Pipeline: window_reconstruction_error -> risk_score -> smoothed_risk_score -> smoothed_rank_gap.
@@ -74,30 +66,37 @@ objectives:
     # Trailing rolling mean window over ordered test windows, reset per segment.
     # Larger than the debug/default 480 to make the search proxy more aware of
     # broad alarm behavior seen in downstream 120-minute risk evaluation.
-    smoothing_window_windows: 1800
+    smoothing_window_windows: 1440
+
+  alarm_burden:
+    # Alarm-burden objective.
+    # Pipeline: normal windows -> smoothed_risk_score >= risk_threshold.
+    # This is the third search objective for the current research phase.
+    metric: normal_high_risk_rate
+    risk_threshold: 0.95
 
   selection:
     # Deterministic winner selection after search:
     # 1) use DB candidate pool for current cycle dataset_name
-    # 2) keep Pareto front on [obj_error, obj_efficiency, obj_pdm]
+    # 2) keep Pareto front on [obj_error, obj_pdm, obj_alarm_burden]
     # 3) min-max normalize per objective on that pool
     # 4) select smallest weighted distance to ideal point (0,0,0)
-    # 5) tie-break by obj_pdm -> obj_error -> obj_efficiency
+    # 5) tie-break by obj_alarm_burden -> obj_pdm -> obj_error
     # Allowed methods: weighted_ideal_distance
     method: weighted_ideal_distance
     weights:
       # Relative preference weights for winner selection.
       # Weights are normalized internally (sum to 1).
-      error: 0.30
-      efficiency: 0.05
-      pdm: 0.65
+      error: 0.20
+      pdm: 0.50
+      alarm_burden: 0.30
 
 workflow:
   # Runtime workflow mode:
   # - per_maint_baseline_search: independent per-cycle architecture search
   # - per_maint_finetune_search: per-cycle fine-tuning from previous trained cycle
   # - per_maint_warmstart_search: per-cycle warm-started NSGA-III search
-  mode: "per_maint_warmstart_search"
+  mode: "per_maint_finetune_search"
 
   finetune:
     # Fine-tune policy used only in mode=per_maint_finetune_search for cycle_id > 0.
@@ -123,7 +122,7 @@ exp_params:
   learning_rate: 0.003
   weight_decay: 1e-5
   kld_weight: 0.01
-  manual_seed: 42
+  manual_seed: 20260618
 
 # Logging, DB backend, and artifact export settings.
 logging_params:
@@ -131,12 +130,12 @@ logging_params:
   logger_file: "RNNAutoencoder.log"
   save_dir: "logs"                  # local run outputs
   db_storage: "logs/solutions.db"   # used when db_backend=sqlite
-  db_table_name: "per_maint_vae_warmstart"  # isolated table for this HPC recovery run
+  db_table_name: "per_maint_vae_finetune_alarm_burden"
   db_backend: "postgres"            # postgres or sqlite
   db_wait_seconds: 1800             # max wait for DB recovery before winner-selection fallback/fail
   db_wait_poll_seconds: 30          # retry poll interval while waiting for DB recovery
   export_enabled: true               # write model/meta/summary export artifacts
-  model_export_dir: "logs/per_maint_vae_warmstart"
+  model_export_dir: "logs/per_maint_vae_finetune_alarm_burden"
 
 # DataLoader runtime settings.
 # num_workers is a major speed lever for CPU-side input pipeline throughput.

@@ -32,10 +32,14 @@ class RNNVAExperiment(LightningModule):
         self.metrics = EvaluationMetrics()
         # C13.3 policy lock: anomaly metrics are always enabled because obj_pdm depends on them.
         self.compute_anomaly_metrics = True
-        pdm_cfg = (kwargs.get("objectives") or {}).get("pdm") or {}
+        objectives_cfg = kwargs.get("objectives") or {}
+        pdm_cfg = objectives_cfg.get("pdm") or {}
+        alarm_burden_cfg = objectives_cfg.get("alarm_burden") or {}
         smoothing_window_windows = int(pdm_cfg.get("smoothing_window_windows", 480))
+        alarm_burden_threshold = float(alarm_burden_cfg.get("risk_threshold", 0.95))
         self.anomaly_detection_metrics = WindowAnomalyRankingMetrics(
             smoothing_window_windows=smoothing_window_windows,
+            alarm_burden_threshold=alarm_burden_threshold,
         )
         self.anomaly_metrics = {}
         try:
@@ -181,8 +185,11 @@ class RNNVAExperiment(LightningModule):
                 ["Risk Score Max", safe_format(self.anomaly_metrics.get('risk_score_max'))],
                 ["Risk Score Mean", safe_format(self.anomaly_metrics.get('risk_score_mean'))],
                 ["PdM Smoothing Window", self.anomaly_metrics.get('pdm_smoothing_window_windows')],
+                ["PdM Alarm Burden Threshold", safe_format(self.anomaly_metrics.get('pdm_alarm_burden_threshold'))],
                 ["PdM Positive Smoothed Risk Mean", safe_format(self.anomaly_metrics.get('pdm_positive_smoothed_risk_mean'))],
                 ["PdM Negative Smoothed Risk Mean", safe_format(self.anomaly_metrics.get('pdm_negative_smoothed_risk_mean'))],
+                ["PdM Positive High Risk Rate", safe_format(self.anomaly_metrics.get('pdm_positive_high_risk_rate'))],
+                ["PdM Negative High Risk Rate", safe_format(self.anomaly_metrics.get('pdm_negative_high_risk_rate'))],
                 ["PdM Smoothed AUROC", safe_format(self.anomaly_metrics.get('pdm_smoothed_auroc'))],
                 ["PdM Smoothed Rank Gap", safe_format(self.anomaly_metrics.get('pdm_smoothed_rank_gap'))],
                 ["PdM Metric Valid", str(self.anomaly_metrics.get('pdm_metric_valid'))],

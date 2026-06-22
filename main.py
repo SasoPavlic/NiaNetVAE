@@ -23,8 +23,8 @@ import nianetvae.experiments.metrics_evaluation
 
 ALLOWED_WORKFLOW_MODES = {"per_maint_baseline_search", "per_maint_finetune_search", "per_maint_warmstart_search"}
 ALLOWED_ERROR_OBJECTIVE_METRICS = {"MAE", "MSE", "RMSE", "MAPE", "RMAPE", "SMAPE"}
-ALLOWED_EFFICIENCY_OBJECTIVE_METRICS = {"params", "macs", "latency_ms"}
 ALLOWED_PDM_OBJECTIVE_METRIC = "smoothed_rank_gap"
+ALLOWED_ALARM_BURDEN_OBJECTIVE_METRIC = "normal_high_risk_rate"
 DEFAULT_DB_TABLE_NAME = "solutions_finetune_smoothed_rankgap"
 ALLOWED_SELECTION_METHODS = {"weighted_ideal_distance"}
 ALLOWED_FIXED_OPTIMIZERS = {"Adam"}
@@ -123,15 +123,15 @@ def _config_summary_line(config: dict) -> str:
         f"time_limit={_value_or_na(nia_search.get('time'))}",
         f"metrics={_as_csv(nia_search.get('metrics'))}",
         f"obj_error={_value_or_na(((config.get('objectives') or {}).get('error') or {}).get('metric'))}",
-        f"obj_efficiency={_value_or_na(((config.get('objectives') or {}).get('efficiency') or {}).get('metric'))}",
         f"obj_pdm={_value_or_na(((config.get('objectives') or {}).get('pdm') or {}).get('metric'))}",
+        f"obj_alarm_burden={_value_or_na(((config.get('objectives') or {}).get('alarm_burden') or {}).get('metric'))}",
         f"winner_selection={_value_or_na((((config.get('objectives') or {}).get('selection') or {}).get('method')))}",
         "winner_weights="
         f"{_value_or_na(((((config.get('objectives') or {}).get('selection') or {}).get('weights') or {}).get('error')))}"
         "/"
-        f"{_value_or_na(((((config.get('objectives') or {}).get('selection') or {}).get('weights') or {}).get('efficiency')))}"
+        f"{_value_or_na(((((config.get('objectives') or {}).get('selection') or {}).get('weights') or {}).get('pdm')))}"
         "/"
-        f"{_value_or_na(((((config.get('objectives') or {}).get('selection') or {}).get('weights') or {}).get('pdm')))}",
+        f"{_value_or_na(((((config.get('objectives') or {}).get('selection') or {}).get('weights') or {}).get('alarm_burden')))}",
         f"fixed_optimizer={_value_or_na(exp_params.get('optimizer'))}",
         f"base_learning_rate={_value_or_na(exp_params.get('learning_rate'))}",
         f"weight_decay={_value_or_na(exp_params.get('weight_decay'))}",
@@ -204,13 +204,19 @@ def _resolve_objective_contract(config: dict) -> dict:
     """
     C13.1 contract lock:
       - obj_error: single selected reconstruction metric (min)
-      - obj_efficiency: selected efficiency backend (min)
       - obj_pdm: 1 - pdm_smoothed_auroc (min)
+      - obj_alarm_burden: normal high-risk rate (min)
     """
     objectives = dict(config.get("objectives") or {})
     error_cfg = dict(objectives.get("error") or {})
-    efficiency_cfg = dict(objectives.get("efficiency") or {})
     pdm_cfg = dict(objectives.get("pdm") or {})
+    alarm_burden_cfg = dict(objectives.get("alarm_burden") or {})
+
+    if "efficiency" in objectives:
+        raise ValueError(
+            "Removed objectives.efficiency is no longer part of NiaNetVAE architecture search. "
+            "Use objectives.alarm_burden for the third objective; params/MACs are diagnostics."
+        )
 
     raw_error_metric = error_cfg.get("metric", "SMAPE")
     error_metric = str(raw_error_metric).strip().upper() if raw_error_metric is not None else "SMAPE"
@@ -218,17 +224,6 @@ def _resolve_objective_contract(config: dict) -> dict:
         allowed = ", ".join(sorted(ALLOWED_ERROR_OBJECTIVE_METRICS))
         raise ValueError(
             f"Invalid objectives.error.metric={raw_error_metric!r}. Allowed values: {allowed}."
-        )
-
-    raw_efficiency_metric = efficiency_cfg.get("metric", "macs")
-    efficiency_metric = (
-        str(raw_efficiency_metric).strip().lower() if raw_efficiency_metric is not None else "macs"
-    )
-    if efficiency_metric not in ALLOWED_EFFICIENCY_OBJECTIVE_METRICS:
-        allowed = ", ".join(sorted(ALLOWED_EFFICIENCY_OBJECTIVE_METRICS))
-        raise ValueError(
-            f"Invalid objectives.efficiency.metric={raw_efficiency_metric!r}. "
-            f"Allowed values: {allowed}."
         )
 
     raw_pdm_metric = pdm_cfg.get("metric", ALLOWED_PDM_OBJECTIVE_METRIC)
@@ -270,12 +265,40 @@ def _resolve_objective_contract(config: dict) -> dict:
             "Coverage/recall targets belong to metropt-pdm-framework evaluation."
         )
 
+    raw_alarm_burden_metric = alarm_burden_cfg.get("metric", ALLOWED_ALARM_BURDEN_OBJECTIVE_METRIC)
+    alarm_burden_metric = (
+        str(raw_alarm_burden_metric).strip().lower()
+        if raw_alarm_burden_metric is not None
+        else ALLOWED_ALARM_BURDEN_OBJECTIVE_METRIC
+    )
+    if alarm_burden_metric != ALLOWED_ALARM_BURDEN_OBJECTIVE_METRIC:
+        raise ValueError(
+            f"Invalid objectives.alarm_burden.metric={raw_alarm_burden_metric!r}. "
+            f"Allowed value: {ALLOWED_ALARM_BURDEN_OBJECTIVE_METRIC}."
+        )
+    raw_alarm_threshold = alarm_burden_cfg.get("risk_threshold", 0.95)
+    try:
+        alarm_burden_threshold = float(raw_alarm_threshold)
+    except Exception:
+        raise ValueError(
+            f"Invalid objectives.alarm_burden.risk_threshold={raw_alarm_threshold!r}. "
+            "Expected finite float in (0, 1]."
+        ) from None
+    if not math.isfinite(alarm_burden_threshold) or alarm_burden_threshold <= 0 or alarm_burden_threshold > 1:
+        raise ValueError(
+            f"Invalid objectives.alarm_burden.risk_threshold={raw_alarm_threshold!r}. "
+            "Expected finite float in (0, 1]."
+        )
+
     normalized_contract = {
         "error": {"metric": error_metric},
-        "efficiency": {"metric": efficiency_metric},
         "pdm": {
             "metric": pdm_metric,
             "smoothing_window_windows": smoothing_window_windows,
+        },
+        "alarm_burden": {
+            "metric": alarm_burden_metric,
+            "risk_threshold": alarm_burden_threshold,
         },
     }
     if "selection" in objectives:
@@ -296,9 +319,9 @@ def _resolve_winner_selection_contract(config: dict) -> dict:
         )
 
     raw_weights_cfg = dict(selection_cfg.get("weights") or {})
-    defaults = {"error": 0.30, "efficiency": 0.20, "pdm": 0.50}
+    defaults = {"error": 0.20, "pdm": 0.50, "alarm_burden": 0.30}
     resolved_weights = {}
-    for key in ("error", "efficiency", "pdm"):
+    for key in ("error", "pdm", "alarm_burden"):
         raw_value = raw_weights_cfg.get(key, defaults[key])
         try:
             weight = float(raw_value)
@@ -316,15 +339,15 @@ def _resolve_winner_selection_contract(config: dict) -> dict:
             )
         resolved_weights[key] = weight
 
-    total = resolved_weights["error"] + resolved_weights["efficiency"] + resolved_weights["pdm"]
+    total = resolved_weights["error"] + resolved_weights["pdm"] + resolved_weights["alarm_burden"]
     if total <= 0:
         raise ValueError(
-            "Invalid objectives.selection.weights: sum(error, efficiency, pdm) must be > 0."
+            "Invalid objectives.selection.weights: sum(error, pdm, alarm_burden) must be > 0."
         )
     normalized_weights = {
         "error": resolved_weights["error"] / total,
-        "efficiency": resolved_weights["efficiency"] / total,
         "pdm": resolved_weights["pdm"] / total,
+        "alarm_burden": resolved_weights["alarm_burden"] / total,
     }
 
     normalized_selection = {
@@ -388,17 +411,20 @@ def _resolve_training_policy(config: dict) -> dict:
 
 def _objective_contract_line(contract: dict) -> str:
     error_metric = ((contract.get("error") or {}).get("metric"))
-    efficiency_metric = ((contract.get("efficiency") or {}).get("metric"))
     pdm_cfg = contract.get("pdm") or {}
     pdm_metric = pdm_cfg.get("metric")
+    alarm_burden_cfg = contract.get("alarm_burden") or {}
+    alarm_burden_metric = alarm_burden_cfg.get("metric")
     return (
         "OBJECTIVE_CONTRACT "
         f"obj_error={_value_or_na(error_metric)} direction=min "
-        f"obj_efficiency={_value_or_na(efficiency_metric)} direction=min "
         "obj_pdm=1-pdm_smoothed_auroc direction=min "
+        f"obj_alarm_burden={_value_or_na(alarm_burden_metric)} direction=min "
+        f"alarm_burden_threshold={_value_or_na(alarm_burden_cfg.get('risk_threshold'))} "
         f"pdm_metric={_value_or_na(pdm_metric)} "
         f"pdm_smoothing_window_windows={_value_or_na(pdm_cfg.get('smoothing_window_windows'))} "
         "pdm_score_pipeline=window_reconstruction_error->risk_score->smoothed_risk_score->smoothed_rank_gap "
+        "alarm_burden_pipeline=normal_smoothed_risk_score>=risk_threshold "
         "pdm_label_policy=phase0_or_phase1_positive_is_phase1_exclude_phase2 "
         "pdm_eval_slice=test_only"
     )
@@ -408,17 +434,17 @@ def _winner_selection_contract_line(contract: dict) -> str:
     method = contract.get("method")
     weights = contract.get("weights_normalized") or {}
     error_w = float(weights.get("error", 0.0))
-    efficiency_w = float(weights.get("efficiency", 0.0))
     pdm_w = float(weights.get("pdm", 0.0))
+    alarm_burden_w = float(weights.get("alarm_burden", 0.0))
     return (
         "WINNER_SELECTION_CONTRACT "
         f"method={_value_or_na(method)} "
         f"weights_normalized="
         f"{error_w:.4f}/"
-        f"{efficiency_w:.4f}/"
-        f"{pdm_w:.4f} "
+        f"{pdm_w:.4f}/"
+        f"{alarm_burden_w:.4f} "
         "pool=db_cycle_dataset_name pareto_front_only normalization=minmax_per_pool "
-        "tie_break=obj_pdm_then_obj_error_then_obj_efficiency_then_timestamp_then_id "
+        "tie_break=obj_alarm_burden_then_obj_pdm_then_obj_error_then_timestamp_then_id "
         "empty_pool_policy=fail_fast"
     )
 

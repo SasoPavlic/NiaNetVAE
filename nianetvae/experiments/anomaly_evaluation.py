@@ -16,12 +16,17 @@ class WindowAnomalyRankingMetrics:
     percentile risk scores against the training-window calibration distribution.
     """
 
-    def __init__(self, smoothing_window_windows: int = 480):
+    def __init__(
+        self,
+        smoothing_window_windows: int = 480,
+        alarm_burden_threshold: float = 0.95,
+    ):
         self.all_scores = []
         self.all_labels = []
         self.all_ts_ids = []
         self.calibration_scores = []
         self.smoothing_window_windows = max(1, int(smoothing_window_windows))
+        self.alarm_burden_threshold = float(np.clip(float(alarm_burden_threshold), 0.0, 1.0))
 
     def to(self, device):
         # Data is accumulated on CPU by design.
@@ -120,6 +125,9 @@ class WindowAnomalyRankingMetrics:
         negative_smoothed = smoothed_risk_scores[labels == 0]
         positive_smoothed_mean = float(np.mean(positive_smoothed))
         negative_smoothed_mean = float(np.mean(negative_smoothed))
+        threshold = float(self.alarm_burden_threshold)
+        positive_high_risk_rate = float(np.mean(positive_smoothed >= threshold))
+        negative_high_risk_rate = float(np.mean(negative_smoothed >= threshold))
         smoothed_auroc = float(self._binary_auroc(labels=labels, scores=smoothed_risk_scores))
         smoothed_rank_gap = float(2.0 * smoothed_auroc - 1.0)
 
@@ -134,8 +142,11 @@ class WindowAnomalyRankingMetrics:
             "risk_score_mean": round(float(np.mean(risk_scores)), 6),
             "risk_score_std": round(float(np.std(risk_scores)), 6),
             "pdm_smoothing_window_windows": int(self.smoothing_window_windows),
+            "pdm_alarm_burden_threshold": round(threshold, 6),
             "pdm_positive_smoothed_risk_mean": round(positive_smoothed_mean, 6),
             "pdm_negative_smoothed_risk_mean": round(negative_smoothed_mean, 6),
+            "pdm_positive_high_risk_rate": round(positive_high_risk_rate, 6),
+            "pdm_negative_high_risk_rate": round(negative_high_risk_rate, 6),
             "pdm_smoothed_auroc": round(smoothed_auroc, 6),
             "pdm_smoothed_rank_gap": round(smoothed_rank_gap, 6),
             "pdm_metric_valid": True,
@@ -248,8 +259,11 @@ class WindowAnomalyRankingMetrics:
             "risk_score_mean": None,
             "risk_score_std": None,
             "pdm_smoothing_window_windows": int(self.smoothing_window_windows),
+            "pdm_alarm_burden_threshold": round(float(self.alarm_burden_threshold), 6),
             "pdm_positive_smoothed_risk_mean": None,
             "pdm_negative_smoothed_risk_mean": None,
+            "pdm_positive_high_risk_rate": None,
+            "pdm_negative_high_risk_rate": None,
             "pdm_smoothed_auroc": None,
             "pdm_smoothed_rank_gap": None,
             "pdm_metric_valid": False,

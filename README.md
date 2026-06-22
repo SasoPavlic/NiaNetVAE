@@ -185,87 +185,26 @@ at your own risk!
 
 
 
-# Fitness Function Overview
+# Current Search Objective Overview
 
-This summary explains how the code calculates a single **fitness** value, balancing **reconstruction error** and **model complexity**.
+The current MetroPT architecture search is a three-objective NSGA-III problem.
+All objectives are minimized:
 
----
+1. `obj_error`: the selected reconstruction metric, currently `SMAPE`.
+2. `obj_pdm`: the PdM ranking proxy, computed as `1 - pdm_smoothed_auroc`.
+3. `obj_alarm_burden`: the share of normal smoothed-risk windows above the configured high-risk threshold.
 
-## 1. Metric Normalization
+The PdM proxy converts reconstruction error into percentile-style risk scores
+against the training/calibration distribution, smooths those risks over ordered
+test windows, and checks whether pre-maintenance windows rank above normal
+windows. The alarm-burden objective uses the same smoothed risk stream, but
+looks only at normal windows and penalizes candidates that keep normal operation
+at high risk too often.
 
-For each metric (e.g., **MAE**, **MSE**, **RMSE**, **MAPE**, **RMAPE**, **RMAPE**), the code retrieves **min** and **max** values from a database and **normalizes** the current metric into the range \([0,1]\). The basic formula is:
+Parameter count and estimated MACs are still recorded as diagnostics in the
+candidate database and exported summaries, but they are not search objectives in
+the current campaign. This keeps architecture search focused on reconstruction
+quality, PdM ranking signal, and practical alarm burden.
 
-$$
-\text{normalized} \;=\; \frac{\text{value} - \text{min\_val}}{\text{max\_val} - \text{min\_val}}
-$$
-
-- If a metric is **better when higher** (e.g., **R²**), the function inverts that range with:
-  \[
-     1 - \text{normalized}
-  \]
-- If no prior data exist, the code defaults to using the current value as both min and max.
-
----
-
-## 2. Error Calculation
-
-The code sums various normalized **reconstruction** metrics:
-
-1. **MAE**, **MSE**, and **RMSE** (all lower-is-better)
-
-In simplified form:
-
-$$
-\text{Error} \;\approx\; 
-\bigl(\text{Norm(MAE)} + \text{Norm(MSE)} + \text{Norm(RMSE)}\bigr)
-$$
-
----
-
-## 3. Complexity Calculation
-
-The code **penalizes** large or deep architectures. It looks at:
-
-- Number of encoding layers  
-- Number of decoding layers  
-- Bottleneck size
-
-Each is **divided** by the time-series length \(\text{seq\_len}\) to keep values in \([0,1]\). They are summed and scaled so that:
-
-$$
-\text{Complexity} \;=\; 
-\frac{\text{EncLayers}}{\text{seq\_len}} 
-\;+\;
-\frac{\text{DecLayers}}{\text{seq\_len}}
-\;+\;
-\frac{\text{BottleneckSize}}{\text{seq\_len}}
-$$
-
-*(This result is then normalized further to a maximum of 3.0.)*
-
----
-
-## 4. Final Fitness
-
-The final **Fitness** is simply:
-
-$$
-\text{Fitness} 
-\;=\; 
-\text{Error} 
-\;+\; 
-\text{Complexity}.
-$$
-
-- The optimization algorithm (e.g., PSO, DE) **minimizes** this value.
-- **Lower fitness** indicates better reconstruction (less error) **and** a simpler model (lower complexity).
-
----
-
-## 5. Handling Invalid Values
-
-If any metric is missing or NaN, the code assigns a **high penalty** \((9 \times 10^{10})\) so that invalid solutions are effectively discarded.
-
----
-
-**Overall**, this balanced approach encourages **accurate** yet **efficient** VRAE architectures.
+Invalid or incomplete objective bundles receive the configured high penalty
+`9e10` so they are filtered out during winner selection.

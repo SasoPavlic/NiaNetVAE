@@ -49,7 +49,8 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
     conn = sqlite3.connect(str(db_path))
     try:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(solutions_finetune_smoothed_rankgap)").fetchall()}
-        assert {"obj_error", "obj_efficiency", "obj_pdm"}.issubset(columns)
+        assert {"obj_error", "obj_pdm", "obj_alarm_burden"}.issubset(columns)
+        assert {"diagnostic_params", "diagnostic_macs"}.issubset(columns)
         assert {
             "window_count",
             "positive_window_count",
@@ -74,9 +75,13 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
             "pdm_negative_smoothed_risk_mean",
             "pdm_smoothed_auroc",
             "pdm_smoothed_rank_gap",
+            "pdm_alarm_burden_threshold",
+            "pdm_positive_high_risk_rate",
+            "pdm_negative_high_risk_rate",
             "pdm_metric_valid",
             "pdm_metric_invalid_reason",
             "objective_pdm_metric",
+            "objective_alarm_burden_metric",
         }.issubset(columns)
         assert "error" not in columns
         assert "complexity" not in columns
@@ -120,6 +125,9 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
             "pdm_negative_smoothed_risk_mean": 0.2,
             "pdm_smoothed_auroc": 0.8,
             "pdm_smoothed_rank_gap": 0.6,
+            "pdm_alarm_burden_threshold": 0.95,
+            "pdm_positive_high_risk_rate": 1.0,
+            "pdm_negative_high_risk_rate": 0.1,
             "pdm_metric_valid": True,
             "pdm_metric_invalid_reason": None,
         },
@@ -132,34 +140,41 @@ def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
         model=model,
         experiment=experiment,
         obj_error=1.25,
-        obj_efficiency=1234.0,
         obj_pdm=0.33,
+        obj_alarm_burden=0.10,
+        diagnostic_params=1234.0,
+        diagnostic_macs=5678.0,
         objective_contract={
             "pdm_metric": "smoothed_rank_gap",
+            "alarm_burden_metric": "normal_high_risk_rate",
         },
     )
 
     conn = sqlite3.connect(str(db_path))
     try:
         row = conn.execute(
-            "SELECT obj_error, obj_efficiency, obj_pdm, "
+            "SELECT obj_error, obj_pdm, obj_alarm_burden, diagnostic_params, diagnostic_macs, "
             "window_count, positive_window_count, "
-            "pdm_smoothed_auroc, objective_pdm_metric "
+            "pdm_smoothed_auroc, pdm_negative_high_risk_rate, objective_pdm_metric, objective_alarm_burden_metric "
             "FROM solutions_finetune_smoothed_rankgap LIMIT 1"
         ).fetchone()
         assert row is not None
         assert float(row[0]) == 1.25
-        assert float(row[1]) == 1234.0
-        assert float(row[2]) == 0.33
-        assert int(row[3]) == 100
-        assert int(row[4]) == 10
-        assert float(row[5]) == 0.8
-        assert str(row[6]) == "smoothed_rank_gap"
+        assert float(row[1]) == 0.33
+        assert float(row[2]) == 0.10
+        assert float(row[3]) == 1234.0
+        assert float(row[4]) == 5678.0
+        assert int(row[5]) == 100
+        assert int(row[6]) == 10
+        assert float(row[7]) == 0.8
+        assert float(row[8]) == 0.1
+        assert str(row[9]) == "smoothed_rank_gap"
+        assert str(row[10]) == "normal_high_risk_rate"
     finally:
         conn.close()
 
     df = connector.get_cycle_candidates("MetroPT_cycle00", algorithm_name="NSGA3")
-    assert {"obj_error", "obj_efficiency", "obj_pdm"}.issubset(set(df.columns))
+    assert {"obj_error", "obj_pdm", "obj_alarm_burden"}.issubset(set(df.columns))
     assert "error" not in set(df.columns)
     assert "complexity" not in set(df.columns)
     assert "fitness" not in set(df.columns)
@@ -190,6 +205,11 @@ def test_sqlite_schema_mismatch_auto_migrates_for_old_anomaly_columns(tmp_path: 
         assert "objective_pdm_metric" in columns
         assert "pdm_smoothed_rank_gap" in columns
         assert "pdm_smoothed_auroc" in columns
+        assert "obj_alarm_burden" in columns
+        assert "diagnostic_params" in columns
+        assert "diagnostic_macs" in columns
+        assert "objective_alarm_burden_metric" in columns
+        assert "pdm_negative_high_risk_rate" in columns
         assert "calibration_window_count" in columns
         assert "pdm_metric_valid" in columns
     finally:
@@ -243,12 +263,12 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
         "selected_distance": 0.1234,
         "winner_selection": {
             "method": "weighted_ideal_distance",
-            "weights_normalized": {"error": 0.3, "efficiency": 0.2, "pdm": 0.5},
+            "weights_normalized": {"error": 0.2, "pdm": 0.5, "alarm_burden": 0.3},
             "selected_hash": "dummy-hash",
             "selected_objectives": {
                 "obj_error": 1.25,
-                "obj_efficiency": 1234.0,
                 "obj_pdm": 0.33,
+                "obj_alarm_burden": 0.10,
             },
             "selected_distance": 0.1234,
         },
@@ -263,14 +283,18 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
         "ended_at": datetime(2026, 4, 3, 9, 0, 5),
         "duration_s": 5.0,
         "obj_error": 1.25,
-        "obj_efficiency": 1234.0,
         "obj_pdm": 0.33,
+        "obj_alarm_burden": 0.10,
+        "diagnostic_params": 1234.0,
+        "diagnostic_macs": 5678.0,
+        "diagnostic_macs_reason": None,
         "pdm_signal_quality": 0.6,
         "objective_reason": None,
         "objective_contract": {
             "error_metric": "SMAPE",
-            "efficiency_metric": "macs",
             "pdm_metric": "smoothed_rank_gap",
+            "alarm_burden_metric": "normal_high_risk_rate",
+            "alarm_burden_threshold": 0.95,
         },
         "metrics": {"SMAPE": 1.25},
         "anomaly_metrics": {
@@ -279,6 +303,9 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
             "pdm_negative_smoothed_risk_mean": 0.2,
             "pdm_smoothed_auroc": 0.8,
             "pdm_smoothed_rank_gap": 0.6,
+            "pdm_alarm_burden_threshold": 0.95,
+            "pdm_positive_high_risk_rate": 1.0,
+            "pdm_negative_high_risk_rate": 0.1,
             "pdm_metric_valid": True,
         },
     }
@@ -314,28 +341,21 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
     assert summary["artifacts"]["scaler_file"] == "scaler.joblib"
     assert meta["winner_selection"]["method"] == "weighted_ideal_distance"
     assert meta["winner_selection"]["selected_objectives"]["obj_pdm"] == 0.33
+    assert meta["winner_selection"]["selected_objectives"]["obj_alarm_burden"] == 0.10
     assert meta["training_policy"]["optimizer"] == "Adam"
     assert meta["training_policy"]["learning_rate"] == 0.003
     assert meta["training_policy"]["weight_decay"] == 0.0
     final_training = summary["final_training"]
     assert final_training["training_policy"]["optimizer"] == "Adam"
     assert final_training["obj_error"] == 1.25
-    assert final_training["obj_efficiency"] == 1234.0
     assert final_training["obj_pdm"] == 0.33
+    assert final_training["obj_alarm_burden"] == 0.10
+    assert final_training["diagnostic_params"] == 1234.0
+    assert final_training["diagnostic_macs"] == 5678.0
     assert "error" not in final_training
     assert "complexity" not in final_training
     assert "fitness" not in final_training
     assert "window_auprc" not in final_training["anomaly_metrics"]
-
-
-def test_shareable_smoothed_rank_gap_objective_markdown_exists():
-    doc_path = Path(__file__).resolve().parents[2] / "SMOOTHED_RANK_GAP_OBJECTIVE.md"
-    content = doc_path.read_text(encoding="utf-8")
-
-    assert "pdm_smoothed_auroc" in content
-    assert "pdm_smoothed_rank_gap" in content
-    assert "obj_pdm = 1 - pdm_smoothed_auroc" in content
-    assert "AUROC = 1.0 -> obj_pdm = 0.0" in content
 
 
 def test_experiment_uses_fixed_adam_training_policy():

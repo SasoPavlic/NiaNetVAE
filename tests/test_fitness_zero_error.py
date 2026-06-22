@@ -38,15 +38,15 @@ class _TinyModel(torch.nn.Module):
         return {"signal": x, "reconstructed": x}
 
 
-def _objective_cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params") -> dict:
+def _objective_cfg(error_metric: str = "SMAPE") -> dict:
     return {
         "data_params": {"n_features": 3},
         "objectives": {
             "error": {"metric": error_metric},
-            "efficiency": {"metric": efficiency_metric},
             "pdm": {
                 "metric": "smoothed_rank_gap",
             },
+            "alarm_burden": {"metric": "normal_high_risk_rate", "risk_threshold": 0.95},
         },
     }
 
@@ -62,6 +62,9 @@ def _pdm_payload(positive_risk_mean: float, negative_risk_mean: float) -> dict:
         "pdm_negative_smoothed_risk_mean": negative_risk_mean,
         "pdm_smoothed_auroc": smoothed_auroc,
         "pdm_smoothed_rank_gap": smoothed_rank_gap,
+        "pdm_alarm_burden_threshold": 0.95,
+        "pdm_positive_high_risk_rate": 1.0,
+        "pdm_negative_high_risk_rate": negative_risk_mean,
     }
 
 
@@ -81,7 +84,8 @@ def test_objective_bundle_zero_error_is_valid():
     )
 
     assert bundle["obj_error"] == pytest.approx(0.0)
-    assert bundle["obj_efficiency"] > 0
+    assert bundle["obj_alarm_burden"] == pytest.approx(0.2)
+    assert bundle["diagnostic_params"] > 0
     assert bundle["obj_error"] != DEFAULT_PENALTY
     assert bundle["obj_pdm"] != DEFAULT_PENALTY
 
@@ -102,7 +106,8 @@ def test_objective_bundle_uses_raw_smape_value():
     )
 
     assert bundle["obj_error"] == pytest.approx(1.23456789)
-    assert bundle["obj_efficiency"] > 0
+    assert bundle["obj_alarm_burden"] == pytest.approx(0.0)
+    assert bundle["diagnostic_params"] > 0
     assert bundle["obj_pdm"] == pytest.approx(0.0)
 
 
@@ -122,5 +127,5 @@ def test_objective_bundle_penalizes_when_smape_missing():
     )
 
     assert bundle["obj_error"] == DEFAULT_PENALTY
-    assert bundle["obj_efficiency"] == DEFAULT_PENALTY
     assert bundle["obj_pdm"] == DEFAULT_PENALTY
+    assert bundle["obj_alarm_burden"] == DEFAULT_PENALTY

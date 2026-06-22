@@ -8,7 +8,7 @@ IMAGE_REF="docker://spartan300/nianet:vaepymoo"
 IMAGE_LATEST="${IMAGE_DIR}/nianet-vaepymoo-latest.sif"
 IMAGE_CURRENT="${IMAGE_DIR}/nianet-vaepymoo-current.sif"
 IMAGE_SYNC="${IMAGE_SYNC:-1}"
-IMAGE_BUILD_FAKEROOT="${IMAGE_BUILD_FAKEROOT:-1}"
+IMAGE_BUILD_FAKEROOT="${IMAGE_BUILD_FAKEROOT:-0}"
 
 # Normal human workflow: edit CONFIG_PATH, then run this script.
 # START_CYCLE/END_CYCLE/RESUME_FROM are advanced operational overrides.
@@ -23,7 +23,7 @@ CHAIN_DEPENDENCY_TYPE="${CHAIN_DEPENDENCY_TYPE:-afterany}"
 SEARCH_WALLTIME_BUFFER="10:00:00"
 FINETUNE_WALLTIME="08:00:00"
 MANIFEST_WALLTIME="00:30:00"
-SAFE_MAX_WALLTIME="3-19:00:00"
+SAFE_MAX_WALLTIME="4-00:00:00"
 
 # Optional detached mode:
 #   ./submit_per_maint_pipeline.sh --detach

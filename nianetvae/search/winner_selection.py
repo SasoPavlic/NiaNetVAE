@@ -35,10 +35,10 @@ def _resolve_winner_selection_contract(cfg: dict | None = None) -> dict:
             "Allowed value: weighted_ideal_distance."
         )
 
-    default_weights = {"error": 0.30, "efficiency": 0.20, "pdm": 0.50}
+    default_weights = {"error": 0.20, "pdm": 0.50, "alarm_burden": 0.30}
     raw_weights_cfg = dict(selection_cfg.get("weights") or {})
     resolved_weights = {}
-    for key in ("error", "efficiency", "pdm"):
+    for key in ("error", "pdm", "alarm_burden"):
         raw_value = raw_weights_cfg.get(key, default_weights[key])
         try:
             value = float(raw_value)
@@ -52,15 +52,15 @@ def _resolve_winner_selection_contract(cfg: dict | None = None) -> dict:
             )
         resolved_weights[key] = value
 
-    total = resolved_weights["error"] + resolved_weights["efficiency"] + resolved_weights["pdm"]
+    total = resolved_weights["error"] + resolved_weights["pdm"] + resolved_weights["alarm_burden"]
     if total <= 0:
         raise ValueError(
-            "Invalid objectives.selection.weights: sum(error, efficiency, pdm) must be > 0."
+            "Invalid objectives.selection.weights: sum(error, pdm, alarm_burden) must be > 0."
         )
     weights_normalized = {
         "error": resolved_weights["error"] / total,
-        "efficiency": resolved_weights["efficiency"] / total,
         "pdm": resolved_weights["pdm"] / total,
+        "alarm_burden": resolved_weights["alarm_burden"] / total,
     }
     return {
         "method": method,
@@ -164,15 +164,15 @@ def _select_deterministic_pareto_winner(
     valid = []
     for row in records:
         obj_error = _safe_float(row.get("obj_error"))
-        obj_efficiency = _safe_float(row.get("obj_efficiency"))
         obj_pdm = _safe_float(row.get("obj_pdm"))
+        obj_alarm_burden = _safe_float(row.get("obj_alarm_burden"))
         solution = _parse_solution_array(row.get("solution_array"), expected_dim=expected_solution_dim)
-        if obj_error is None or obj_efficiency is None or obj_pdm is None or solution is None:
+        if obj_error is None or obj_pdm is None or obj_alarm_burden is None or solution is None:
             continue
         if (
             _is_penalty_like_objective(float(obj_error), penalty_value)
-            or _is_penalty_like_objective(float(obj_efficiency), penalty_value)
             or _is_penalty_like_objective(float(obj_pdm), penalty_value)
+            or _is_penalty_like_objective(float(obj_alarm_burden), penalty_value)
         ):
             continue
         valid.append(
@@ -182,8 +182,8 @@ def _select_deterministic_pareto_winner(
                 "algorithm_name": str(row.get("algorithm_name", "NSGA3")),
                 "timestamp_sort_key": _parse_timestamp_sort_key(row.get("timestamp")),
                 "obj_error": float(obj_error),
-                "obj_efficiency": float(obj_efficiency),
                 "obj_pdm": float(obj_pdm),
+                "obj_alarm_burden": float(obj_alarm_burden),
                 "solution": solution,
             }
         )
@@ -195,9 +195,9 @@ def _select_deterministic_pareto_winner(
 
     def _tie_break_key(item):
         return (
+            float(item["obj_alarm_burden"]),
             float(item["obj_pdm"]),
             float(item["obj_error"]),
-            float(item["obj_efficiency"]),
             float(item["timestamp_sort_key"]),
             int(item["id"]),
         )
@@ -214,7 +214,7 @@ def _select_deterministic_pareto_winner(
         )
 
     objective_matrix = np.array(
-        [[row["obj_error"], row["obj_efficiency"], row["obj_pdm"]] for row in deduped],
+        [[row["obj_error"], row["obj_pdm"], row["obj_alarm_burden"]] for row in deduped],
         dtype=float,
     )
     mask = _pareto_mask_minimize(objective_matrix)
@@ -225,7 +225,7 @@ def _select_deterministic_pareto_winner(
         )
 
     pareto_matrix = np.array(
-        [[row["obj_error"], row["obj_efficiency"], row["obj_pdm"]] for row in pareto_rows],
+        [[row["obj_error"], row["obj_pdm"], row["obj_alarm_burden"]] for row in pareto_rows],
         dtype=float,
     )
     mins = np.min(pareto_matrix, axis=0)
@@ -241,8 +241,8 @@ def _select_deterministic_pareto_winner(
     weights = selection_contract["weights_normalized"]
     distances = np.sqrt(
         normalized[:, 0] ** 2 * float(weights["error"])
-        + normalized[:, 1] ** 2 * float(weights["efficiency"])
-        + normalized[:, 2] ** 2 * float(weights["pdm"])
+        + normalized[:, 1] ** 2 * float(weights["pdm"])
+        + normalized[:, 2] ** 2 * float(weights["alarm_burden"])
     )
     best_distance = float(np.min(distances))
     tie_indices = [i for i, d in enumerate(distances) if abs(float(d) - best_distance) <= 1e-12]
@@ -263,8 +263,8 @@ def _select_deterministic_pareto_winner(
         "selected_algorithm": selected["algorithm_name"],
         "selected_objectives": {
             "obj_error": float(selected["obj_error"]),
-            "obj_efficiency": float(selected["obj_efficiency"]),
             "obj_pdm": float(selected["obj_pdm"]),
+            "obj_alarm_burden": float(selected["obj_alarm_burden"]),
         },
         "selected_distance": float(best_distance),
         "selected_solution": _as_jsonable(selected["solution"]),

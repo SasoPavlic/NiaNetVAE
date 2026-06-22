@@ -51,13 +51,17 @@ WINDOW_ANOMALY_COLUMNS = {
     "risk_score_std",
     "segment_count",
     "pdm_smoothing_window_windows",
+    "pdm_alarm_burden_threshold",
     "pdm_positive_smoothed_risk_mean",
     "pdm_negative_smoothed_risk_mean",
+    "pdm_positive_high_risk_rate",
+    "pdm_negative_high_risk_rate",
     "pdm_smoothed_auroc",
     "pdm_smoothed_rank_gap",
     "pdm_metric_valid",
     "pdm_metric_invalid_reason",
     "objective_pdm_metric",
+    "objective_alarm_burden_metric",
 }
 
 WINDOW_ANOMALY_COLUMN_TYPES = {
@@ -80,14 +84,37 @@ WINDOW_ANOMALY_COLUMN_TYPES = {
     "risk_score_std": "REAL",
     "segment_count": "INTEGER",
     "pdm_smoothing_window_windows": "INTEGER",
+    "pdm_alarm_burden_threshold": "REAL",
     "pdm_positive_smoothed_risk_mean": "REAL",
     "pdm_negative_smoothed_risk_mean": "REAL",
+    "pdm_positive_high_risk_rate": "REAL",
+    "pdm_negative_high_risk_rate": "REAL",
     "pdm_smoothed_auroc": "REAL",
     "pdm_smoothed_rank_gap": "REAL",
     "pdm_metric_valid": "BOOLEAN",
     "pdm_metric_invalid_reason": "TEXT",
     "objective_pdm_metric": "TEXT",
+    "objective_alarm_burden_metric": "TEXT",
 }
+
+OBJECTIVE_COLUMNS = {
+    "obj_error",
+    "obj_pdm",
+    "obj_alarm_burden",
+    "diagnostic_params",
+    "diagnostic_macs",
+}
+
+OBJECTIVE_COLUMN_TYPES = {
+    "obj_error": "REAL",
+    "obj_pdm": "REAL",
+    "obj_alarm_burden": "REAL",
+    "diagnostic_params": "REAL",
+    "diagnostic_macs": "REAL",
+}
+
+REQUIRED_RUNTIME_COLUMNS = WINDOW_ANOMALY_COLUMNS | OBJECTIVE_COLUMNS
+RUNTIME_COLUMN_TYPES = {**WINDOW_ANOMALY_COLUMN_TYPES, **OBJECTIVE_COLUMN_TYPES}
 
 _DB_ENV_VAR_MAP = {
     "host": "NIANETVAE_DB_HOST",
@@ -153,8 +180,11 @@ def _window_anomaly_payload(anomaly: dict | None) -> dict:
         "risk_score_std": _optional_float(anomaly.get("risk_score_std")),
         "segment_count": _optional_int(anomaly.get("segment_count")),
         "pdm_smoothing_window_windows": _optional_int(anomaly.get("pdm_smoothing_window_windows")),
+        "pdm_alarm_burden_threshold": _optional_float(anomaly.get("pdm_alarm_burden_threshold")),
         "pdm_positive_smoothed_risk_mean": _optional_float(anomaly.get("pdm_positive_smoothed_risk_mean")),
         "pdm_negative_smoothed_risk_mean": _optional_float(anomaly.get("pdm_negative_smoothed_risk_mean")),
+        "pdm_positive_high_risk_rate": _optional_float(anomaly.get("pdm_positive_high_risk_rate")),
+        "pdm_negative_high_risk_rate": _optional_float(anomaly.get("pdm_negative_high_risk_rate")),
         "pdm_smoothed_auroc": _optional_float(anomaly.get("pdm_smoothed_auroc")),
         "pdm_smoothed_rank_gap": _optional_float(anomaly.get("pdm_smoothed_rank_gap")),
         "pdm_metric_valid": _optional_bool(anomaly.get("pdm_metric_valid")),
@@ -163,11 +193,9 @@ def _window_anomaly_payload(anomaly: dict | None) -> dict:
 
 
 def _validate_metric_schema(columns: set[str], table_name: str) -> None:
-    missing = sorted(WINDOW_ANOMALY_COLUMNS - columns)
+    missing = sorted(REQUIRED_RUNTIME_COLUMNS - columns)
     if missing:
-        raise ValueError(
-            f"Existing table {table_name!r} is missing required window anomaly/objective columns={missing}."
-        )
+        raise ValueError(f"Existing table {table_name!r} is missing required runtime columns={missing}.")
     legacy_present = sorted(LEGACY_ANOMALY_COLUMNS & columns)
     if legacy_present:
         Log.warning(
@@ -177,10 +205,10 @@ def _validate_metric_schema(columns: set[str], table_name: str) -> None:
 
 def _sqlite_add_missing_columns(cur, table_name: str, existing_columns: set[str]) -> list[str]:
     added = []
-    for column_name in sorted(WINDOW_ANOMALY_COLUMNS):
+    for column_name in sorted(REQUIRED_RUNTIME_COLUMNS):
         if column_name in existing_columns:
             continue
-        col_type = WINDOW_ANOMALY_COLUMN_TYPES[column_name]
+        col_type = RUNTIME_COLUMN_TYPES[column_name]
         cur.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {col_type}")
         added.append(column_name)
     return added
@@ -188,10 +216,10 @@ def _sqlite_add_missing_columns(cur, table_name: str, existing_columns: set[str]
 
 def _postgres_add_missing_columns(cur, table_name: str, existing_columns: set[str]) -> list[str]:
     added = []
-    for column_name in sorted(WINDOW_ANOMALY_COLUMNS):
+    for column_name in sorted(REQUIRED_RUNTIME_COLUMNS):
         if column_name in existing_columns:
             continue
-        col_type = WINDOW_ANOMALY_COLUMN_TYPES[column_name]
+        col_type = RUNTIME_COLUMN_TYPES[column_name]
         cur.execute(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column_name} {col_type}")
         added.append(column_name)
     return added
@@ -357,7 +385,8 @@ class SQLiteConnector:
                     decoder_num_layers INTEGER, decoder_layer_step INTEGER,
                     encoding_layers TEXT, decoding_layers TEXT,
                     bottleneck_size INTEGER,
-                    obj_error REAL, obj_efficiency REAL, obj_pdm REAL,
+                    obj_error REAL, obj_pdm REAL, obj_alarm_burden REAL,
+                    diagnostic_params REAL, diagnostic_macs REAL,
                     MAE REAL, MSE REAL, RMSE REAL, MAPE REAL,
                     RMAPE REAL, SMAPE REAL,
                     window_count INTEGER,
@@ -379,13 +408,17 @@ class SQLiteConnector:
                     risk_score_std REAL,
                     segment_count INTEGER,
                     pdm_smoothing_window_windows INTEGER,
+                    pdm_alarm_burden_threshold REAL,
                     pdm_positive_smoothed_risk_mean REAL,
                     pdm_negative_smoothed_risk_mean REAL,
+                    pdm_positive_high_risk_rate REAL,
+                    pdm_negative_high_risk_rate REAL,
                     pdm_smoothed_auroc REAL,
                     pdm_smoothed_rank_gap REAL,
                     pdm_metric_valid INTEGER,
                     pdm_metric_invalid_reason TEXT,
                     objective_pdm_metric TEXT,
+                    objective_alarm_burden_metric TEXT,
                     solution_array TEXT
                 );
             ''')
@@ -444,7 +477,7 @@ class SQLiteConnector:
         try:
             conn = self._get_connection()
             df = pd.read_sql_query(
-                f"SELECT id, hash_id, solution_array, obj_error, obj_efficiency, obj_pdm, "
+                f"SELECT id, hash_id, solution_array, obj_error, obj_pdm, obj_alarm_burden, "
                 f"algorithm_name, timestamp "
                 f"FROM {self.table_name} "
                 f"WHERE dataset_name = ? AND algorithm_name = ? "
@@ -467,8 +500,10 @@ class SQLiteConnector:
             iteration,
             solution=None,
             obj_error=None,
-            obj_efficiency=None,
             obj_pdm=None,
+            obj_alarm_burden=None,
+            diagnostic_params=None,
+            diagnostic_macs=None,
             model=None,
             experiment=None,
             objective_contract=None,
@@ -486,8 +521,8 @@ class SQLiteConnector:
                 model
                 and solution is not None
                 and obj_error is not None
-                and obj_efficiency is not None
                 and obj_pdm is not None
+                and obj_alarm_burden is not None
             ):
                 return
 
@@ -502,8 +537,10 @@ class SQLiteConnector:
             self._insert_entry(
                 model=model,
                 obj_error=obj_error,
-                obj_efficiency=obj_efficiency,
                 obj_pdm=obj_pdm,
+                obj_alarm_burden=obj_alarm_burden,
+                diagnostic_params=diagnostic_params,
+                diagnostic_macs=diagnostic_macs,
                 solution=solution,
                 dataset_name=dataset_name,
                 alg_name=alg_name,
@@ -533,7 +570,7 @@ class SQLiteConnector:
 
     @_retry_db()
     def _insert_entry(
-            self, model, obj_error, obj_efficiency, obj_pdm, solution,
+            self, model, obj_error, obj_pdm, obj_alarm_burden, diagnostic_params, diagnostic_macs, solution,
             dataset_name, alg_name, iteration,
             mae, mse, rmse, mape, rmape, smape,
             start_time, end_time, duration,
@@ -566,8 +603,10 @@ class SQLiteConnector:
                 'decoding_layers': str(model.decoding_layers),
                 'bottleneck_size': int(model.bottleneck_size),
                 'obj_error': float(obj_error),
-                'obj_efficiency': float(obj_efficiency),
                 'obj_pdm': float(obj_pdm),
+                'obj_alarm_burden': float(obj_alarm_burden),
+                'diagnostic_params': _optional_float(diagnostic_params),
+                'diagnostic_macs': _optional_float(diagnostic_macs),
                 'MAE': float(mae),
                 'MSE': float(mse),
                 'RMSE': float(rmse),
@@ -575,6 +614,7 @@ class SQLiteConnector:
                 'RMAPE': float(rmape),
                 'SMAPE': float(smape),
                 'objective_pdm_metric': (objective_contract or {}).get("pdm_metric"),
+                'objective_alarm_burden_metric': (objective_contract or {}).get("alarm_burden_metric"),
                 'solution_array': json.dumps(solution.tolist())
             }
             data.update(_window_anomaly_payload(anomaly_metrics))
@@ -632,7 +672,8 @@ class PostgresConnector:
                     decoder_num_layers INTEGER, decoder_layer_step INTEGER,
                     encoding_layers TEXT, decoding_layers TEXT,
                     bottleneck_size INTEGER,
-                    obj_error REAL, obj_efficiency REAL, obj_pdm REAL,
+                    obj_error REAL, obj_pdm REAL, obj_alarm_burden REAL,
+                    diagnostic_params REAL, diagnostic_macs REAL,
                     MAE REAL, MSE REAL, RMSE REAL, MAPE REAL,
                     RMAPE REAL, SMAPE REAL,
                     window_count INTEGER,
@@ -654,13 +695,17 @@ class PostgresConnector:
                     risk_score_std REAL,
                     segment_count INTEGER,
                     pdm_smoothing_window_windows INTEGER,
+                    pdm_alarm_burden_threshold REAL,
                     pdm_positive_smoothed_risk_mean REAL,
                     pdm_negative_smoothed_risk_mean REAL,
+                    pdm_positive_high_risk_rate REAL,
+                    pdm_negative_high_risk_rate REAL,
                     pdm_smoothed_auroc REAL,
                     pdm_smoothed_rank_gap REAL,
                     pdm_metric_valid BOOLEAN,
                     pdm_metric_invalid_reason TEXT,
                     objective_pdm_metric TEXT,
+                    objective_alarm_burden_metric TEXT,
                     solution_array TEXT
                 );
             ''')
@@ -735,7 +780,7 @@ class PostgresConnector:
         try:
             conn = self._get_connection()
             df = pd.read_sql_query(
-                f"SELECT id, hash_id, solution_array, obj_error, obj_efficiency, obj_pdm, "
+                f"SELECT id, hash_id, solution_array, obj_error, obj_pdm, obj_alarm_burden, "
                 f"algorithm_name, timestamp "
                 f"FROM {self.table_name} "
                 f"WHERE dataset_name = %s AND algorithm_name = %s "
@@ -758,8 +803,10 @@ class PostgresConnector:
             iteration,
             solution=None,
             obj_error=None,
-            obj_efficiency=None,
             obj_pdm=None,
+            obj_alarm_burden=None,
+            diagnostic_params=None,
+            diagnostic_macs=None,
             model=None,
             experiment=None,
             objective_contract=None,
@@ -773,8 +820,8 @@ class PostgresConnector:
                 model
                 and solution is not None
                 and obj_error is not None
-                and obj_efficiency is not None
                 and obj_pdm is not None
+                and obj_alarm_burden is not None
             ):
                 return
 
@@ -789,8 +836,10 @@ class PostgresConnector:
             self._insert_entry(
                 model=model,
                 obj_error=obj_error,
-                obj_efficiency=obj_efficiency,
                 obj_pdm=obj_pdm,
+                obj_alarm_burden=obj_alarm_burden,
+                diagnostic_params=diagnostic_params,
+                diagnostic_macs=diagnostic_macs,
                 solution=solution,
                 dataset_name=dataset_name,
                 alg_name=alg_name,
@@ -820,7 +869,7 @@ class PostgresConnector:
 
     @_retry_pg()
     def _insert_entry(
-            self, model, obj_error, obj_efficiency, obj_pdm, solution,
+            self, model, obj_error, obj_pdm, obj_alarm_burden, diagnostic_params, diagnostic_macs, solution,
             dataset_name, alg_name, iteration,
             mae, mse, rmse, mape, rmape, smape,
             start_time, end_time, duration,
@@ -850,8 +899,10 @@ class PostgresConnector:
                 'decoding_layers': str(model.decoding_layers),
                 'bottleneck_size': int(model.bottleneck_size),
                 'obj_error': float(obj_error),
-                'obj_efficiency': float(obj_efficiency),
                 'obj_pdm': float(obj_pdm),
+                'obj_alarm_burden': float(obj_alarm_burden),
+                'diagnostic_params': _optional_float(diagnostic_params),
+                'diagnostic_macs': _optional_float(diagnostic_macs),
                 'MAE': float(mae),
                 'MSE': float(mse),
                 'RMSE': float(rmse),
@@ -859,6 +910,7 @@ class PostgresConnector:
                 'RMAPE': float(rmape),
                 'SMAPE': float(smape),
                 'objective_pdm_metric': (objective_contract or {}).get("pdm_metric"),
+                'objective_alarm_burden_metric': (objective_contract or {}).get("alarm_burden_metric"),
                 'solution_array': json.dumps(solution.tolist())
             }
             data.update(_window_anomaly_payload(anomaly_metrics))

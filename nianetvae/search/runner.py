@@ -80,8 +80,8 @@ class RNNVAEArchitectureMultiObj(Problem):
     This class defines the multiobjective problem for RNN-VAE architecture search.
     The three objectives are:
       1. The error (from validation/test metrics)
-      2. The efficiency objective (params|macs|latency_ms)
-      3. The PdM objective (1 - clipped fixed-theta quality proxy)
+      2. The PdM ranking objective (1 - smoothed AUROC)
+      3. The alarm-burden objective (normal high-risk rate)
     All are minimized.
     """
 
@@ -123,9 +123,9 @@ class RNNVAEArchitectureMultiObj(Problem):
             return str(int(value))
         return str(value)
 
-    def _objectives_are_reusable(self, obj_error, obj_efficiency, obj_pdm) -> bool:
+    def _objectives_are_reusable(self, obj_error, obj_pdm, obj_alarm_burden) -> bool:
         try:
-            values = [float(obj_error), float(obj_efficiency), float(obj_pdm)]
+            values = [float(obj_error), float(obj_pdm), float(obj_alarm_burden)]
         except Exception:
             return False
         return all(math.isfinite(value) and value < float(self.penalty) for value in values)
@@ -134,16 +134,16 @@ class RNNVAEArchitectureMultiObj(Problem):
         self,
         model_hash: str,
         obj_error,
-        obj_efficiency,
         obj_pdm,
+        obj_alarm_burden,
         pdm_signal_quality=None,
     ) -> None:
-        if not self._objectives_are_reusable(obj_error, obj_efficiency, obj_pdm):
+        if not self._objectives_are_reusable(obj_error, obj_pdm, obj_alarm_burden):
             return
         self.objective_cache_by_hash[str(model_hash)] = {
             "obj_error": float(obj_error),
-            "obj_efficiency": float(obj_efficiency),
             "obj_pdm": float(obj_pdm),
+            "obj_alarm_burden": float(obj_alarm_burden),
             "pdm_signal_quality": (
                 None if pdm_signal_quality is None else float(pdm_signal_quality)
             ),
@@ -181,8 +181,8 @@ class RNNVAEArchitectureMultiObj(Problem):
             hash_id,
             status,
             obj_error,
-            obj_efficiency,
             obj_pdm,
+            obj_alarm_burden,
             pdm_signal_quality=None,
             duration_s=None,
             reason=None,
@@ -194,8 +194,8 @@ class RNNVAEArchitectureMultiObj(Problem):
             f"hash={hash_id}",
             f"status={status}",
             f"obj_error={self._format_metric(obj_error)}",
-            f"obj_efficiency={self._format_metric(obj_efficiency)}",
             f"obj_pdm={self._format_metric(obj_pdm)}",
+            f"obj_alarm_burden={self._format_metric(obj_alarm_burden)}",
         ]
         if pdm_signal_quality is not None:
             parts.append(f"pdm_signal_quality={self._format_metric(pdm_signal_quality)}")
@@ -213,8 +213,8 @@ class RNNVAEArchitectureMultiObj(Problem):
         model_hash: str,
         solution,
         obj_error: float,
-        obj_efficiency: float,
         obj_pdm: float,
+        obj_alarm_burden: float,
         status: str,
     ) -> None:
         """
@@ -234,8 +234,10 @@ class RNNVAEArchitectureMultiObj(Problem):
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         safe_obj_error = float(obj_error) if math.isfinite(float(obj_error)) else float(self.penalty)
-        safe_obj_eff = float(obj_efficiency) if math.isfinite(float(obj_efficiency)) else float(self.penalty)
         safe_obj_pdm = float(obj_pdm) if math.isfinite(float(obj_pdm)) else float(self.penalty)
+        safe_obj_alarm_burden = (
+            float(obj_alarm_burden) if math.isfinite(float(obj_alarm_burden)) else float(self.penalty)
+        )
 
         self.local_candidate_rows.append(
             {
@@ -243,8 +245,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                 "hash_id": str(model_hash),
                 "solution_array": json.dumps(solution_arr.tolist()),
                 "obj_error": safe_obj_error,
-                "obj_efficiency": safe_obj_eff,
                 "obj_pdm": safe_obj_pdm,
+                "obj_alarm_burden": safe_obj_alarm_burden,
                 "algorithm_name": "NSGA3",
                 "timestamp": timestamp,
                 "source": "local_runtime_buffer",
@@ -257,8 +259,8 @@ class RNNVAEArchitectureMultiObj(Problem):
         for solution in X:
             self.iteration += 1
             obj_error = self.penalty
-            obj_efficiency = self.penalty
             obj_pdm = self.penalty
+            obj_alarm_burden = self.penalty
             pdm_signal_quality = None
             status = "failed"
             reason = None
@@ -279,8 +281,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                 self.stats["cached"] += 1
                 self.stats["cached_memory"] += 1
                 obj_error = cached_objectives["obj_error"]
-                obj_efficiency = cached_objectives["obj_efficiency"]
                 obj_pdm = cached_objectives["obj_pdm"]
+                obj_alarm_burden = cached_objectives["obj_alarm_burden"]
                 pdm_signal_quality = cached_objectives.get("pdm_signal_quality")
             else:
                 existing_entry = self.conn.get_entries(hash_id=model_hash, dataset_name=self.dataset_name)
@@ -298,8 +300,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                         cached_bundle.get("valid")
                         and self._objectives_are_reusable(
                             cached_bundle.get("obj_error"),
-                            cached_bundle.get("obj_efficiency"),
                             cached_bundle.get("obj_pdm"),
+                            cached_bundle.get("obj_alarm_burden"),
                         )
                     )
                     if cached_reusable:
@@ -308,14 +310,14 @@ class RNNVAEArchitectureMultiObj(Problem):
                         self.stats["cached"] += 1
                         self.stats["cached_db"] += 1
                         obj_error = cached_bundle["obj_error"]
-                        obj_efficiency = cached_bundle["obj_efficiency"]
                         obj_pdm = cached_bundle["obj_pdm"]
+                        obj_alarm_burden = cached_bundle["obj_alarm_burden"]
                         pdm_signal_quality = cached_bundle.get("pdm_signal_quality")
                         self._remember_objectives(
                             model_hash,
                             obj_error,
-                            obj_efficiency,
                             obj_pdm,
+                            obj_alarm_burden,
                             pdm_signal_quality,
                         )
                     else:
@@ -329,8 +331,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                     reason = reason or "invalid_architecture"
                     self.stats["invalid"] += 1
                     obj_error = self.penalty
-                    obj_efficiency = self.penalty
                     obj_pdm = self.penalty
+                    obj_alarm_burden = self.penalty
                     self.conn.save_model_and_entry(
                         dataset_name=self.dataset_name,
                         alg_name="NSGA3",
@@ -338,8 +340,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                         model=model,
                         solution=solution,
                         obj_error=obj_error,
-                        obj_efficiency=obj_efficiency,
                         obj_pdm=obj_pdm,
+                        obj_alarm_burden=obj_alarm_burden,
                         objective_contract=self.objective_contract,
                     )
                 else:
@@ -376,8 +378,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                             penalty=self.penalty,
                         )
                         obj_error = objective_bundle["obj_error"]
-                        obj_efficiency = objective_bundle["obj_efficiency"]
                         obj_pdm = objective_bundle["obj_pdm"]
+                        obj_alarm_burden = objective_bundle["obj_alarm_burden"]
                         pdm_signal_quality = objective_bundle.get("pdm_signal_quality")
                         metric_parts = self._selected_metrics(experiment)
 
@@ -387,8 +389,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                             self.stats["failed"] += 1
                         elif (
                             obj_error >= self.penalty
-                            or obj_efficiency >= self.penalty
                             or obj_pdm >= self.penalty
+                            or obj_alarm_burden >= self.penalty
                         ):
                             status = "failed"
                             reason = "penalty_objectives"
@@ -406,8 +408,10 @@ class RNNVAEArchitectureMultiObj(Problem):
                             model=model,
                             experiment=experiment,
                             obj_error=obj_error,
-                            obj_efficiency=obj_efficiency,
                             obj_pdm=obj_pdm,
+                            obj_alarm_burden=obj_alarm_burden,
+                            diagnostic_params=objective_bundle.get("diagnostic_params"),
+                            diagnostic_macs=objective_bundle.get("diagnostic_macs"),
                             objective_contract=objective_bundle.get("objective_contract"),
                             start_time=start_time,
                             end_time=end_time,
@@ -417,8 +421,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                             self._remember_objectives(
                                 model_hash,
                                 obj_error,
-                                obj_efficiency,
                                 obj_pdm,
+                                obj_alarm_burden,
                                 pdm_signal_quality,
                             )
                     except Exception as e:
@@ -429,8 +433,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                         reason = _short_exception_reason(e)
                         self.stats["failed"] += 1
                         obj_error = self.penalty
-                        obj_efficiency = self.penalty
                         obj_pdm = self.penalty
+                        obj_alarm_burden = self.penalty
                         pdm_signal_quality = None
                         metric_parts = []
                         Log.error(
@@ -446,8 +450,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                             model=model,
                             experiment=None,
                             obj_error=obj_error,
-                            obj_efficiency=obj_efficiency,
                             obj_pdm=obj_pdm,
+                            obj_alarm_burden=obj_alarm_burden,
                             objective_contract=self.objective_contract,
                             start_time=start_time,
                             end_time=end_time,
@@ -456,10 +460,10 @@ class RNNVAEArchitectureMultiObj(Problem):
                     finally:
                         _cleanup_candidate_runtime(trainer=trainer, experiment=experiment, model=model)
 
-            if np.isnan(obj_error) or np.isnan(obj_efficiency) or np.isnan(obj_pdm):
+            if np.isnan(obj_error) or np.isnan(obj_pdm) or np.isnan(obj_alarm_burden):
                 obj_error = self.penalty
-                obj_efficiency = self.penalty
                 obj_pdm = self.penalty
+                obj_alarm_burden = self.penalty
                 pdm_signal_quality = None
                 status = "failed"
                 reason = "nan_objective"
@@ -470,8 +474,8 @@ class RNNVAEArchitectureMultiObj(Problem):
                 hash_id=model_hash,
                 status=status,
                 obj_error=obj_error,
-                obj_efficiency=obj_efficiency,
                 obj_pdm=obj_pdm,
+                obj_alarm_burden=obj_alarm_burden,
                 pdm_signal_quality=pdm_signal_quality,
                 duration_s=duration,
                 reason=reason,
@@ -483,12 +487,12 @@ class RNNVAEArchitectureMultiObj(Problem):
                 model_hash=model_hash,
                 solution=solution,
                 obj_error=obj_error,
-                obj_efficiency=obj_efficiency,
                 obj_pdm=obj_pdm,
+                obj_alarm_burden=obj_alarm_burden,
                 status=status,
             )
 
-            F.append([obj_error, obj_efficiency, obj_pdm])
+            F.append([obj_error, obj_pdm, obj_alarm_burden])
         out["F"] = np.array(F)
 
 
@@ -641,8 +645,8 @@ class SearchRunner:
         )
         Log.info(
             f"FINETUNE_DONE cycle_id={cycle_id:02d} source_cycle={previous_cycle_id:02d} "
-            f"obj_error={final_result['obj_error']} obj_efficiency={final_result['obj_efficiency']} "
-            f"obj_pdm={final_result['obj_pdm']}"
+            f"obj_error={final_result['obj_error']} obj_pdm={final_result['obj_pdm']} "
+            f"obj_alarm_burden={final_result['obj_alarm_burden']}"
         )
 
         export_enabled = bool(self.ctx.config.get("logging_params", {}).get("export_enabled", False))
@@ -706,8 +710,8 @@ class SearchRunner:
         """
         Uses pymoo's NSGA-III to perform a three-objective search:
           1) obj_error
-          2) obj_efficiency
-          3) obj_pdm
+          2) obj_pdm
+          3) obj_alarm_burden
         Objective contract and fixed training policy are taken from the configuration file.
         """
         dimensionality = RNNVAE.GENE_DIMENSION
@@ -769,14 +773,15 @@ class SearchRunner:
             f"search_init_mode={search_init_mode} seed_source={seed_source} "
             f"fixed_optimizer={self.ctx.config['exp_params'].get('optimizer')} "
             f"obj_error={objective_contract['error_metric']} "
-            f"obj_efficiency={objective_contract['efficiency_metric']} "
             "obj_pdm=1-pdm_smoothed_auroc "
             f"pdm_metric={objective_contract['pdm_metric']} "
+            f"obj_alarm_burden={objective_contract['alarm_burden_metric']} "
+            f"alarm_burden_threshold={objective_contract['alarm_burden_threshold']} "
             f"winner_selection={selection_contract['method']} "
             f"winner_weights="
             f"{selection_contract['weights_normalized']['error']:.4f}/"
-            f"{selection_contract['weights_normalized']['efficiency']:.4f}/"
-            f"{selection_contract['weights_normalized']['pdm']:.4f}"
+            f"{selection_contract['weights_normalized']['pdm']:.4f}/"
+            f"{selection_contract['weights_normalized']['alarm_burden']:.4f}"
         )
         minimize(
             problem,
@@ -824,12 +829,12 @@ class SearchRunner:
             f"dedup_count={winner_selection['deduplicated_candidate_count']} "
             f"pareto_count={winner_selection['pareto_candidate_count']} "
             f"weights={winner_selection['weights_normalized']['error']:.4f}/"
-            f"{winner_selection['weights_normalized']['efficiency']:.4f}/"
-            f"{winner_selection['weights_normalized']['pdm']:.4f} "
+            f"{winner_selection['weights_normalized']['pdm']:.4f}/"
+            f"{winner_selection['weights_normalized']['alarm_burden']:.4f} "
             f"selected_hash={winner_selection['selected_hash']} "
             f"selected_obj_error={winner_selection['selected_objectives']['obj_error']:.4f} "
-            f"selected_obj_efficiency={winner_selection['selected_objectives']['obj_efficiency']:.4f} "
             f"selected_obj_pdm={winner_selection['selected_objectives']['obj_pdm']:.4f} "
+            f"selected_obj_alarm_burden={winner_selection['selected_objectives']['obj_alarm_burden']:.4f} "
             f"selected_distance={winner_selection['selected_distance']:.6f}"
         )
 

@@ -10,8 +10,8 @@ def test_resolve_objective_contract_defaults_when_missing() -> None:
 
     assert contract == {
         "error": {"metric": "SMAPE"},
-        "efficiency": {"metric": "macs"},
         "pdm": {"metric": "smoothed_rank_gap", "smoothing_window_windows": 480},
+        "alarm_burden": {"metric": "normal_high_risk_rate", "risk_threshold": 0.95},
     }
     assert cfg["objectives"] == contract
 
@@ -20,17 +20,18 @@ def test_resolve_objective_contract_normalizes_case() -> None:
     cfg = {
         "objectives": {
             "error": {"metric": "rmse"},
-            "efficiency": {"metric": "MACS"},
             "pdm": {"metric": "SMOOTHED_RANK_GAP", "smoothing_window_windows": "240"},
+            "alarm_burden": {"metric": "NORMAL_HIGH_RISK_RATE", "risk_threshold": "0.90"},
         }
     }
 
     contract = main._resolve_objective_contract(cfg)
 
     assert contract["error"]["metric"] == "RMSE"
-    assert contract["efficiency"]["metric"] == "macs"
     assert contract["pdm"]["metric"] == "smoothed_rank_gap"
     assert contract["pdm"]["smoothing_window_windows"] == 240
+    assert contract["alarm_burden"]["metric"] == "normal_high_risk_rate"
+    assert contract["alarm_burden"]["risk_threshold"] == pytest.approx(0.90)
 
 
 def test_resolve_objective_contract_preserves_selection_block() -> None:
@@ -39,7 +40,7 @@ def test_resolve_objective_contract_preserves_selection_block() -> None:
             "error": {"metric": "smape"},
             "selection": {
                 "method": "weighted_ideal_distance",
-                "weights": {"error": 0.3, "efficiency": 0.2, "pdm": 0.5},
+                "weights": {"error": 0.2, "pdm": 0.5, "alarm_burden": 0.3},
             },
         }
     }
@@ -57,10 +58,25 @@ def test_resolve_objective_contract_invalid_error_metric_raises() -> None:
         main._resolve_objective_contract(cfg)
 
 
-def test_resolve_objective_contract_invalid_efficiency_metric_raises() -> None:
+def test_resolve_objective_contract_rejects_removed_efficiency_objective() -> None:
     cfg = {"objectives": {"efficiency": {"metric": "BAD_EFF"}}}
 
-    with pytest.raises(ValueError, match="objectives.efficiency.metric"):
+    with pytest.raises(ValueError, match="objectives.efficiency"):
+        main._resolve_objective_contract(cfg)
+
+
+def test_resolve_objective_contract_invalid_alarm_burden_metric_raises() -> None:
+    cfg = {"objectives": {"alarm_burden": {"metric": "BAD_ALARM"}}}
+
+    with pytest.raises(ValueError, match="objectives.alarm_burden.metric"):
+        main._resolve_objective_contract(cfg)
+
+
+@pytest.mark.parametrize("risk_threshold", [0, -0.1, 1.1, "bad"])
+def test_resolve_objective_contract_invalid_alarm_burden_threshold_raises(risk_threshold) -> None:
+    cfg = {"objectives": {"alarm_burden": {"risk_threshold": risk_threshold}}}
+
+    with pytest.raises(ValueError, match="objectives.alarm_burden.risk_threshold"):
         main._resolve_objective_contract(cfg)
 
 
@@ -115,16 +131,21 @@ def test_config_summary_line_includes_objective_contract_fields() -> None:
         "exp_params": {"optimizer": "Adam", "learning_rate": 0.003, "weight_decay": 0.0},
         "objectives": {
             "error": {"metric": "SMAPE"},
-            "efficiency": {"metric": "macs"},
             "pdm": {"metric": "smoothed_rank_gap", "smoothing_window_windows": 480},
+            "alarm_burden": {"metric": "normal_high_risk_rate", "risk_threshold": 0.95},
+            "selection": {
+                "method": "weighted_ideal_distance",
+                "weights": {"error": 0.2, "pdm": 0.5, "alarm_burden": 0.3},
+            },
         },
     }
 
     line = main._config_summary_line(cfg)
 
     assert "obj_error=SMAPE" in line
-    assert "obj_efficiency=macs" in line
     assert "obj_pdm=smoothed_rank_gap" in line
+    assert "obj_alarm_burden=normal_high_risk_rate" in line
+    assert "winner_weights=0.2/0.5/0.3" in line
     assert "nsga3_n_partitions=5" in line
     assert "nsga3_effective_population=21" in line
     assert "fixed_optimizer=Adam" in line
@@ -135,16 +156,17 @@ def test_config_summary_line_includes_objective_contract_fields() -> None:
 def test_objective_contract_line_contains_locked_semantics() -> None:
     contract = {
         "error": {"metric": "SMAPE"},
-        "efficiency": {"metric": "macs"},
         "pdm": {"metric": "smoothed_rank_gap", "smoothing_window_windows": 480},
+        "alarm_burden": {"metric": "normal_high_risk_rate", "risk_threshold": 0.95},
     }
 
     line = main._objective_contract_line(contract)
 
     assert line.startswith("OBJECTIVE_CONTRACT ")
     assert "obj_error=SMAPE direction=min" in line
-    assert "obj_efficiency=macs direction=min" in line
     assert "obj_pdm=1-pdm_smoothed_auroc direction=min" in line
+    assert "obj_alarm_burden=normal_high_risk_rate direction=min" in line
+    assert "alarm_burden_threshold=0.95" in line
     assert "pdm_metric=smoothed_rank_gap" in line
     assert "pdm_smoothing_window_windows=480" in line
     assert "pdm_score_pipeline=window_reconstruction_error->risk_score->smoothed_risk_score->smoothed_rank_gap" in line
@@ -234,10 +256,10 @@ def test_resolve_winner_selection_contract_defaults() -> None:
     contract = main._resolve_winner_selection_contract(cfg)
 
     assert contract["method"] == "weighted_ideal_distance"
-    assert contract["weights"] == {"error": 0.30, "efficiency": 0.20, "pdm": 0.50}
-    assert contract["weights_normalized"]["error"] == pytest.approx(0.30)
-    assert contract["weights_normalized"]["efficiency"] == pytest.approx(0.20)
+    assert contract["weights"] == {"error": 0.20, "pdm": 0.50, "alarm_burden": 0.30}
+    assert contract["weights_normalized"]["error"] == pytest.approx(0.20)
     assert contract["weights_normalized"]["pdm"] == pytest.approx(0.50)
+    assert contract["weights_normalized"]["alarm_burden"] == pytest.approx(0.30)
     assert cfg["objectives"]["selection"]["method"] == "weighted_ideal_distance"
 
 
@@ -256,11 +278,11 @@ def test_resolve_winner_selection_contract_invalid_weights_raise() -> None:
     cfg_zero_sum = {
         "objectives": {
             "selection": {
-                "weights": {"error": 0.0, "efficiency": 0.0, "pdm": 0.0}
+                "weights": {"error": 0.0, "pdm": 0.0, "alarm_burden": 0.0}
             }
         }
     }
-    with pytest.raises(ValueError, match="sum\\(error, efficiency, pdm\\) must be > 0"):
+    with pytest.raises(ValueError, match="sum\\(error, pdm, alarm_burden\\) must be > 0"):
         main._resolve_winner_selection_contract(cfg_zero_sum)
 
 

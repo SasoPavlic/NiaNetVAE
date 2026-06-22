@@ -42,7 +42,7 @@ class _DummyMetrics:
         return dict(self._payload)
 
 
-def _cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params") -> dict:
+def _cfg(error_metric: str = "SMAPE") -> dict:
     return {
         "data_params": {
             "dataset_name": "MetroPT",
@@ -52,13 +52,13 @@ def _cfg(error_metric: str = "SMAPE", efficiency_metric: str = "params") -> dict
         },
         "objectives": {
             "error": {"metric": error_metric},
-            "efficiency": {"metric": efficiency_metric},
             "pdm": {
                 "metric": "smoothed_rank_gap",
             },
+            "alarm_burden": {"metric": "normal_high_risk_rate", "risk_threshold": 0.95},
             "selection": {
                 "method": "weighted_ideal_distance",
-                "weights": {"error": 0.30, "efficiency": 0.20, "pdm": 0.50},
+                "weights": {"error": 0.20, "pdm": 0.50, "alarm_burden": 0.30},
             },
         },
         "logging_params": {"save_dir": "logs/tests/"},
@@ -70,6 +70,8 @@ def _pdm_anomaly_payload(
     smoothed_auroc: float = 0.8,
     positive_risk_mean: float | None = None,
     negative_risk_mean: float | None = None,
+    positive_high_risk_rate: float = 1.0,
+    negative_high_risk_rate: float = 0.1,
     metric_valid: bool = True,
     invalid_reason: str | None = None,
 ) -> dict:
@@ -85,6 +87,9 @@ def _pdm_anomaly_payload(
         "pdm_negative_smoothed_risk_mean": 0.2,
         "pdm_smoothed_auroc": smoothed_auroc,
         "pdm_smoothed_rank_gap": smoothed_rank_gap,
+        "pdm_alarm_burden_threshold": 0.95,
+        "pdm_positive_high_risk_rate": positive_high_risk_rate,
+        "pdm_negative_high_risk_rate": negative_high_risk_rate,
     }
 
 
@@ -101,7 +106,23 @@ def test_objective_bundle_uses_selected_raw_error_metric():
 
     assert bundle["valid"] is True
     assert bundle["obj_error"] == pytest.approx(2.75)
-    assert bundle["obj_efficiency"] > 0
+    assert bundle["obj_alarm_burden"] == pytest.approx(0.1)
+    assert bundle["diagnostic_params"] > 0
+
+
+def test_objective_engine_rejects_removed_efficiency_objective():
+    cfg = _cfg()
+    cfg["objectives"]["efficiency"] = {"metric": "macs"}
+
+    with pytest.raises(ValueError, match="objectives.efficiency"):
+        objective_engine.calculate_objective_bundle(
+            model=_TinyModel(),
+            metrics_payload={"SMAPE": 1.0},
+            anomaly_metrics=_pdm_anomaly_payload(),
+            seq_len=16,
+            n_features=4,
+            cfg=cfg,
+        )
 
 
 def test_objective_bundle_computes_obj_pdm_from_smoothed_rank_gap_formula():
@@ -137,21 +158,22 @@ def test_objective_bundle_uses_worst_case_when_smoothed_rank_diagnostics_missing
     assert bundle["obj_pdm"] == pytest.approx(1.0)
 
 
-def test_efficiency_params_backend_returns_finite_positive():
+def test_model_diagnostics_keep_params_and_macs_separate(monkeypatch):
     model = _TinyModel()
-    value, reason = objective_engine._compute_efficiency_objective(
-        model=model,
-        metric_name="params",
-        seq_len=16,
-        n_features=4,
+    monkeypatch.setattr(
+        objective_engine,
+        "_estimate_model_macs",
+        lambda *args, **kwargs: (123.0, None),
     )
 
-    assert reason is None
-    assert value is not None
-    assert value > 0
+    diagnostics = objective_engine._compute_model_diagnostics(model, seq_len=16, n_features=4)
+
+    assert diagnostics["diagnostic_params"] > 0
+    assert diagnostics["diagnostic_macs"] == pytest.approx(123.0)
+    assert diagnostics["diagnostic_macs_reason"] is None
 
 
-def test_efficiency_macs_backend_falls_back_to_params_when_unavailable(monkeypatch):
+def test_model_diagnostics_do_not_penalize_when_macs_unavailable(monkeypatch):
     model = _TinyModel()
     monkeypatch.setattr(
         objective_engine,
@@ -164,33 +186,48 @@ def test_efficiency_macs_backend_falls_back_to_params_when_unavailable(monkeypat
         anomaly_metrics=_pdm_anomaly_payload(),
         seq_len=16,
         n_features=4,
-        cfg=_cfg(efficiency_metric="macs"),
+        cfg=_cfg(),
     )
 
     assert bundle["valid"] is True
     assert bundle["reason"] is None
-    assert bundle["obj_efficiency"] > 0
+    assert bundle["obj_alarm_burden"] == pytest.approx(0.1)
+    assert bundle["diagnostic_params"] > 0
+    assert bundle["diagnostic_macs"] is None
+    assert bundle["diagnostic_macs_reason"] == "macs_backend_unavailable"
 
 
-def test_efficiency_latency_backend_penalizes_with_reason(monkeypatch):
+def test_alarm_burden_objective_uses_normal_high_risk_rate():
     model = _TinyModel()
-    monkeypatch.setattr(
-        objective_engine,
-        "_estimate_model_latency_ms",
-        lambda *args, **kwargs: (None, "latency_backend_unavailable"),
-    )
     bundle = objective_engine.calculate_objective_bundle(
         model=model,
         metrics_payload={"SMAPE": 1.0},
-        anomaly_metrics=_pdm_anomaly_payload(),
+        anomaly_metrics=_pdm_anomaly_payload(negative_high_risk_rate=0.37),
         seq_len=16,
         n_features=4,
-        cfg=_cfg(efficiency_metric="latency_ms"),
+        cfg=_cfg(),
     )
 
-    assert bundle["valid"] is False
-    assert bundle["obj_efficiency"] == objective_engine.DEFAULT_PENALTY
-    assert bundle["reason"] == "latency_backend_unavailable"
+    assert bundle["valid"] is True
+    assert bundle["obj_alarm_burden"] == pytest.approx(0.37)
+
+
+def test_alarm_burden_objective_falls_back_when_normal_rate_missing():
+    model = _TinyModel()
+    anomaly_metrics = _pdm_anomaly_payload()
+    anomaly_metrics.pop("pdm_negative_high_risk_rate")
+    bundle = objective_engine.calculate_objective_bundle(
+        model=model,
+        metrics_payload={"SMAPE": 1.0},
+        anomaly_metrics=anomaly_metrics,
+        seq_len=16,
+        n_features=4,
+        cfg=_cfg(),
+    )
+
+    assert bundle["valid"] is True
+    assert bundle["reason"] is None
+    assert bundle["obj_alarm_burden"] == pytest.approx(1.0)
 
 
 def test_problem_initializes_with_three_objectives(tmp_path):
@@ -220,12 +257,16 @@ def test_cached_objective_bundle_accepts_case_insensitive_error_metric(metric_ke
     cached_row = {
         metric_key: 1.25,
         "objective_pdm_metric": "smoothed_rank_gap",
+        "objective_alarm_burden_metric": "normal_high_risk_rate",
         "pdm_metric_valid": True,
         "pdm_smoothing_window_windows": 480,
         "pdm_positive_smoothed_risk_mean": 0.8,
         "pdm_negative_smoothed_risk_mean": 0.2,
         "pdm_smoothed_auroc": 0.8,
         "pdm_smoothed_rank_gap": 0.6,
+        "pdm_alarm_burden_threshold": 0.95,
+        "pdm_positive_high_risk_rate": 1.0,
+        "pdm_negative_high_risk_rate": 0.1,
     }
 
     bundle = objective_engine.calculate_objective_bundle_from_cached_row(
@@ -247,12 +288,16 @@ def test_cached_objective_bundle_prefers_exact_metric_key_over_lowercase_fallbac
         "SMAPE": 1.25,
         "smape": 9.99,
         "objective_pdm_metric": "smoothed_rank_gap",
+        "objective_alarm_burden_metric": "normal_high_risk_rate",
         "pdm_metric_valid": True,
         "pdm_smoothing_window_windows": 480,
         "pdm_positive_smoothed_risk_mean": 0.8,
         "pdm_negative_smoothed_risk_mean": 0.2,
         "pdm_smoothed_auroc": 0.8,
         "pdm_smoothed_rank_gap": 0.6,
+        "pdm_alarm_burden_threshold": 0.95,
+        "pdm_positive_high_risk_rate": 1.0,
+        "pdm_negative_high_risk_rate": 0.1,
     }
 
     bundle = objective_engine.calculate_objective_bundle_from_cached_row(
@@ -272,12 +317,16 @@ def test_cached_objective_bundle_rejects_missing_error_metric():
     cached_row = {
         "MAE": 1.25,
         "objective_pdm_metric": "smoothed_rank_gap",
+        "objective_alarm_burden_metric": "normal_high_risk_rate",
         "pdm_metric_valid": True,
         "pdm_smoothing_window_windows": 480,
         "pdm_positive_smoothed_risk_mean": 0.8,
         "pdm_negative_smoothed_risk_mean": 0.2,
         "pdm_smoothed_auroc": 0.8,
         "pdm_smoothed_rank_gap": 0.6,
+        "pdm_alarm_burden_threshold": 0.95,
+        "pdm_positive_high_risk_rate": 1.0,
+        "pdm_negative_high_risk_rate": 0.1,
     }
 
     bundle = objective_engine.calculate_objective_bundle_from_cached_row(
@@ -326,8 +375,10 @@ def test_cached_evaluation_uses_db_then_memory_cache(monkeypatch, tmp_path):
                         "hash_id": hash_id,
                         "dataset_name": dataset_name,
                         "obj_error": 1.5,
-                        "obj_efficiency": 10.0,
                         "obj_pdm": 0.4,
+                        "obj_alarm_burden": 0.1,
+                        "diagnostic_params": 10.0,
+                        "diagnostic_macs": 20.0,
                         "mae": 0.1,
                         "mse": 0.2,
                         "rmse": 0.3,
@@ -335,6 +386,7 @@ def test_cached_evaluation_uses_db_then_memory_cache(monkeypatch, tmp_path):
                         "rmape": 0.5,
                         "smape": 1.5,
                         "objective_pdm_metric": "smoothed_rank_gap",
+                        "objective_alarm_burden_metric": "normal_high_risk_rate",
                         "window_count": 10,
                         "positive_window_count": 2,
                         "negative_window_count": 8,
@@ -349,6 +401,9 @@ def test_cached_evaluation_uses_db_then_memory_cache(monkeypatch, tmp_path):
                         "pdm_negative_smoothed_risk_mean": 0.5,
                         "pdm_smoothed_auroc": 0.6,
                         "pdm_smoothed_rank_gap": 0.2,
+                        "pdm_alarm_burden_threshold": 0.95,
+                        "pdm_positive_high_risk_rate": 1.0,
+                        "pdm_negative_high_risk_rate": 0.1,
                         "pdm_metric_valid": True,
                         "pdm_metric_invalid_reason": None,
                     }
@@ -491,15 +546,19 @@ def test_cached_objective_bundle_requires_contract_provenance_match():
     cached_row = {
         "SMAPE": 1.0,
         "obj_error": 1.0,
-        "obj_efficiency": 10.0,
         "obj_pdm": 0.2,
+        "obj_alarm_burden": 0.1,
         "objective_pdm_metric": None,
+        "objective_alarm_burden_metric": "normal_high_risk_rate",
         "pdm_metric_valid": True,
         "pdm_smoothing_window_windows": 480,
         "pdm_positive_smoothed_risk_mean": 0.8,
         "pdm_negative_smoothed_risk_mean": 0.2,
         "pdm_smoothed_auroc": 0.8,
         "pdm_smoothed_rank_gap": 0.6,
+        "pdm_alarm_burden_threshold": 0.95,
+        "pdm_positive_high_risk_rate": 1.0,
+        "pdm_negative_high_risk_rate": 0.1,
     }
 
     bundle = objective_engine.calculate_objective_bundle_from_cached_row(
@@ -592,8 +651,8 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
                         "hash_id": "winner-hash",
                         "solution_array": json.dumps([0.5] * RNNVAE.GENE_DIMENSION),
                         "obj_error": 1.2,
-                        "obj_efficiency": 100.0,
                         "obj_pdm": 0.2,
+                        "obj_alarm_burden": 0.1,
                         "algorithm_name": "NSGA3",
                         "timestamp": "2026-04-02 12:00:00",
                     }
@@ -640,8 +699,11 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
             "ended_at": "2026-04-02T12:00:01",
             "duration_s": 1.0,
             "obj_error": 1.2,
-            "obj_efficiency": 100.0,
             "obj_pdm": 0.2,
+            "obj_alarm_burden": 0.1,
+            "diagnostic_params": 100.0,
+            "diagnostic_macs": 200.0,
+            "diagnostic_macs_reason": None,
             "pdm_signal_quality": 0.8,
             "objective_reason": None,
             "objective_contract": objective_engine._resolve_objective_contract(_cfg()),
@@ -680,8 +742,8 @@ def test_select_deterministic_pareto_winner_prefers_lower_pdm_on_tie():
                     "hash_id": "a",
                     "solution_array": json.dumps([0.1] * RNNVAE.GENE_DIMENSION),
                     "obj_error": 1.0,
-                    "obj_efficiency": 10.0,
                     "obj_pdm": 0.30,
+                    "obj_alarm_burden": 0.10,
                     "algorithm_name": "NSGA3",
                     "timestamp": "2026-04-02 12:00:10",
                 },
@@ -690,8 +752,8 @@ def test_select_deterministic_pareto_winner_prefers_lower_pdm_on_tie():
                     "hash_id": "b",
                     "solution_array": json.dumps([0.2] * RNNVAE.GENE_DIMENSION),
                     "obj_error": 2.0,
-                    "obj_efficiency": 10.0,
                     "obj_pdm": 0.20,  # better
+                    "obj_alarm_burden": 0.10,
                     "algorithm_name": "NSGA3",
                     "timestamp": "2026-04-02 12:00:11",
             },
@@ -700,8 +762,8 @@ def test_select_deterministic_pareto_winner_prefers_lower_pdm_on_tie():
 
     tie_contract = {
         "method": "weighted_ideal_distance",
-        "weights": {"error": 0.5, "efficiency": 0.0, "pdm": 0.5},
-        "weights_normalized": {"error": 0.5, "efficiency": 0.0, "pdm": 0.5},
+        "weights": {"error": 0.5, "pdm": 0.5, "alarm_burden": 0.0},
+        "weights_normalized": {"error": 0.5, "pdm": 0.5, "alarm_burden": 0.0},
     }
     selected = winner_selection._select_deterministic_pareto_winner(
         candidates_df=df,
@@ -722,8 +784,8 @@ def test_select_deterministic_pareto_winner_deduplicates_by_hash():
                 "hash_id": "dup",
                 "solution_array": json.dumps([0.1] * RNNVAE.GENE_DIMENSION),
                 "obj_error": 2.0,
-                "obj_efficiency": 20.0,
                 "obj_pdm": 0.50,
+                "obj_alarm_burden": 0.20,
                 "algorithm_name": "NSGA3",
                 "timestamp": "2026-04-02 12:00:01",
             },
@@ -732,8 +794,8 @@ def test_select_deterministic_pareto_winner_deduplicates_by_hash():
                 "hash_id": "dup",
                 "solution_array": json.dumps([0.2] * RNNVAE.GENE_DIMENSION),
                 "obj_error": 1.0,
-                "obj_efficiency": 15.0,
                 "obj_pdm": 0.30,
+                "obj_alarm_burden": 0.15,
                 "algorithm_name": "NSGA3",
                 "timestamp": "2026-04-02 12:00:02",
             },
@@ -742,8 +804,8 @@ def test_select_deterministic_pareto_winner_deduplicates_by_hash():
                 "hash_id": "other",
                 "solution_array": json.dumps([0.3] * RNNVAE.GENE_DIMENSION),
                 "obj_error": 1.2,
-                "obj_efficiency": 16.0,
                 "obj_pdm": 0.35,
+                "obj_alarm_burden": 0.16,
                 "algorithm_name": "NSGA3",
                 "timestamp": "2026-04-02 12:00:03",
             },
@@ -769,8 +831,8 @@ def test_select_deterministic_pareto_winner_fails_fast_on_empty_valid_pool():
                 "hash_id": "bad",
                 "solution_array": json.dumps([0.1] * RNNVAE.GENE_DIMENSION),
                 "obj_error": float(objective_engine.DEFAULT_PENALTY),
-                "obj_efficiency": float(objective_engine.DEFAULT_PENALTY),
                 "obj_pdm": float(objective_engine.DEFAULT_PENALTY),
+                "obj_alarm_burden": float(objective_engine.DEFAULT_PENALTY),
                 "algorithm_name": "NSGA3",
                 "timestamp": "2026-04-02 12:00:00",
             }
@@ -798,8 +860,8 @@ def test_select_deterministic_pareto_winner_filters_postgres_real_rounded_penalt
                 "hash_id": "rounded-penalty",
                 "solution_array": json.dumps([0.1] * RNNVAE.GENE_DIMENSION),
                 "obj_error": rounded_penalty,
-                "obj_efficiency": rounded_penalty,
                 "obj_pdm": rounded_penalty,
+                "obj_alarm_burden": rounded_penalty,
                 "algorithm_name": "NSGA3",
                 "timestamp": "2026-04-03 11:16:45",
             }
