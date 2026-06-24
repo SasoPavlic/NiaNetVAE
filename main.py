@@ -103,6 +103,8 @@ def _config_summary_line(config: dict) -> str:
     data_params = config.get("data_params", {})
     nia_search = config.get("nia_search", {})
     nsga3_cfg = nia_search.get("nsga3") or {}
+    termination_cfg = nia_search.get("termination") or {}
+    time_limit = termination_cfg.get("time") or nia_search.get("time")
     logging_params = config.get("logging_params", {})
     trainer_params = config.get("trainer_params", {})
     exp_params = config.get("exp_params", {})
@@ -120,7 +122,7 @@ def _config_summary_line(config: dict) -> str:
         f"max_epochs={_value_or_na(trainer_params.get('max_epochs'))}",
         f"nsga3_n_partitions={_value_or_na(nsga3_cfg.get('n_partitions'))}",
         f"nsga3_effective_population={_value_or_na(nsga3_cfg.get('effective_population'))}",
-        f"time_limit={_value_or_na(nia_search.get('time'))}",
+        f"time_limit={_value_or_na(time_limit)}",
         f"metrics={_as_csv(nia_search.get('metrics'))}",
         f"obj_error={_value_or_na(((config.get('objectives') or {}).get('error') or {}).get('metric'))}",
         f"obj_pdm={_value_or_na(((config.get('objectives') or {}).get('pdm') or {}).get('metric'))}",

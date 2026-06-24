@@ -343,11 +343,22 @@ class SQLiteConnector:
     def __init__(self, db_file, table_name):
         self.db_file = db_file
         self.table_name = table_name
+        self._ensure_db_parent_dir()
         try:
             self._create_table()
         except Exception as e:
             Log.error(f"Error initializing database tables: {e}")
             raise
+
+    def _ensure_db_parent_dir(self):
+        if self.db_file in (None, ""):
+            return
+        db_path = os.fspath(self.db_file)
+        if db_path == ":memory:":
+            return
+        parent_dir = os.path.dirname(os.path.abspath(db_path))
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
 
     def _get_connection(self):
         """

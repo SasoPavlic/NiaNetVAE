@@ -1,6 +1,7 @@
 # Main runtime configuration for NiaNetVAE.
-# This file defines search, objectives, training defaults, logging/export,
-# and dataset profile selection.
+# Production finetune campaign for MetroPT per-maintenance experiments.
+# Cycle 0 performs NSGA-III architecture search with checkpoint resume.
+# Cycles 1..21 fine-tune from the latest previous trained cycle artifact.
 
 nia_search:
   nsga3:
@@ -12,18 +13,28 @@ nia_search:
     #   n_partitions=1 -> 3 individuals
     #   n_partitions=5 -> 21 individuals
     # Larger values improve tradeoff exploration but increase runtime.
-    # Alarm-burden finetune campaign: p=8 -> 45 candidates per NSGA-III generation.
-    # This is intended for the GPU partition's 4-day walltime cap. Only cycle 00
-    # performs architecture search; later per-maintenance cycles use fine-tuning.
+    # Production finetune cycle-0 search: p=8 -> 45 candidates per generation.
+    # With n_gen=8 this gives up to ~360 candidate evaluation slots, leaving
+    # headroom to manually confirm at least 200 valid cycle-0 candidate rows.
     n_partitions: 8
 
-  # Search-time budget per cycle (NSGA loop termination).
-  # Format: HH:MM:SS
-  # Note: total cycle wall time is usually longer than this because final
-  # winner retraining and export run after search terminates.
-  # Cycle-00 search budget for the alarm-burden finetune campaign.
-  # The submit wrapper adds a 10h Slurm buffer, so 86h + 10h = 4 days.
-  time: "86:00:00"
+  termination:
+    # Hybrid termination keeps a scientifically meaningful generation target
+    # while preserving a wall-time safety cap for local and Slurm runs.
+    # The Slurm submit wrapper adds a 10h buffer, so 72h + 10h = ~82h
+    # walltime, safely below the 4-day GPU partition cap.
+    type: hybrid
+    n_gen: 8
+    time: "72:00:00"
+
+  checkpoint:
+    # Official pymoo algorithm checkpointing. Stored under model_export_dir so
+    # rerunning the same cycle can continue the NSGA-III state across jobs.
+    enabled: true
+    resume: auto
+    interval_generations: 1
+    on_mismatch: fail
+    keep_completed: true
 
   # Metrics printed in iteration logs for visibility.
   # Optimization objectives are configured under objectives.* below.

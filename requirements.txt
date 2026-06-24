@@ -17,4 +17,5 @@ pytest
 colorama
 kaleido
 pymoo
+dill
 tables

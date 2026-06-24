@@ -16,6 +16,15 @@ from nianetvae.search.runtime_artifacts import _export_cycle_artifacts
 from nianetvae.storage.experiment_storage import SQLiteConnector
 
 
+def test_sqlite_connector_creates_missing_parent_directory(tmp_path: Path):
+    db_path = tmp_path / "nested" / "local_smoke" / "solutions.db"
+
+    SQLiteConnector(str(db_path), "solutions")
+
+    assert db_path.exists()
+    assert db_path.parent.exists()
+
+
 class _DummyModel(torch.nn.Module):
     def __init__(self):
         super().__init__()

@@ -207,7 +207,11 @@ if not config_path.is_absolute():
     config_path = Path.cwd() / config_path
 config = load_merged_config(config_path)
 workflow_mode = str((config.get("workflow") or {}).get("mode") or "per_maint_baseline_search").strip().lower()
-search_time = str((config.get("nia_search") or {}).get("time") or "01:00:00").strip()
+nia_search = config.get("nia_search") or {}
+termination_cfg = nia_search.get("termination") or {}
+termination_type = str(termination_cfg.get("type") or "time").strip().lower()
+termination_n_gen = termination_cfg.get("n_gen", "")
+search_time = str(termination_cfg.get("time") or nia_search.get("time") or "01:00:00").strip()
 data_params = config.get("data_params") or {}
 logging_params = config.get("logging_params") or {}
 dataset_name = str(data_params.get("dataset_name") or "MetroPT").strip() or "MetroPT"
@@ -222,6 +226,8 @@ derived_search_seconds = min(search_seconds + buffer_seconds, safe_max_seconds)
 values = {
     "WORKFLOW_MODE": workflow_mode,
     "NIA_SEARCH_TIME": search_time,
+    "NIA_TERMINATION_TYPE": termination_type,
+    "NIA_TERMINATION_N_GEN": termination_n_gen,
     "DERIVED_SEARCH_WALLTIME": format_slurm_time(derived_search_seconds),
     "FINETUNE_WALLTIME_RESOLVED": os.environ["FINETUNE_WALLTIME"],
     "MANIFEST_WALLTIME_RESOLVED": os.environ["MANIFEST_WALLTIME"],
@@ -311,6 +317,8 @@ echo "  requested_range=${START_CYCLE}-${END_CYCLE}"
 echo "  resume_from=${RESUME_FROM}"
 echo "  submit_from=${SUBMIT_FROM}"
 echo "  nia_search_time=${NIA_SEARCH_TIME}"
+echo "  nia_termination_type=${NIA_TERMINATION_TYPE}"
+echo "  nia_termination_n_gen=${NIA_TERMINATION_N_GEN:-n/a}"
 echo "  search_walltime_buffer=${SEARCH_WALLTIME_BUFFER}"
 echo "  derived_search_walltime=${DERIVED_SEARCH_WALLTIME}"
 echo "  finetune_walltime=${FINETUNE_WALLTIME_RESOLVED}"

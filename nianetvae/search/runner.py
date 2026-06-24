@@ -14,12 +14,17 @@ from lightning.pytorch import Trainer, seed_everything
 from pymoo.algorithms.moo.nsga3 import NSGA3
 from pymoo.core.problem import Problem
 from pymoo.optimize import minimize
-from pymoo.termination import get_termination
 from pymoo.util.ref_dirs import get_reference_directions
 
 from log import Log
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
 from nianetvae.models.rnn_vae import RNNVAE
+from nianetvae.search.checkpointing import (
+    SearchCheckpointManager,
+    SearchCheckpointError,
+    build_checkpoint_contract,
+    resolve_search_termination,
+)
 from nianetvae.search.cycle_warmstart import (
     _find_latest_trained_cycle_artifacts_before,
     _resolve_finetune_policy,
@@ -96,14 +101,10 @@ class RNNVAEArchitectureMultiObj(Problem):
         self.iteration = 0
         self.stats = {
             "trained": 0,
-            "cached": 0,
-            "cached_db": 0,
-            "cached_memory": 0,
-            "cache_miss": 0,
+            "reused": 0,
             "invalid": 0,
             "failed": 0,
         }
-        self.objective_cache_by_hash: dict[str, dict[str, Any]] = {}
         self.local_candidate_rows: list[dict[str, Any]] = []
         super().__init__(n_var=dimension, n_obj=3, n_constr=0, xl=0, xu=1)
 
@@ -130,24 +131,27 @@ class RNNVAEArchitectureMultiObj(Problem):
             return False
         return all(math.isfinite(value) and value < float(self.penalty) for value in values)
 
-    def _remember_objectives(
-        self,
-        model_hash: str,
-        obj_error,
-        obj_pdm,
-        obj_alarm_burden,
-        pdm_signal_quality=None,
-    ) -> None:
-        if not self._objectives_are_reusable(obj_error, obj_pdm, obj_alarm_burden):
-            return
-        self.objective_cache_by_hash[str(model_hash)] = {
-            "obj_error": float(obj_error),
-            "obj_pdm": float(obj_pdm),
-            "obj_alarm_burden": float(obj_alarm_burden),
-            "pdm_signal_quality": (
-                None if pdm_signal_quality is None else float(pdm_signal_quality)
-            ),
-        }
+    def _lookup_existing_objectives(self, model, model_hash: str) -> tuple[dict[str, Any] | None, str | None]:
+        existing_entry = self.conn.get_entries(hash_id=model_hash, dataset_name=self.dataset_name)
+        if existing_entry is None or existing_entry.empty:
+            return None, None
+
+        cached_row = existing_entry.iloc[0].to_dict()
+        cached_bundle = calculate_objective_bundle_from_cached_row(
+            model=model,
+            cached_row=cached_row,
+            seq_len=self.config['data_params']['seq_len'],
+            n_features=self.config['data_params']['n_features'],
+            cfg=self.config,
+            penalty=self.penalty,
+        )
+        if cached_bundle.get("valid") and self._objectives_are_reusable(
+            cached_bundle.get("obj_error"),
+            cached_bundle.get("obj_pdm"),
+            cached_bundle.get("obj_alarm_burden"),
+        ):
+            return cached_bundle, None
+        return None, f"cached_objective_miss:{cached_bundle.get('reason') or 'penalty_objectives'}"
 
     def _selected_metrics(self, experiment):
         selected = self.config.get("nia_search", {}).get("metrics", [])
@@ -273,59 +277,18 @@ class RNNVAEArchitectureMultiObj(Problem):
             path = self.config['logging_params']['save_dir']
             Path(path).mkdir(parents=True, exist_ok=True)
 
-            existing_entry = None
-            cached_objectives = self.objective_cache_by_hash.get(str(model_hash))
-            if cached_objectives is not None:
-                status = "cached_memory"
-                reason = None
-                self.stats["cached"] += 1
-                self.stats["cached_memory"] += 1
-                obj_error = cached_objectives["obj_error"]
-                obj_pdm = cached_objectives["obj_pdm"]
-                obj_alarm_burden = cached_objectives["obj_alarm_burden"]
-                pdm_signal_quality = cached_objectives.get("pdm_signal_quality")
+            existing_objectives, reuse_miss_reason = self._lookup_existing_objectives(model, model_hash)
+            if existing_objectives is not None:
+                status = "reused_db"
+                self.stats["reused"] += 1
+                obj_error = existing_objectives["obj_error"]
+                obj_pdm = existing_objectives["obj_pdm"]
+                obj_alarm_burden = existing_objectives["obj_alarm_burden"]
+                pdm_signal_quality = existing_objectives.get("pdm_signal_quality")
             else:
-                existing_entry = self.conn.get_entries(hash_id=model_hash, dataset_name=self.dataset_name)
-                if existing_entry.shape[0] > 0:
-                    cached_row = existing_entry.iloc[0].to_dict()
-                    cached_bundle = calculate_objective_bundle_from_cached_row(
-                        model=model,
-                        cached_row=cached_row,
-                        seq_len=self.config['data_params']['seq_len'],
-                        n_features=self.config['data_params']['n_features'],
-                        cfg=self.config,
-                        penalty=self.penalty,
-                    )
-                    cached_reusable = (
-                        cached_bundle.get("valid")
-                        and self._objectives_are_reusable(
-                            cached_bundle.get("obj_error"),
-                            cached_bundle.get("obj_pdm"),
-                            cached_bundle.get("obj_alarm_burden"),
-                        )
-                    )
-                    if cached_reusable:
-                        status = "cached_db"
-                        reason = None
-                        self.stats["cached"] += 1
-                        self.stats["cached_db"] += 1
-                        obj_error = cached_bundle["obj_error"]
-                        obj_pdm = cached_bundle["obj_pdm"]
-                        obj_alarm_burden = cached_bundle["obj_alarm_burden"]
-                        pdm_signal_quality = cached_bundle.get("pdm_signal_quality")
-                        self._remember_objectives(
-                            model_hash,
-                            obj_error,
-                            obj_pdm,
-                            obj_alarm_burden,
-                            pdm_signal_quality,
-                        )
-                    else:
-                        reason = f"cached_objective_miss:{cached_bundle.get('reason') or 'penalty_objectives'}"
-                        self.stats["cache_miss"] += 1
-                        existing_entry = existing_entry.iloc[0:0]
+                reason = reuse_miss_reason
 
-            if status not in {"cached_memory", "cached_db"}:
+            if status != "reused_db":
                 if not model.is_valid:
                     status = "invalid"
                     reason = reason or "invalid_architecture"
@@ -417,14 +380,6 @@ class RNNVAEArchitectureMultiObj(Problem):
                             end_time=end_time,
                             duration=duration
                         )
-                        if status == "trained":
-                            self._remember_objectives(
-                                model_hash,
-                                obj_error,
-                                obj_pdm,
-                                obj_alarm_burden,
-                                pdm_signal_quality,
-                            )
                     except Exception as e:
                         end_time = datetime.now()
                         if start_time is not None:
@@ -717,60 +672,106 @@ class SearchRunner:
         dimensionality = RNNVAE.GENE_DIMENSION
         problem = RNNVAEArchitectureMultiObj(dimension=dimensionality, runner=self)
 
-        time_str = self.ctx.config['nia_search']['time']
-        try:
-            hours, minutes, seconds = map(int, time_str.split(":"))
-            max_time = hours * 3600 + minutes * 60 + seconds
-        except Exception as e:
-            Log.error(f"Error parsing time limit from config: {time_str}. Ensure it is in HH:MM:SS format.")
-            raise e
-        termination = get_termination("time", max_time=max_time)
+        termination_spec = resolve_search_termination(self.ctx.config)
+        termination = termination_spec.termination
+        time_str = termination_spec.time_str
+        max_time = termination_spec.time_seconds
 
         nsga3_cfg = dict((self.ctx.config.get("nia_search") or {}).get("nsga3") or {})
         n_partitions = int(nsga3_cfg["n_partitions"])
         ref_dirs = get_reference_directions("das-dennis", 3, n_partitions=n_partitions)
         effective_population = int(ref_dirs.shape[0])
-
-        warm_start = _resolve_warm_start_sampling(
-            dimensionality,
-            effective_population=effective_population,
-            config=self.ctx.config,
-            run_uuid=self.ctx.run_uuid,
-        )
-        search_init_mode = warm_start["init_mode"]
-        seed_source = "random"
-        if warm_start["enabled"]:
-            algorithm = NSGA3(
-                ref_dirs=ref_dirs,
-                sampling=warm_start["sampling"],
-            )
-            seed_source = f"cycle_{warm_start['source_cycle_id']:02d}"
-            details = warm_start["details"]
-            Log.info(
-                "WARMSTART_INIT "
-                f"cycle_id={int((self.ctx.config.get('data_params') or {}).get('cycle_id', -1)):02d} "
-                f"source_cycle={warm_start['source_cycle_id']:02d} "
-                f"carry_over={details['carry_over_count']} "
-                f"perturb={details['perturb_count']} "
-                f"random={details['random_count']} "
-                f"perturbation_strength={details['perturbation_strength']} "
-                f"effective_population={details.get('population_size')}"
-            )
-        else:
-            algorithm = NSGA3(ref_dirs=ref_dirs)
-            if warm_start["reason"]:
-                Log.info(f"WARMSTART_FALLBACK reason={warm_start['reason']} init_mode=random")
-
         n_jobs = torch.cuda.device_count() if torch.cuda.is_available() else 1
         objective_contract = _resolve_objective_contract(self.ctx.config)
         selection_contract = _resolve_winner_selection_contract(self.ctx.config)
+        checkpoint_contract = build_checkpoint_contract(
+            config=self.ctx.config,
+            dataset_name=self.ctx.dataset_name,
+            algorithm_name="NSGA3",
+            n_partitions=n_partitions,
+            effective_population=effective_population,
+            objective_contract=objective_contract,
+            selection_contract=selection_contract,
+            termination_contract=termination_spec.contract,
+        )
+        checkpoint_manager = SearchCheckpointManager(
+            config=self.ctx.config,
+            dataset_name=self.ctx.dataset_name,
+            contract=checkpoint_contract,
+        )
+        checkpoint_manager.ensure_ready()
+        checkpoint_callback = checkpoint_manager.make_callback()
+        checkpoint_resumed = False
+
+        try:
+            algorithm = checkpoint_manager.load_algorithm(
+                problem=problem,
+                termination=termination,
+                callback=checkpoint_callback,
+                n_jobs=n_jobs,
+            )
+        except SearchCheckpointError:
+            raise
+
+        warm_start = {
+            "enabled": False,
+            "sampling": None,
+            "init_mode": "checkpoint",
+            "source_cycle_id": None,
+            "reason": None,
+            "details": {
+                "enabled": False,
+                "population_size": effective_population,
+                "carry_over_count": 0,
+                "perturb_count": 0,
+                "random_count": effective_population,
+                "perturbation_strength": None,
+            },
+        }
+        search_init_mode = "checkpoint"
+        seed_source = "checkpoint"
+        if algorithm is not None:
+            checkpoint_resumed = True
+        else:
+            warm_start = _resolve_warm_start_sampling(
+                dimensionality,
+                effective_population=effective_population,
+                config=self.ctx.config,
+                run_uuid=self.ctx.run_uuid,
+            )
+            search_init_mode = warm_start["init_mode"]
+            seed_source = "random"
+            if warm_start["enabled"]:
+                algorithm = NSGA3(
+                    ref_dirs=ref_dirs,
+                    sampling=warm_start["sampling"],
+                )
+                seed_source = f"cycle_{warm_start['source_cycle_id']:02d}"
+                details = warm_start["details"]
+                Log.info(
+                    "WARMSTART_INIT "
+                    f"cycle_id={int((self.ctx.config.get('data_params') or {}).get('cycle_id', -1)):02d} "
+                    f"source_cycle={warm_start['source_cycle_id']:02d} "
+                    f"carry_over={details['carry_over_count']} "
+                    f"perturb={details['perturb_count']} "
+                    f"random={details['random_count']} "
+                    f"perturbation_strength={details['perturbation_strength']} "
+                    f"effective_population={details.get('population_size')}"
+                )
+            else:
+                algorithm = NSGA3(ref_dirs=ref_dirs)
+                if warm_start["reason"]:
+                    Log.info(f"WARMSTART_FALLBACK reason={warm_start['reason']} init_mode=random")
 
         Log.info(
             f"SEARCH_START algorithm=NSGA3 n_partitions={n_partitions} "
             f"ref_dirs={effective_population} effective_population={effective_population} "
+            f"termination={termination_spec.contract} "
             f"time_limit={time_str} time_limit_seconds={max_time} n_jobs={n_jobs} "
             f"metrics={self.ctx.config['nia_search'].get('metrics')} "
             f"search_init_mode={search_init_mode} seed_source={seed_source} "
+            f"checkpoint_enabled={str(checkpoint_manager.enabled).lower()} "
+            f"checkpoint_resumed={str(checkpoint_resumed).lower()} "
             f"fixed_optimizer={self.ctx.config['exp_params'].get('optimizer')} "
             f"obj_error={objective_contract['error_metric']} "
             "obj_pdm=1-pdm_smoothed_auroc "
@@ -790,6 +791,8 @@ class SearchRunner:
             seed=self.ctx.config['exp_params']['manual_seed'],
             verbose=True,
             n_jobs=n_jobs,
+            callback=checkpoint_callback,
+            copy_algorithm=False,
         )
 
         candidate_rows = self._fetch_cycle_candidates_with_wait(algorithm_name="NSGA3")
@@ -841,10 +844,7 @@ class SearchRunner:
         search_result = {
             "iterations": problem.iteration,
             "trained": problem.stats["trained"],
-            "cached": problem.stats["cached"],
-            "cached_db": problem.stats["cached_db"],
-            "cached_memory": problem.stats["cached_memory"],
-            "cache_miss": problem.stats["cache_miss"],
+            "reused": problem.stats["reused"],
             "invalid": problem.stats["invalid"],
             "failed": problem.stats["failed"],
             "best_hash": winner_selection["selected_hash"],
@@ -852,6 +852,7 @@ class SearchRunner:
             "best_solution": _as_jsonable(best_solution),
             "time_limit": time_str,
             "time_limit_seconds": max_time,
+            "termination": _as_jsonable(termination_spec.contract),
             "algorithm": "NSGA3",
             "n_partitions": n_partitions,
             "ref_dirs": effective_population,
@@ -869,6 +870,12 @@ class SearchRunner:
                 {k: v for k, v in winner_selection.items() if k != "selected_solution"}
             ),
             "winner_selection_source": candidate_source,
+            "checkpoint": {
+                "enabled": checkpoint_manager.enabled,
+                "resumed": checkpoint_resumed,
+                "path": str(checkpoint_manager.algorithm_path),
+                "metadata_path": str(checkpoint_manager.meta_path),
+            },
         }
 
         final_result = _run_final_training(
@@ -886,8 +893,7 @@ class SearchRunner:
         torch.save(best_model.state_dict(), model_file)
         Log.info(
             f"SEARCH_DONE iterations={problem.iteration} trained={problem.stats['trained']} "
-            f"cached={problem.stats['cached']} cached_db={problem.stats['cached_db']} "
-            f"cached_memory={problem.stats['cached_memory']} cache_miss={problem.stats['cache_miss']} "
+            f"reused={problem.stats['reused']} "
             f"invalid={problem.stats['invalid']} failed={problem.stats['failed']} "
             f"best_hash={best_model.hash_id} selected_distance={winner_selection['selected_distance']}"
         )
@@ -912,6 +918,8 @@ class SearchRunner:
                 f"MODEL_EXPORT_READY dir={export_dir} "
                 f"weights={model_path.name} meta={meta_path.name} summary={summary_path.name}"
             )
+
+        checkpoint_manager.finish(algorithm)
 
 
 __all__ = [

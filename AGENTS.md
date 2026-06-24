@@ -9,7 +9,7 @@
 ## Main Entry Points
 - `main.py`: config loading/merge, CLI overrides, dataloader selection, DB connector setup, search bootstrap.
 - `nianetvae/search/runner.py`: typed runtime orchestrator (`SearchRunner`) for NSGA3 search/fine-tune/warm-start flows.
-- `nianetvae/search/`: split runtime helpers (`objective_engine.py`, `winner_selection.py`, `runtime_artifacts.py`, `cycle_warmstart.py`).
+- `nianetvae/search/`: split runtime helpers (`objective_engine.py`, `winner_selection.py`, `runtime_artifacts.py`, `cycle_warmstart.py`, `checkpointing.py`).
 - `nianetvae/tools/generate_cycle_manifest.py`: manifest generation from exported cycle artifacts.
 - `slurm_scripts/submit_per_maint_pipeline.sh`: HPC submission wrapper (array training + dependent manifest job).
 
@@ -21,6 +21,7 @@
   - orchestrator: `nianetvae/search/runner.py`
   - objective engine: `nianetvae/search/objective_engine.py`
   - winner selection: `nianetvae/search/winner_selection.py`
+  - NSGA-III checkpoint/resume: `nianetvae/search/checkpointing.py`
   - runtime artifacts/export: `nianetvae/search/runtime_artifacts.py`
   - cycle warm-start/fine-tune helpers: `nianetvae/search/cycle_warmstart.py`
 - Persistence layer (SQLite/Postgres): `nianetvae/storage/experiment_storage.py`
@@ -54,6 +55,7 @@ If you change export formats, manifest fields, cycle naming, feature expectation
 - Keep `--cycle-id` behavior intact for per-cycle HPC runs (`main.py` + Slurm scripts).
 - Do not remove final deterministic training/export path after search when `export_enabled=true`.
 - Do not hardcode secrets; Postgres credentials are expected through `.env` (`NIANETVAE_DB_*`).
+- NSGA-III checkpointing is config-driven under `nia_search.checkpoint`. Checkpoints are generated artifacts under `logging_params.model_export_dir/<dataset>/cycle_XX/checkpoints/` and must not be committed.
 
 ## Local Execution Environment
 - For local commands in this workspace, use the dedicated Poetry interpreter:
@@ -95,6 +97,8 @@ Observed HPC failure modes and current mitigations:
 - `DependencyNeverSatisfied`: usually caused by strict `afterok` after a failed cycle. Cancel stale dependent jobs and resubmit with `CHAIN_DEPENDENCY_TYPE=afterany`.
 - OOM kill: observed with repeated candidate training and DataLoader worker state. Current mitigation is `--mem-per-gpu=64GB`, `num_workers=2`, `persistent_workers=False`, and `pin_memory=False`.
 - Time limit: observed because NSGA-III cannot stop cleanly until the active generation finishes; one slow candidate can consume hours. Current mitigation is a small first generation (`n_partitions=2`, effective population 6) plus a larger Slurm search buffer.
+- Within-cycle NSGA-III resume: when `nia_search.checkpoint.enabled=true`, rerunning the same cycle with the same checkpoint contract automatically resumes from `model_export_dir/<dataset>/cycle_XX/checkpoints/nsga3.dill`. The database remains the candidate evidence log and exact-hash duplicate guard; it is not the optimizer state.
+- Termination config: prefer `nia_search.termination.type=hybrid` with both `n_gen` and `time`. The Slurm submit wrapper derives search walltime from `nia_search.termination.time` when present, otherwise from legacy `nia_search.time`.
 
 Useful HPC diagnostics:
 

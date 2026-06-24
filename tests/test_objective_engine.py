@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 import torch
 
+import nianetvae.search.checkpointing as checkpointing
 import nianetvae.search.cycle_warmstart as cycle_warmstart
 import nianetvae.search.objective_engine as objective_engine
 import nianetvae.search.runner as runner_module
@@ -251,6 +252,142 @@ def test_problem_initializes_with_three_objectives(tmp_path):
     assert problem.n_obj == 3
 
 
+def test_checkpoint_path_resolves_under_per_maint_export_root(tmp_path):
+    cfg = {
+        "logging_params": {"model_export_dir": str(tmp_path / "exports")},
+        "data_params": {"dataset_name": "MetroPT", "regime": "per_maint", "cycle_id": 7},
+    }
+
+    algorithm_path, meta_path = checkpointing.checkpoint_paths(cfg, "MetroPT_cycle07")
+
+    expected = tmp_path / "exports" / "MetroPT" / "cycle_07" / "checkpoints"
+    assert algorithm_path == expected / "nsga3.dill"
+    assert meta_path == expected / "nsga3_meta.json"
+
+
+def test_checkpoint_path_for_non_per_maint_is_stable_and_not_save_dir(tmp_path):
+    cfg = {
+        "logging_params": {
+            "save_dir": str(tmp_path / "run-local"),
+            "model_export_dir": str(tmp_path / "exports"),
+        },
+        "data_params": {"dataset_name": "MetroPT", "regime": "single"},
+    }
+
+    algorithm_path, _ = checkpointing.checkpoint_paths(cfg, "MetroPT_single")
+
+    assert str(tmp_path / "run-local") not in str(algorithm_path)
+    assert algorithm_path == tmp_path / "exports" / "MetroPT" / "checkpoints" / "MetroPT_single" / "nsga3.dill"
+
+
+def test_checkpoint_contract_mismatch_fails_fast(tmp_path):
+    cfg = {
+        "nia_search": {"checkpoint": {"enabled": True, "on_mismatch": "fail"}},
+        "logging_params": {"model_export_dir": str(tmp_path)},
+        "data_params": {"dataset_name": "MetroPT", "regime": "per_maint", "cycle_id": 0},
+    }
+    contract = {
+        "schema_version": "1.0",
+        "config_fingerprint": "expected",
+    }
+    manager = checkpointing.SearchCheckpointManager(
+        config=cfg,
+        dataset_name="MetroPT_cycle00",
+        contract=contract,
+    )
+
+    with pytest.raises(checkpointing.SearchCheckpointError, match="checkpoint contract mismatch"):
+        manager._assert_compatible({"config_fingerprint": "observed"})
+
+
+def test_checkpoint_contract_match_permits_resume(tmp_path):
+    cfg = {
+        "nia_search": {"checkpoint": {"enabled": True}},
+        "logging_params": {"model_export_dir": str(tmp_path)},
+        "data_params": {"dataset_name": "MetroPT", "regime": "per_maint", "cycle_id": 0},
+    }
+    contract = {
+        "schema_version": "1.0",
+        "config_fingerprint": "same",
+    }
+    manager = checkpointing.SearchCheckpointManager(
+        config=cfg,
+        dataset_name="MetroPT_cycle00",
+        contract=contract,
+    )
+
+    manager._assert_compatible({"config_fingerprint": "same"})
+
+
+def test_checkpoint_save_detaches_and_load_reattaches_runtime_objects(tmp_path):
+    cfg = {
+        "nia_search": {"checkpoint": {"enabled": True, "interval_generations": 1}},
+        "logging_params": {"model_export_dir": str(tmp_path)},
+        "data_params": {"dataset_name": "MetroPT", "regime": "per_maint", "cycle_id": 0},
+    }
+    contract = {
+        "schema_version": "1.0",
+        "config_fingerprint": "same",
+    }
+    manager = checkpointing.SearchCheckpointManager(
+        config=cfg,
+        dataset_name="MetroPT_cycle00",
+        contract=contract,
+    )
+    original_problem = SimpleNamespace(name="old-problem")
+    original_callback = SimpleNamespace(name="old-callback")
+    algorithm = SimpleNamespace(
+        problem=original_problem,
+        callback=original_callback,
+        termination=SimpleNamespace(name="old-termination"),
+        evaluator=SimpleNamespace(n_eval=12),
+        n_gen=4,
+    )
+
+    manager.save_algorithm(algorithm)
+
+    fresh_problem = SimpleNamespace(name="fresh-problem")
+    fresh_termination = SimpleNamespace(name="fresh-termination")
+    fresh_callback = SimpleNamespace(name="fresh-callback")
+    loaded = manager.load_algorithm(
+        problem=fresh_problem,
+        termination=fresh_termination,
+        callback=fresh_callback,
+        n_jobs=2,
+    )
+
+    assert algorithm.problem is original_problem
+    assert algorithm.callback is original_callback
+    assert loaded.problem is fresh_problem
+    assert loaded.termination is fresh_termination
+    assert loaded.callback is fresh_callback
+    assert loaded.n_jobs == 2
+
+
+def test_hybrid_termination_contract_uses_generation_and_time():
+    spec = checkpointing.resolve_search_termination(
+        {
+            "nia_search": {
+                "time": "01:00:00",
+                "termination": {"type": "hybrid", "n_gen": 10, "time": "02:00:00"},
+            }
+        }
+    )
+
+    assert spec.contract == {
+        "type": "hybrid",
+        "n_gen": 10,
+        "time": "02:00:00",
+        "time_seconds": 7200,
+    }
+
+
+def test_missing_termination_preserves_legacy_time_contract():
+    spec = checkpointing.resolve_search_termination({"nia_search": {"time": "00:05:00"}})
+
+    assert spec.contract == {"type": "time", "time": "00:05:00", "time_seconds": 300}
+
+
 @pytest.mark.parametrize("metric_key", ["SMAPE", "smape"])
 def test_cached_objective_bundle_accepts_case_insensitive_error_metric(metric_key):
     model = _TinyModel()
@@ -341,7 +478,7 @@ def test_cached_objective_bundle_rejects_missing_error_metric():
     assert bundle["reason"] == "missing_or_invalid_error_metric:SMAPE"
 
 
-def test_cached_evaluation_uses_db_then_memory_cache(monkeypatch, tmp_path):
+def test_exact_hash_reuse_uses_db_guard(monkeypatch, tmp_path):
     class _CachedModel(torch.nn.Module):
         def __init__(self, solution, **kwargs):
             super().__init__()
@@ -437,15 +574,12 @@ def test_cached_evaluation_uses_db_then_memory_cache(monkeypatch, tmp_path):
     assert out["F"].shape == (2, 3)
     assert np.isfinite(out["F"]).all()
     assert out["F"][0].tolist() == pytest.approx(out["F"][1].tolist())
-    assert conn.get_entries_calls == 1
+    assert conn.get_entries_calls == 2
     assert conn.save_calls == 0
-    assert problem.stats["cached"] == 2
-    assert problem.stats["cached_db"] == 1
-    assert problem.stats["cached_memory"] == 1
-    assert problem.stats["cache_miss"] == 0
+    assert problem.stats["reused"] == 2
 
 
-def test_duplicate_hash_trains_once_then_uses_memory_cache(monkeypatch, tmp_path):
+def test_duplicate_hash_trains_once_then_reuses_db_guard(monkeypatch, tmp_path):
     class _TrainableModel(torch.nn.Module):
         def __init__(self, solution, **kwargs):
             super().__init__()
@@ -495,13 +629,41 @@ def test_duplicate_hash_trains_once_then_uses_memory_cache(monkeypatch, tmp_path
         def __init__(self):
             self.get_entries_calls = 0
             self.save_calls = 0
+            self.saved = False
 
         def get_entries(self, hash_id, dataset_name):
             self.get_entries_calls += 1
+            if self.saved:
+                return pd.DataFrame(
+                    [
+                        {
+                            "hash_id": hash_id,
+                            "dataset_name": dataset_name,
+                            "obj_error": 1.25,
+                            "obj_pdm": 0.4,
+                            "obj_alarm_burden": 0.1,
+                            "diagnostic_params": 10.0,
+                            "diagnostic_macs": 20.0,
+                            "smape": 1.25,
+                            "objective_pdm_metric": "smoothed_rank_gap",
+                            "objective_alarm_burden_metric": "normal_high_risk_rate",
+                            "pdm_metric_valid": True,
+                            "pdm_smoothing_window_windows": 480,
+                            "pdm_positive_smoothed_risk_mean": 0.7,
+                            "pdm_negative_smoothed_risk_mean": 0.5,
+                            "pdm_smoothed_auroc": 0.6,
+                            "pdm_smoothed_rank_gap": 0.2,
+                            "pdm_alarm_burden_threshold": 0.95,
+                            "pdm_positive_high_risk_rate": 1.0,
+                            "pdm_negative_high_risk_rate": 0.1,
+                        }
+                    ]
+                )
             return pd.DataFrame()
 
         def save_model_and_entry(self, **kwargs):
             self.save_calls += 1
+            self.saved = True
             return None
 
     monkeypatch.setattr(runner_module, "RNNVAE", _TrainableModel)
@@ -532,12 +694,10 @@ def test_duplicate_hash_trains_once_then_uses_memory_cache(monkeypatch, tmp_path
 
     assert out["F"].shape == (2, 3)
     assert out["F"][0].tolist() == pytest.approx(out["F"][1].tolist())
-    assert conn.get_entries_calls == 1
+    assert conn.get_entries_calls == 2
     assert conn.save_calls == 1
     assert problem.stats["trained"] == 1
-    assert problem.stats["cached"] == 1
-    assert problem.stats["cached_memory"] == 1
-    assert problem.stats["cached_db"] == 0
+    assert problem.stats["reused"] == 1
 
 
 def test_cached_objective_bundle_requires_contract_provenance_match():
@@ -659,9 +819,11 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
                 ]
             )
 
-    def _fake_minimize(problem, algorithm, termination, seed, verbose, n_jobs):
+    def _fake_minimize(problem, algorithm, termination, seed, verbose, n_jobs, callback=None, copy_algorithm=None):
         captured["algorithm"] = algorithm
         captured["termination"] = termination
+        captured["callback"] = callback
+        captured["copy_algorithm"] = copy_algorithm
         return SimpleNamespace()
 
     monkeypatch.setattr(runner_module, "NSGA3", _DummyAlgorithm)
@@ -732,6 +894,7 @@ def test_solve_architecture_problem_uses_nsga3_ref_dirs(monkeypatch, tmp_path):
 
     assert isinstance(captured["algorithm"], _DummyAlgorithm)
     assert captured["ref_dirs"].shape == (21, 3)
+    assert captured["copy_algorithm"] is False
 
 
 def test_select_deterministic_pareto_winner_prefers_lower_pdm_on_tie():
