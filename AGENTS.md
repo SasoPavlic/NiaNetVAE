@@ -98,6 +98,7 @@ Observed HPC failure modes and current mitigations:
 - OOM kill: observed with repeated candidate training and DataLoader worker state. Current mitigation is `--mem-per-gpu=64GB`, `num_workers=2`, `persistent_workers=False`, and `pin_memory=False`.
 - Time limit: observed because NSGA-III cannot stop cleanly until the active generation finishes; one slow candidate can consume hours. Current mitigation is a small first generation (`n_partitions=2`, effective population 6) plus a larger Slurm search buffer.
 - Within-cycle NSGA-III resume: when `nia_search.checkpoint.enabled=true`, rerunning the same cycle with the same checkpoint contract automatically resumes from `model_export_dir/<dataset>/cycle_XX/checkpoints/nsga3.dill`. The database remains the candidate evidence log and exact-hash duplicate guard; it is not the optimizer state.
+- Checkpoint budget extension: checkpoint resume resets pymoo's per-process wall-clock origin. `nia_search.termination.n_gen` and `nia_search.termination.time` are replaceable execution budgets and may be increased for a later job without discarding the checkpoint. Dataset/cycle semantics, NSGA-III population, objectives, winner selection, and training policy remain immutable compatibility fields and still fail fast on mismatch.
 - Termination config: prefer `nia_search.termination.type=hybrid` with both `n_gen` and `time`. The Slurm submit wrapper derives search walltime from `nia_search.termination.time` when present, otherwise from legacy `nia_search.time`.
 
 Useful HPC diagnostics:

@@ -14,8 +14,8 @@ nia_search:
     #   n_partitions=5 -> 21 individuals
     # Larger values improve tradeoff exploration but increase runtime.
     # Production finetune cycle-0 search: p=8 -> 45 candidates per generation.
-    # With n_gen=8 this gives up to ~360 candidate evaluation slots, leaving
-    # headroom to manually confirm at least 200 valid cycle-0 candidate rows.
+    # With n_gen=300 this provides a high absolute ceiling while the 72-hour
+    # per-job time budget normally controls continued checkpointed runs.
     n_partitions: 8
 
   termination:
@@ -24,7 +24,7 @@ nia_search:
     # The Slurm submit wrapper adds a 10h buffer, so 72h + 10h = ~82h
     # walltime, safely below the 4-day GPU partition cap.
     type: hybrid
-    n_gen: 8
+    n_gen: 300
     time: "72:00:00"
 
   checkpoint:
@@ -141,12 +141,12 @@ logging_params:
   logger_file: "RNNAutoencoder.log"
   save_dir: "logs"                  # local run outputs
   db_storage: "logs/solutions.db"   # used when db_backend=sqlite
-  db_table_name: "per_maint_vae_finetune_alarm_burden"
+  db_table_name: "per_maint_vae_finetune_alarm_burden_200plus"
   db_backend: "postgres"            # postgres or sqlite
   db_wait_seconds: 1800             # max wait for DB recovery before winner-selection fallback/fail
   db_wait_poll_seconds: 30          # retry poll interval while waiting for DB recovery
   export_enabled: true               # write model/meta/summary export artifacts
-  model_export_dir: "logs/per_maint_vae_finetune_alarm_burden"
+  model_export_dir: "logs/per_maint_vae_finetune_alarm_burden_200plus"
 
 # DataLoader runtime settings.
 # num_workers is a major speed lever for CPU-side input pipeline throughput.

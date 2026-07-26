@@ -280,7 +280,7 @@ def test_checkpoint_path_for_non_per_maint_is_stable_and_not_save_dir(tmp_path):
     assert algorithm_path == tmp_path / "exports" / "MetroPT" / "checkpoints" / "MetroPT_single" / "nsga3.dill"
 
 
-def test_checkpoint_contract_mismatch_fails_fast(tmp_path):
+def test_checkpoint_immutable_contract_mismatch_fails_fast(tmp_path):
     cfg = {
         "nia_search": {"checkpoint": {"enabled": True, "on_mismatch": "fail"}},
         "logging_params": {"model_export_dir": str(tmp_path)},
@@ -288,7 +288,8 @@ def test_checkpoint_contract_mismatch_fails_fast(tmp_path):
     }
     contract = {
         "schema_version": "1.0",
-        "config_fingerprint": "expected",
+        "workflow_mode": "per_maint_finetune_search",
+        "termination": {"type": "hybrid", "n_gen": 50, "time": "72:00:00"},
     }
     manager = checkpointing.SearchCheckpointManager(
         config=cfg,
@@ -297,10 +298,16 @@ def test_checkpoint_contract_mismatch_fails_fast(tmp_path):
     )
 
     with pytest.raises(checkpointing.SearchCheckpointError, match="checkpoint contract mismatch"):
-        manager._assert_compatible({"config_fingerprint": "observed"})
+        manager._assert_compatible(
+            {
+                "schema_version": "1.0",
+                "workflow_mode": "per_maint_warmstart_search",
+                "termination": {"type": "hybrid", "n_gen": 8, "time": "72:00:00"},
+            }
+        )
 
 
-def test_checkpoint_contract_match_permits_resume(tmp_path):
+def test_checkpoint_termination_budget_change_permits_resume(tmp_path):
     cfg = {
         "nia_search": {"checkpoint": {"enabled": True}},
         "logging_params": {"model_export_dir": str(tmp_path)},
@@ -308,7 +315,9 @@ def test_checkpoint_contract_match_permits_resume(tmp_path):
     }
     contract = {
         "schema_version": "1.0",
-        "config_fingerprint": "same",
+        "workflow_mode": "per_maint_finetune_search",
+        "termination": {"type": "hybrid", "n_gen": 50, "time": "72:00:00"},
+        "config_fingerprint": "new-budget",
     }
     manager = checkpointing.SearchCheckpointManager(
         config=cfg,
@@ -316,10 +325,65 @@ def test_checkpoint_contract_match_permits_resume(tmp_path):
         contract=contract,
     )
 
-    manager._assert_compatible({"config_fingerprint": "same"})
+    manager._assert_compatible(
+        {
+            "schema_version": "1.0",
+            "workflow_mode": "per_maint_finetune_search",
+            "termination": {"type": "hybrid", "n_gen": 8, "time": "72:00:00"},
+            "config_fingerprint": "old-budget",
+            "generation": 13,
+            "completed": True,
+        }
+    )
 
 
-def test_checkpoint_save_detaches_and_load_reattaches_runtime_objects(tmp_path):
+def test_built_checkpoint_contract_keeps_state_identity_across_budget_extension(tmp_path):
+    cfg = {
+        "workflow": {"mode": "per_maint_finetune_search"},
+        "data_params": {
+            "dataset_name": "MetroPT",
+            "regime": "per_maint",
+            "cycle_id": 0,
+            "seq_len": 200,
+        },
+        "trainer_params": {"min_epochs": 3, "max_epochs": 4},
+        "exp_params": {"optimizer": "Adam", "manual_seed": 42},
+    }
+    common = {
+        "config": cfg,
+        "dataset_name": "MetroPT_cycle00",
+        "algorithm_name": "NSGA3",
+        "n_partitions": 8,
+        "effective_population": 45,
+        "objective_contract": {"error_metric": "SMAPE"},
+        "selection_contract": {"method": "weighted_ideal_distance"},
+    }
+
+    old_contract = checkpointing.build_checkpoint_contract(
+        **common,
+        termination_contract={"type": "hybrid", "n_gen": 8, "time": "72:00:00"},
+    )
+    new_contract = checkpointing.build_checkpoint_contract(
+        **common,
+        termination_contract={"type": "hybrid", "n_gen": 50, "time": "72:00:00"},
+    )
+
+    assert old_contract["config_fingerprint"] != new_contract["config_fingerprint"]
+    assert old_contract["state_fingerprint"] == new_contract["state_fingerprint"]
+
+    manager = checkpointing.SearchCheckpointManager(
+        config={
+            "nia_search": {"checkpoint": {"enabled": True, "on_mismatch": "fail"}},
+            "logging_params": {"model_export_dir": str(tmp_path)},
+            "data_params": {"dataset_name": "MetroPT", "regime": "per_maint", "cycle_id": 0},
+        },
+        dataset_name="MetroPT_cycle00",
+        contract=new_contract,
+    )
+    manager._assert_compatible(old_contract)
+
+
+def test_checkpoint_save_detaches_and_load_reattaches_runtime_objects(tmp_path, monkeypatch):
     cfg = {
         "nia_search": {"checkpoint": {"enabled": True, "interval_generations": 1}},
         "logging_params": {"model_export_dir": str(tmp_path)},
@@ -342,6 +406,7 @@ def test_checkpoint_save_detaches_and_load_reattaches_runtime_objects(tmp_path):
         termination=SimpleNamespace(name="old-termination"),
         evaluator=SimpleNamespace(n_eval=12),
         n_gen=4,
+        start_time=100.0,
     )
 
     manager.save_algorithm(algorithm)
@@ -349,6 +414,7 @@ def test_checkpoint_save_detaches_and_load_reattaches_runtime_objects(tmp_path):
     fresh_problem = SimpleNamespace(name="fresh-problem")
     fresh_termination = SimpleNamespace(name="fresh-termination")
     fresh_callback = SimpleNamespace(name="fresh-callback")
+    monkeypatch.setattr(checkpointing.time, "time", lambda: 12345.0)
     loaded = manager.load_algorithm(
         problem=fresh_problem,
         termination=fresh_termination,
@@ -362,6 +428,7 @@ def test_checkpoint_save_detaches_and_load_reattaches_runtime_objects(tmp_path):
     assert loaded.termination is fresh_termination
     assert loaded.callback is fresh_callback
     assert loaded.n_jobs == 2
+    assert loaded.start_time == 12345.0
 
 
 def test_hybrid_termination_contract_uses_generation_and_time():
