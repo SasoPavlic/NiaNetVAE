@@ -228,6 +228,10 @@ def test_sqlite_schema_mismatch_auto_migrates_for_old_anomaly_columns(tmp_path: 
 def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: Path):
     model = _DummyModel()
     export_dir = tmp_path / "cycle_00"
+    export_dir.mkdir(parents=True)
+    (export_dir / "cycle_status.json").write_text(
+        '{"status":"skipped_non_trainable"}', encoding="utf-8"
+    )
     rolling_feature_names = [f"sensor_{idx}__mean" for idx in range(90)]
     scaler = StandardScaler().fit(np.random.default_rng(123).normal(size=(12, 90)))
     datamodule = SimpleNamespace(
@@ -333,6 +337,7 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
     )
 
     assert (export_dir / "scaler.joblib").exists()
+    assert not (export_dir / "cycle_status.json").exists()
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
 

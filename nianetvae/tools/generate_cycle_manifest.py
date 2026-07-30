@@ -61,6 +61,16 @@ def _load_merged_config(config_path: Path) -> dict:
     shared_data_loader_params = config.get("data_loader_params", {})
     config.setdefault("data_params", {})
     config["data_params"].update(shared_data_loader_params)
+    workflow_mode = str((config.get("workflow") or {}).get("mode", "")).strip().lower()
+    config["data_params"]["workflow_mode"] = workflow_mode
+    if workflow_mode == "per_maint_finetune_search":
+        finetune_cfg = dict(((config.get("workflow") or {}).get("finetune") or {}))
+        data_policy = dict(finetune_cfg.get("data_policy") or {})
+        data_policy.setdefault(
+            "random_seed",
+            int((config.get("exp_params") or {}).get("manual_seed", 42)),
+        )
+        config["data_params"]["finetune_data_policy"] = data_policy
     return config
 
 
@@ -91,6 +101,8 @@ def _config_fingerprint(config: dict) -> str:
         "pre_maint_minutes": data_params.get("pre_maint_minutes"),
         "train_phases": data_params.get("train_phases"),
         "test_phases": data_params.get("test_phases"),
+        "workflow_mode": data_params.get("workflow_mode"),
+        "finetune_data_policy": data_params.get("finetune_data_policy"),
     }
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()

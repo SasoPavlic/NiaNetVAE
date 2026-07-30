@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 import torch
 from sklearn.preprocessing import StandardScaler
-from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset
 
 from log import Log
 from nianetvae.dataloaders import BaseDataLoader
@@ -367,6 +367,8 @@ class MetroPTDataLoader(BaseDataLoader):
         drop_unnamed_index: bool = True,
         train_phases: Optional[Sequence[int]] = (0, 1),
         test_phases: Optional[Sequence[int]] = (0, 1),
+        workflow_mode: Optional[str] = None,
+        finetune_data_policy: Optional[Dict[str, object]] = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -393,6 +395,16 @@ class MetroPTDataLoader(BaseDataLoader):
         self.drop_unnamed_index = bool(drop_unnamed_index)
         self.train_phases = _as_int_list(train_phases, default=(0, 1))
         self.test_phases = _as_int_list(test_phases, default=(0, 1))
+        self.workflow_mode = str(workflow_mode or "").strip().lower()
+        self.finetune_data_policy = dict(finetune_data_policy or {})
+        self._finetune_data_policy_active = bool(
+            self.finetune_data_policy.get("enabled", False)
+            and self.workflow_mode == "per_maint_finetune_search"
+            and self.regime == "per_maint"
+            and self.cycle_id > 0
+        )
+        self._train_shuffle = False
+        self._train_shuffle_seed = int(self.finetune_data_policy.get("random_seed", 42))
 
         self.n_features: Optional[int] = None
         self.base_feature_names: List[str] = []
@@ -408,6 +420,167 @@ class MetroPTDataLoader(BaseDataLoader):
         self.train_dataset = None
         self.val_dataset = None
         self.test_dataset = None
+
+    def _validate_finetune_data_policy(self) -> None:
+        if not self._finetune_data_policy_active:
+            return
+
+        baseline_fraction = float(self.finetune_data_policy.get("baseline_replay_fraction", 0.5))
+        local_val_fraction = float(self.finetune_data_policy.get("local_validation_fraction", 0.2))
+        if not 0.0 <= baseline_fraction < 1.0:
+            raise ValueError(
+                "workflow.finetune.data_policy.baseline_replay_fraction must be in [0, 1)."
+            )
+        if not 0.0 < local_val_fraction < 1.0:
+            raise ValueError(
+                "workflow.finetune.data_policy.local_validation_fraction must be in (0, 1)."
+            )
+        short_local_fallback = str(
+            self.finetune_data_policy.get(
+                "short_local_fallback", "train_all_fixed_min_epochs"
+            )
+        ).strip().lower()
+        if short_local_fallback not in {"train_all_fixed_min_epochs", "error"}:
+            raise ValueError(
+                "workflow.finetune.data_policy.short_local_fallback must be "
+                "'train_all_fixed_min_epochs' or 'error'."
+            )
+
+    @staticmethod
+    def _evenly_spaced_indices(total: int, count: int) -> List[int]:
+        total = int(total)
+        count = int(count)
+        if total <= 0 or count <= 0:
+            return []
+        if count >= total:
+            return list(range(total))
+        positions = np.floor((np.arange(count, dtype=np.float64) + 0.5) * total / count).astype(np.int64)
+        return positions.tolist()
+
+    def _build_finetune_datasets(self, train_segments: List[np.ndarray]) -> None:
+        """Build local-first fine-tune datasets with deterministic baseline replay."""
+        self._validate_finetune_data_policy()
+        if len(train_segments) < 2:
+            raise ValueError(
+                "Fine-tune data policy produced zero local fine-tune segments after phase filtering."
+            )
+
+        baseline_dataset = MetroPTSegmentedSequenceDataset(
+            train_segments[:-1], seq_len=self.seq_len, stride=self.stride
+        )
+        local_dataset = MetroPTSegmentedSequenceDataset(
+            [train_segments[-1]], seq_len=self.seq_len, stride=self.stride
+        )
+        baseline_total = int(len(baseline_dataset))
+        local_total = int(len(local_dataset))
+        if baseline_total < 1:
+            raise ValueError("Fine-tune data policy produced zero baseline replay windows.")
+        if local_total < 1:
+            raise ValueError("Fine-tune data policy produced zero local fine-tune windows.")
+
+        local_val_fraction = float(self.finetune_data_policy.get("local_validation_fraction", 0.2))
+        local_val_windows = max(1, int(np.floor(local_total * local_val_fraction)))
+        local_val_start = local_total - local_val_windows
+        embargo_enabled = bool(self.finetune_data_policy.get("validation_embargo", True))
+        requested_embargo_windows = (
+            int(np.ceil(max(0, self.seq_len - 1) / float(self.stride)))
+            if embargo_enabled
+            else 0
+        )
+        local_train_stop = local_val_start - requested_embargo_windows
+        short_local_fallback = str(
+            self.finetune_data_policy.get(
+                "short_local_fallback", "train_all_fixed_min_epochs"
+            )
+        ).strip().lower()
+        fallback_applied = bool(local_train_stop < 1)
+        fallback_reason = None
+        if fallback_applied:
+            fallback_reason = (
+                "insufficient_local_windows_for_non_overlapping_train_validation_split:"
+                f"local={local_total},validation={local_val_windows},"
+                f"requested_embargo={requested_embargo_windows}"
+            )
+            if short_local_fallback == "error":
+                raise ValueError(
+                    "Fine-tune local segment is too short for chronological train/validation splitting "
+                    f"with embargo: local_windows={local_total}, validation_windows={local_val_windows}, "
+                    f"embargo_windows={requested_embargo_windows}."
+                )
+            local_train_indices = list(range(local_total))
+            local_val_indices: List[int] = []
+            applied_embargo_windows = 0
+            validation_strategy = "disabled_short_local_fallback"
+            early_stopping_eligible = False
+        else:
+            local_train_indices = list(range(local_train_stop))
+            local_val_indices = list(range(local_val_start, local_total))
+            applied_embargo_windows = requested_embargo_windows
+            validation_strategy = "chronological_non_overlapping_local"
+            early_stopping_eligible = True
+
+        baseline_fraction = float(self.finetune_data_policy.get("baseline_replay_fraction", 0.5))
+        if baseline_fraction <= 0.0:
+            baseline_replay_windows = 0
+        else:
+            baseline_replay_windows = int(
+                round(len(local_train_indices) * baseline_fraction / (1.0 - baseline_fraction))
+            )
+            baseline_replay_windows = max(1, min(baseline_total, baseline_replay_windows))
+        baseline_indices = self._evenly_spaced_indices(baseline_total, baseline_replay_windows)
+
+        train_parts = []
+        if baseline_indices:
+            train_parts.append(Subset(baseline_dataset, baseline_indices))
+        train_parts.append(Subset(local_dataset, local_train_indices))
+        self.train_dataset = train_parts[0] if len(train_parts) == 1 else ConcatDataset(train_parts)
+        self.val_dataset = Subset(local_dataset, local_val_indices) if local_val_indices else None
+        self._train_shuffle = bool(self.finetune_data_policy.get("shuffle_train", True))
+
+        train_total = int(len(self.train_dataset))
+        effective_baseline_fraction = (
+            float(len(baseline_indices)) / float(train_total) if train_total > 0 else 0.0
+        )
+        policy_report = {
+            "enabled": True,
+            "mode": "local_train_with_baseline_replay",
+            "baseline_total_windows": baseline_total,
+            "baseline_replay_windows": int(len(baseline_indices)),
+            "local_total_windows": local_total,
+            "local_train_windows": int(len(local_train_indices)),
+            "requested_local_validation_windows": int(local_val_windows),
+            "local_validation_windows": int(len(local_val_indices)),
+            "requested_local_validation_embargo_windows": int(requested_embargo_windows),
+            "local_validation_embargo_windows": int(applied_embargo_windows),
+            "unused_local_embargo_windows": int(applied_embargo_windows),
+            "validation_strategy": validation_strategy,
+            "early_stopping_eligible": bool(early_stopping_eligible),
+            "short_local_fallback": short_local_fallback,
+            "short_local_fallback_applied": bool(fallback_applied),
+            "short_local_fallback_reason": fallback_reason,
+            "requested_baseline_replay_fraction": baseline_fraction,
+            "effective_baseline_replay_fraction": effective_baseline_fraction,
+            "local_validation_fraction": local_val_fraction,
+            "effective_local_validation_fraction": (
+                float(len(local_val_indices)) / float(local_total)
+                if local_total > 0
+                else 0.0
+            ),
+            "shuffle_train": self._train_shuffle,
+            "random_seed": self._train_shuffle_seed,
+        }
+        self.split_info["fine_tune_data_policy"] = policy_report
+        Log.info(
+            "FINETUNE_DATA_POLICY "
+            f"cycle_id={self.cycle_id:02d} baseline_total={baseline_total} "
+            f"baseline_replay={len(baseline_indices)} local_total={local_total} "
+            f"local_train={len(local_train_indices)} local_val={len(local_val_indices)} "
+            f"local_embargo={applied_embargo_windows} "
+            f"validation_strategy={validation_strategy} "
+            f"early_stopping_eligible={str(early_stopping_eligible).lower()} "
+            f"effective_baseline_fraction={effective_baseline_fraction:.4f} "
+            f"shuffle_train={str(self._train_shuffle).lower()}"
+        )
 
     def _default_windows(self) -> List[Tuple[pd.Timestamp, pd.Timestamp, str, str]]:
         out: List[Tuple[pd.Timestamp, pd.Timestamp, str, str]] = []
@@ -639,9 +812,10 @@ class MetroPTDataLoader(BaseDataLoader):
                 f"Not enough test windows: test_windows={len(test_ds)} (seq_len={self.seq_len})."
             )
 
-        # Type A policy: in per-maint cycles (>0), if phase-1 warnings are expected
-        # but no positive test windows exist, treat the cycle as non-trainable.
-        # This allows runtime skip/alias behavior to kick in consistently.
+        # Search workflows require an informative PdM test interval. Corrected
+        # fine-tuning is unsupervised, so it can still adapt on local healthy
+        # windows when a later cycle has no phase-1 test windows; provenance
+        # records that its final-training PdM objective is non-informative.
         expects_positive_phase = 1 in set(int(p) for p in self.test_phases)
         if (
             self.regime == "per_maint"
@@ -649,10 +823,20 @@ class MetroPTDataLoader(BaseDataLoader):
             and expects_positive_phase
             and int(test_ds.window_positive_count) <= 0
         ):
-            raise ValueError(
-                "Test mask produced zero positive windows after phase filtering "
-                "(non_informative_cycle_no_positive_windows)."
-            )
+            if self._finetune_data_policy_active:
+                self.split_info["test_informative_for_pdm_objective"] = False
+                Log.warning(
+                    "FINETUNE_NON_INFORMATIVE_TEST "
+                    f"cycle_id={self.cycle_id:02d} test_positive_windows=0; "
+                    "continuing because unsupervised fine-tuning only requires local healthy windows."
+                )
+            else:
+                raise ValueError(
+                    "Test mask produced zero positive windows after phase filtering "
+                    "(non_informative_cycle_no_positive_windows)."
+                )
+        else:
+            self.split_info["test_informative_for_pdm_objective"] = True
 
         self.split_info.update(
             {
@@ -671,7 +855,9 @@ class MetroPTDataLoader(BaseDataLoader):
             }
         )
 
-        if self.val_size and float(self.val_size) > 0.0:
+        if self._finetune_data_policy_active:
+            self._build_finetune_datasets(train_segments)
+        elif self.val_size and float(self.val_size) > 0.0:
             total = len(train_val_ds)
             val_windows = max(1, int(np.floor(total * (float(self.val_size) / 100.0))))
             if val_windows >= total:
@@ -713,14 +899,19 @@ class MetroPTDataLoader(BaseDataLoader):
             return self._empty_dataloader()
         persistent = bool(self.persistent_workers and self.num_workers > 0)
         drop_last = bool(len(self.train_dataset) >= self.batch_size)
+        generator = None
+        if self._train_shuffle:
+            generator = torch.Generator()
+            generator.manual_seed(self._train_shuffle_seed)
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
-            shuffle=False,
+            shuffle=self._train_shuffle,
             num_workers=self.num_workers,
             persistent_workers=persistent,
             pin_memory=self.pin_memory,
             drop_last=drop_last,
+            generator=generator,
         )
 
     def val_dataloader(self):

@@ -108,7 +108,10 @@ def _config_summary_line(config: dict) -> str:
     logging_params = config.get("logging_params", {})
     trainer_params = config.get("trainer_params", {})
     exp_params = config.get("exp_params", {})
-    workflow_mode = ((config.get("workflow") or {}).get("mode"))
+    workflow = config.get("workflow") or {}
+    workflow_mode = workflow.get("mode")
+    finetune_cfg = workflow.get("finetune") or {}
+    finetune_data_policy = finetune_cfg.get("data_policy") or {}
     parts = [
         "CONFIG_SUMMARY",
         f"workflow_mode={_value_or_na(workflow_mode)}",
@@ -120,6 +123,10 @@ def _config_summary_line(config: dict) -> str:
         f"n_features={_value_or_na(data_params.get('n_features'))}",
         f"min_epochs={_value_or_na(trainer_params.get('min_epochs'))}",
         f"max_epochs={_value_or_na(trainer_params.get('max_epochs'))}",
+        f"finetune_max_epochs={_value_or_na(finetune_cfg.get('max_epochs'))}",
+        f"finetune_baseline_replay_fraction={_value_or_na(finetune_data_policy.get('baseline_replay_fraction'))}",
+        f"finetune_local_validation_fraction={_value_or_na(finetune_data_policy.get('local_validation_fraction'))}",
+        f"finetune_short_local_fallback={_value_or_na(finetune_data_policy.get('short_local_fallback'))}",
         f"nsga3_n_partitions={_value_or_na(nsga3_cfg.get('n_partitions'))}",
         f"nsga3_effective_population={_value_or_na(nsga3_cfg.get('effective_population'))}",
         f"time_limit={_value_or_na(time_limit)}",
@@ -158,6 +165,21 @@ def _resolve_workflow_mode(config: dict) -> str:
     normalized_workflow["mode"] = mode
     config["workflow"] = normalized_workflow
     return mode
+
+
+def _attach_workflow_data_policy(config: dict, workflow_mode: str) -> None:
+    """Expose workflow-specific dataset policy to the selected datamodule."""
+    data_params = dict(config.get("data_params") or {})
+    data_params["workflow_mode"] = str(workflow_mode)
+    if str(workflow_mode) == "per_maint_finetune_search":
+        finetune_cfg = dict(((config.get("workflow") or {}).get("finetune") or {}))
+        data_policy = dict(finetune_cfg.get("data_policy") or {})
+        data_policy.setdefault(
+            "random_seed",
+            int((config.get("exp_params") or {}).get("manual_seed", 42)),
+        )
+        data_params["finetune_data_policy"] = data_policy
+    config["data_params"] = data_params
 
 
 def _resolve_nsga3_search_config(config: dict) -> dict:
@@ -511,6 +533,8 @@ def _is_non_trainable_cycle_error(exc: Exception) -> bool:
     return (
         "zero rows after phase filtering" in message
         or "zero positive windows after phase filtering" in message
+        or "zero local fine-tune segments" in message
+        or "zero local fine-tune windows" in message
     )
 
 
@@ -588,6 +612,7 @@ if __name__ == '__main__':
 
     try:
         workflow_mode = _resolve_workflow_mode(config)
+        _attach_workflow_data_policy(config, workflow_mode)
         _resolve_nsga3_search_config(config)
         objective_contract = _resolve_objective_contract(config)
         training_policy_contract = _resolve_training_policy(config)

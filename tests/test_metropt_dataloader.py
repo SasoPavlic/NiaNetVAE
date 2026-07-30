@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from torch.utils.data import RandomSampler
 
 from log import Log
 from nianetvae.dataloaders.metropt_dataloader import (
@@ -163,6 +164,151 @@ def test_metropt_dataloader_per_maint_cycle_1_splits(tmp_path: Path) -> None:
 
     # Training mask should split into at least baseline + post-train segments.
     assert int(split.get("train_segments", 0)) >= 2
+
+
+def test_metropt_finetune_policy_trains_on_local_windows_with_balanced_baseline_replay(
+    tmp_path: Path,
+) -> None:
+    _ensure_test_logger(tmp_path)
+    csv_path = _write_synth_metropt_csv(tmp_path)
+
+    dm = MetroPTDataLoader(
+        dataset_name="MetroPT",
+        data_path=str(csv_path),
+        batch_size=4,
+        seq_len=10,
+        num_workers=0,
+        persistent_workers=False,
+        pin_memory=False,
+        val_size=20,
+        data_percentage=100,
+        rolling_window="2h",
+        train_minutes=12 * 60,
+        post_train_minutes=12 * 60,
+        pre_maint_minutes=120,
+        regime="per_maint",
+        cycle_id=1,
+        stride=2,
+        timestamp_col="timestamp",
+        drop_unnamed_index=True,
+        train_phases=(0, 1),
+        test_phases=(0, 1),
+        workflow_mode="per_maint_finetune_search",
+        finetune_data_policy={
+            "enabled": True,
+            "baseline_replay_fraction": 0.5,
+            "local_validation_fraction": 0.2,
+            "validation_embargo": True,
+            "shuffle_train": True,
+            "random_seed": 123,
+        },
+    )
+    dm.setup()
+
+    policy = dm.split_info["fine_tune_data_policy"]
+    assert policy["mode"] == "local_train_with_baseline_replay"
+    assert int(policy["local_train_windows"]) > 0
+    assert int(policy["local_validation_windows"]) > 0
+    assert int(policy["local_validation_embargo_windows"]) > 0
+    assert int(policy["baseline_replay_windows"]) == int(policy["local_train_windows"])
+    assert float(policy["effective_baseline_replay_fraction"]) == pytest.approx(0.5)
+    assert len(dm.train_dataset) == (
+        int(policy["baseline_replay_windows"]) + int(policy["local_train_windows"])
+    )
+    assert len(dm.val_dataset) == int(policy["local_validation_windows"])
+    assert isinstance(dm.train_dataloader().sampler, RandomSampler)
+
+
+def test_metropt_finetune_policy_uses_all_short_local_windows_without_validation(
+    tmp_path: Path,
+) -> None:
+    _ensure_test_logger(tmp_path)
+    dm = MetroPTDataLoader(
+        dataset_name="MetroPT",
+        data_path=str(tmp_path / "unused.csv"),
+        batch_size=4,
+        seq_len=200,
+        num_workers=0,
+        persistent_workers=False,
+        pin_memory=False,
+        val_size=20,
+        data_percentage=100,
+        regime="per_maint",
+        cycle_id=10,
+        stride=1,
+        workflow_mode="per_maint_finetune_search",
+        finetune_data_policy={
+            "enabled": True,
+            "baseline_replay_fraction": 0.5,
+            "local_validation_fraction": 0.2,
+            "validation_embargo": True,
+            "short_local_fallback": "train_all_fixed_min_epochs",
+            "shuffle_train": True,
+            "random_seed": 123,
+        },
+    )
+
+    # Reproduce the production cycle-10 shape from HPC: 295 local rows yield
+    # 96 windows at seq_len=200 and stride=1, fewer than the 199-window embargo.
+    baseline = np.zeros((600, 3), dtype=np.float32)
+    local = np.zeros((295, 3), dtype=np.float32)
+    dm._build_finetune_datasets([baseline, local])
+
+    policy = dm.split_info["fine_tune_data_policy"]
+    assert policy["short_local_fallback_applied"] is True
+    assert policy["validation_strategy"] == "disabled_short_local_fallback"
+    assert policy["early_stopping_eligible"] is False
+    assert policy["local_total_windows"] == 96
+    assert policy["local_train_windows"] == 96
+    assert policy["local_validation_windows"] == 0
+    assert policy["requested_local_validation_embargo_windows"] == 199
+    assert policy["local_validation_embargo_windows"] == 0
+    assert policy["baseline_replay_windows"] == 96
+    assert len(dm.train_dataset) == 192
+    assert dm.val_dataset is None
+
+
+def test_metropt_finetune_policy_allows_unsupervised_cycle_without_positive_test_windows(
+    tmp_path: Path,
+) -> None:
+    _ensure_test_logger(tmp_path)
+    csv_path = _write_synth_metropt_csv_long(tmp_path)
+
+    dm = MetroPTDataLoader(
+        dataset_name="MetroPT",
+        data_path=str(csv_path),
+        batch_size=4,
+        seq_len=10,
+        num_workers=0,
+        persistent_workers=False,
+        pin_memory=False,
+        val_size=20,
+        data_percentage=100,
+        rolling_window="2h",
+        train_minutes=12 * 60,
+        post_train_minutes=12 * 60,
+        pre_maint_minutes=120,
+        regime="per_maint",
+        cycle_id=21,
+        stride=2,
+        timestamp_col="timestamp",
+        drop_unnamed_index=True,
+        train_phases=(0, 1),
+        test_phases=(0, 1),
+        workflow_mode="per_maint_finetune_search",
+        finetune_data_policy={
+            "enabled": True,
+            "baseline_replay_fraction": 0.5,
+            "local_validation_fraction": 0.2,
+            "validation_embargo": True,
+            "shuffle_train": True,
+            "random_seed": 123,
+        },
+    )
+    dm.setup()
+
+    assert dm.split_info["test_informative_for_pdm_objective"] is False
+    assert int(dm.split_info["fine_tune_data_policy"]["local_train_windows"]) > 0
 
 
 def test_metropt_dataloader_per_maint_cycle_0_uses_phase01_test_filter_defaults(tmp_path: Path) -> None:

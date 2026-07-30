@@ -26,6 +26,7 @@ from nianetvae.search.checkpointing import (
     resolve_search_termination,
 )
 from nianetvae.search.cycle_warmstart import (
+    _apply_finetune_data_constraints,
     _find_latest_trained_cycle_artifacts_before,
     _resolve_finetune_policy,
     _resolve_warm_start_sampling,
@@ -574,6 +575,10 @@ class SearchRunner:
         state_dict = torch.load(previous_weights, map_location="cpu")
         model.load_state_dict(state_dict)
         finetune_policy = _resolve_finetune_policy(self.ctx.config)
+        finetune_policy = _apply_finetune_data_constraints(
+            finetune_policy,
+            getattr(self.ctx.datamodule, "split_info", None),
+        )
 
         Log.info(
             f"FINETUNE_START cycle_id={cycle_id:02d} source_cycle={previous_cycle_id:02d} "
@@ -586,6 +591,9 @@ class SearchRunner:
             f"finetune_learning_rate={finetune_policy['finetune_learning_rate']} "
             f"min_epochs={finetune_policy['trainer_params_override']['min_epochs']} "
             f"max_epochs={finetune_policy['trainer_params_override']['max_epochs']} "
+            f"early_stopping={str(finetune_policy['early_stopping']['enabled']).lower()} "
+            f"early_stopping_patience={finetune_policy['early_stopping']['patience']} "
+            f"short_local_fallback={str(finetune_policy['short_local_fallback_applied']).lower()} "
             "scheduler=none"
         )
         final_result = _run_training_with_model(
@@ -593,6 +601,7 @@ class SearchRunner:
             "PER_MAINT_FINETUNE",
             learning_rate=finetune_policy["finetune_learning_rate"],
             trainer_params_override=finetune_policy["trainer_params_override"],
+            early_stopping_policy=finetune_policy["early_stopping"],
             config=self.ctx.config,
             dataset_name=self.ctx.dataset_name,
             datamodule=self.ctx.datamodule,

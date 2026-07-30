@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import joblib
 from lightning.pytorch import Trainer, seed_everything
+from lightning.pytorch.callbacks import EarlyStopping
 
 from log import Log
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
@@ -133,6 +134,8 @@ def _build_artifact_contracts(datamodule, data_params: dict, scaler_file: str) -
             "test_rows": split_info.get("test_rows"),
             "train_segments": list(getattr(datamodule, "train_segment_metadata", []) or []),
             "test_segments": list(getattr(datamodule, "test_segment_metadata", []) or []),
+            "fine_tune_data_policy": split_info.get("fine_tune_data_policy"),
+            "test_informative_for_pdm_objective": split_info.get("test_informative_for_pdm_objective"),
         },
     }
 
@@ -159,10 +162,24 @@ def _build_final_trainer(
     config: dict,
     default_root_dir: str,
     trainer_params_override: dict | None = None,
+    early_stopping_policy: dict | None = None,
 ):
     trainer_params = dict(config.get('trainer_params', {}))
     if trainer_params_override:
         trainer_params.update(trainer_params_override)
+    callbacks = []
+    early_stopping_policy = dict(early_stopping_policy or {})
+    if bool(early_stopping_policy.get("enabled", False)):
+        callbacks.append(
+            EarlyStopping(
+                monitor=str(early_stopping_policy.get("monitor", "val_loss")),
+                mode=str(early_stopping_policy.get("mode", "min")),
+                patience=int(early_stopping_policy.get("patience", 2)),
+                min_delta=float(early_stopping_policy.get("min_delta", 0.0)),
+                strict=True,
+                check_finite=True,
+            )
+        )
     return Trainer(
         enable_progress_bar=True,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
@@ -171,6 +188,7 @@ def _build_final_trainer(
         log_every_n_steps=50,
         logger=False,
         enable_checkpointing=False,
+        callbacks=callbacks,
         **trainer_params
     )
 
@@ -215,6 +233,7 @@ def _run_training_with_model(
     penalty: int | float,
     learning_rate: float | None = None,
     trainer_params_override: dict | None = None,
+    early_stopping_policy: dict | None = None,
 ):
     from .objective_engine import calculate_objective_bundle
 
@@ -236,6 +255,7 @@ def _run_training_with_model(
         config=config,
         default_root_dir=final_root,
         trainer_params_override=trainer_params_override,
+        early_stopping_policy=early_stopping_policy,
     )
 
     started_at = datetime.now()
@@ -277,6 +297,12 @@ def _run_training_with_model(
         "objective_contract": objective_bundle.get("objective_contract"),
         "metrics": final_metrics,
         "anomaly_metrics": anomaly_metrics,
+        "trainer_policy": {
+            "min_epochs": effective_trainer_params.get("min_epochs"),
+            "max_epochs": effective_trainer_params.get("max_epochs"),
+            "completed_epochs": int(getattr(trainer, "current_epoch", 0)),
+            "early_stopping": dict(early_stopping_policy or {}),
+        },
     }
 
 
@@ -316,6 +342,10 @@ def _export_cycle_artifacts(
         datamodule=None,
 ):
     export_dir.mkdir(parents=True, exist_ok=True)
+    stale_status_path = export_dir / "cycle_status.json"
+    if stale_status_path.exists():
+        stale_status_path.unlink()
+        Log.info(f"STALE_CYCLE_STATUS_REMOVED path={stale_status_path}")
     model_path = export_dir / "model.pt"
     torch.save(model.state_dict(), model_path)
 
@@ -325,7 +355,6 @@ def _export_cycle_artifacts(
     scaler_path = export_dir / scaler_file
     joblib.dump(getattr(datamodule, "scaler"), scaler_path)
 
-    exp_params = config.get("exp_params", {})
     workflow_mode = str((config.get("workflow") or {}).get("mode", "")).strip().lower() or None
     seed_source = (config.get("exp_params") or {}).get("manual_seed")
     source_cycle = search_result.get("source_cycle_id")
@@ -374,6 +403,10 @@ def _export_cycle_artifacts(
             "optimizer": str(model.optimizer_name),
             "learning_rate": float(final_result["experiment"].learning_rate),
             "weight_decay": float(final_result["experiment"].weight_decay),
+            "trainer": _as_jsonable(final_result.get("trainer_policy") or {}),
+            "fine_tune_data_policy": _as_jsonable(
+                (contracts.get("split_contract") or {}).get("fine_tune_data_policy")
+            ),
         },
         "final_training_anomaly_metrics": _as_jsonable(final_result.get("anomaly_metrics") or {}),
         "provenance": provenance,
@@ -411,6 +444,10 @@ def _export_cycle_artifacts(
                 "optimizer": str(model.optimizer_name),
                 "learning_rate": float(final_result["experiment"].learning_rate),
                 "weight_decay": float(final_result["experiment"].weight_decay),
+                "trainer": _as_jsonable(final_result.get("trainer_policy") or {}),
+                "fine_tune_data_policy": _as_jsonable(
+                    (contracts.get("split_contract") or {}).get("fine_tune_data_policy")
+                ),
             },
             "obj_error": final_result["obj_error"],
             "obj_pdm": final_result.get("obj_pdm"),
@@ -434,9 +471,13 @@ def _export_cycle_artifacts(
         "sequence_contract": contracts["sequence_contract"],
         "split_contract": contracts["split_contract"],
         "training_policy": {
-            "optimizer": str(exp_params.get("optimizer", model.optimizer_name)),
-            "learning_rate": float(exp_params.get("learning_rate", final_result["experiment"].learning_rate)),
-            "weight_decay": float(exp_params.get("weight_decay", final_result["experiment"].weight_decay)),
+            "optimizer": str(model.optimizer_name),
+            "learning_rate": float(final_result["experiment"].learning_rate),
+            "weight_decay": float(final_result["experiment"].weight_decay),
+            "trainer": _as_jsonable(final_result.get("trainer_policy") or {}),
+            "fine_tune_data_policy": _as_jsonable(
+                (contracts.get("split_contract") or {}).get("fine_tune_data_policy")
+            ),
         },
     }
     summary_path = export_dir / "search_summary.json"

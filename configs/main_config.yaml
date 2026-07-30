@@ -114,7 +114,27 @@ workflow:
     # finetune_learning_rate = exp_params.learning_rate * learning_rate_scale
     learning_rate_scale: 0.1
     min_epochs: 3
-    max_epochs: 4
+    max_epochs: 10
+    # Keep the searched cycle-0 architecture fixed. For later cycles, train on
+    # recent post-maintenance windows with a controlled replay sample from the
+    # global baseline. Local validation is chronological and separated from
+    # local training by a seq_len-sized embargo to prevent overlapping windows.
+    data_policy:
+      enabled: true
+      baseline_replay_fraction: 0.50
+      local_validation_fraction: 0.20
+      validation_embargo: true
+      # If a local segment cannot support both a 200-step training sequence and
+      # a non-overlapping validation sequence, use all local windows for three
+      # fixed epochs instead of using a misleading overlapping validation set.
+      short_local_fallback: "train_all_fixed_min_epochs"
+      shuffle_train: true
+    early_stopping:
+      enabled: true
+      monitor: val_loss
+      mode: min
+      patience: 2
+      min_delta: 0.0001
 
 # Model constructor parameters passed into RNNVAE.
 model_params:

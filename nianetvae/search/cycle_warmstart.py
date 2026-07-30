@@ -41,6 +41,21 @@ def _resolve_finetune_policy(config: dict) -> dict:
             f"workflow.finetune.min_epochs={min_epochs} > max_epochs={max_epochs}."
         )
 
+    early_stopping_cfg = dict(finetune_cfg.get("early_stopping") or {})
+    early_stopping = {
+        "enabled": bool(early_stopping_cfg.get("enabled", False)),
+        "monitor": str(early_stopping_cfg.get("monitor", "val_loss")),
+        "mode": str(early_stopping_cfg.get("mode", "min")).strip().lower(),
+        "patience": int(early_stopping_cfg.get("patience", 2)),
+        "min_delta": float(early_stopping_cfg.get("min_delta", 0.0)),
+    }
+    if early_stopping["mode"] not in {"min", "max"}:
+        raise ValueError("workflow.finetune.early_stopping.mode must be 'min' or 'max'.")
+    if early_stopping["patience"] < 0:
+        raise ValueError("workflow.finetune.early_stopping.patience must be >= 0.")
+    if early_stopping["min_delta"] < 0:
+        raise ValueError("workflow.finetune.early_stopping.min_delta must be >= 0.")
+
     return {
         "base_learning_rate": base_lr,
         "learning_rate_scale": lr_scale,
@@ -49,7 +64,33 @@ def _resolve_finetune_policy(config: dict) -> dict:
             "min_epochs": min_epochs,
             "max_epochs": max_epochs,
         },
+        "early_stopping": early_stopping,
+        "short_local_fallback_applied": False,
     }
+
+
+def _apply_finetune_data_constraints(policy: dict, split_info: dict | None) -> dict:
+    """Adapt the trainer only when leakage-free local validation is impossible."""
+    resolved = {
+        **dict(policy),
+        "trainer_params_override": dict(policy.get("trainer_params_override") or {}),
+        "early_stopping": dict(policy.get("early_stopping") or {}),
+    }
+    report = dict((split_info or {}).get("fine_tune_data_policy") or {})
+    if report.get("early_stopping_eligible") is not False:
+        return resolved
+
+    min_epochs = int(resolved["trainer_params_override"]["min_epochs"])
+    resolved["trainer_params_override"]["max_epochs"] = min_epochs
+    resolved["early_stopping"]["enabled"] = False
+    resolved["early_stopping"]["disabled_reason"] = (
+        "short_local_segment_without_leakage_free_validation"
+    )
+    resolved["short_local_fallback_applied"] = True
+    resolved["short_local_fallback_reason"] = report.get(
+        "short_local_fallback_reason"
+    )
+    return resolved
 
 
 def _resolve_cycle_export_dir(cycle_id: int, config: dict, run_uuid: str | None = None):
@@ -233,6 +274,17 @@ def export_skipped_non_trainable_cycle(
     export_dir = _resolve_export_dir(config, run_uuid=run_uuid)
     export_dir.mkdir(parents=True, exist_ok=True)
     status_path = export_dir / "cycle_status.json"
+    removed_stale_artifacts = []
+    for filename in ("model.pt", "model_meta.json", "scaler.joblib", "search_summary.json"):
+        stale_path = export_dir / filename
+        if stale_path.exists():
+            stale_path.unlink()
+            removed_stale_artifacts.append(filename)
+    if removed_stale_artifacts:
+        Log.info(
+            f"STALE_CYCLE_ARTIFACTS_REMOVED cycle_id={cycle_id:02d} "
+            f"files={','.join(removed_stale_artifacts)}"
+        )
     workflow_mode = str((config.get("workflow") or {}).get("mode", "")).strip().lower() or None
     seed_source = (config.get("exp_params") or {}).get("manual_seed")
     payload = {

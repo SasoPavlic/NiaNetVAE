@@ -109,12 +109,20 @@ Notes:
 - `per_maint_finetune_search` behavior:
   - `cycle_id=0`: runs baseline architecture search to initialize the first model.
   - `cycle_id>0`: reuses latest previous trained cycle architecture/weights and performs fine-tune training.
-  - If a cycle is non-trainable (for example zero rows after phase filtering), run is skipped gracefully and `cycle_status.json` is written with `status=skipped_non_trainable`.
+  - The cycle-0 architecture and model are not searched again when the pipeline is resumed from cycle 1.
+  - If a cycle has no usable training or test rows, it is skipped gracefully and `cycle_status.json` is written with `status=skipped_non_trainable`.
+  - A cycle with usable healthy fine-tune data but no positive phase-1 test windows is still trained; its metadata marks the final-training PdM objective as non-informative.
 - Controlled fine-tune policy (cycle `>0`) is config-driven:
   - Fixed optimizer: `exp_params.optimizer` (default `Adam`).
   - Base LR: `exp_params.learning_rate` (default `0.003`).
   - Fine-tune LR: `base_lr * workflow.finetune.learning_rate_scale` (default scale `0.1`).
-  - Fine-tune epoch cap: `workflow.finetune.max_epochs` (default `3`).
+  - Local post-maintenance windows are split chronologically into training and validation data.
+  - A sequence-length embargo separates local training and validation windows so they cannot overlap.
+  - If a short local segment cannot support both training and a non-overlapping validation sequence, `short_local_fallback: train_all_fixed_min_epochs` uses every local window, disables local validation and early stopping, and trains for exactly the configured minimum of three epochs. The artifact records this fallback explicitly.
+  - `workflow.finetune.data_policy.baseline_replay_fraction` controls the share of historical baseline windows in the final fine-tune training set (default `0.50`).
+  - `workflow.finetune.data_policy.local_validation_fraction` reserves the newest local windows for validation (default `0.20`).
+  - The fine-tune epoch range is `3..10`; early stopping monitors local `val_loss` with patience `2`.
+  - Exported metadata records the requested and effective replay shares, local split sizes, embargo, seed, and completed epochs.
 - If previous cycle artifacts are missing (`model.pt`, `model_meta.json`), run exits with an explicit error.
 - Workflow mode is config-only (`workflow.mode` in YAML).
 
@@ -124,8 +132,7 @@ Notes:
 2. Docker push to Docker Hub: ```docker push username/nianet:vae```
 3. SSH into a HPC Cluster via your access credentials
 4. Copy the scripts from `slurm_scripts/` to your HPC working directory:
-   - `train_per_maint_cycles.sbatch` (single-cycle training job; cycle id passed via env)
-   - `build_cycle_manifest.sbatch` (single manifest job)
+   - `run_per_maint_job.sbatch` (single-cycle training or manifest job; mode and cycle id passed via env)
    - `submit_per_maint_pipeline.sh` (submits sequential cycle chain + final manifest dependency)
 5. Make scripts executable: ```chmod +x submit_per_maint_pipeline.sh```
 6. Make sure folders `logs`, `data`, `configs` exist in your HPC working directory.
@@ -139,6 +146,15 @@ Notes:
    - `START_CYCLE=<n> END_CYCLE=<m>`: limit submission range.
    - In auto mode, cycles with `cycle_status.json` marker `skipped_non_trainable` are treated as already handled.
 
+To rerun only the corrected fine-tuning while preserving the already searched cycle-0 model, keep the requested range at `0-21` so the rebuilt manifest still contains every cycle, but force submission to start at cycle 1:
+
+```bash
+START_CYCLE=0 END_CYCLE=21 RESUME_FROM=1 CHAIN_DEPENDENCY_TYPE=afterok IMAGE_SYNC=1 \
+  ./submit_per_maint_pipeline.sh
+```
+
+Use `IMAGE_SYNC=1` only after the updated image has been pushed. Use `IMAGE_SYNC=0` when the active HPC SIF already contains this correction. `afterok` deliberately stops the chain if one cycle fails, because each new cycle must inherit the immediately preceding corrected model. Submit once without `--detach` initially so the resolved image, cycle range, and first submitted cycle remain visible; the Slurm jobs continue after the shell command finishes.
+
 ##### Per-maint exported artifacts and manifest (for metropt consumption)
 
 1. In `configs/main_config.yaml` set:
@@ -146,7 +162,7 @@ Notes:
    - `logging_params.model_export_dir: logs/per_maint_models`
 2. Run per-maint cycles sequentially via `submit_per_maint_pipeline.sh`.
 3. Manifest generation runs automatically as the final dependent job.
-4. If you run only `train_per_maint_cycles.sbatch`, generate manifest manually:
+4. If you run only `run_per_maint_job.sbatch`, generate the manifest manually:
    ```bash
    python -m nianetvae.tools.generate_cycle_manifest --config configs/main_config.yaml --cycles 0-21
    ```
