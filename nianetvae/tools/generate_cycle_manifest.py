@@ -11,7 +11,10 @@ from pathlib import Path
 
 import yaml
 
-from nianetvae.dataloaders.metropt_dataloader import MetroPTDataLoader
+from nianetvae.dataloaders.metropt_dataloader import (
+    LEGACY_PREPROCESSING_POLICY,
+    MetroPTDataLoader,
+)
 
 
 ARTIFACT_CONTRACT_VERSION = "2.0"
@@ -90,6 +93,12 @@ def _parse_cycles(spec: str) -> list[int]:
 
 def _config_fingerprint(config: dict) -> str:
     data_params = config.get("data_params", {})
+    preprocessing_policy = data_params.get(
+        "preprocessing_policy", LEGACY_PREPROCESSING_POLICY
+    )
+    validation_split_policy = data_params.get(
+        "validation_split_policy", "window_chronological_v1"
+    )
     payload = {
         "dataset_name": data_params.get("dataset_name"),
         "data_path": data_params.get("data_path"),
@@ -104,6 +113,19 @@ def _config_fingerprint(config: dict) -> str:
         "workflow_mode": data_params.get("workflow_mode"),
         "finetune_data_policy": data_params.get("finetune_data_policy"),
     }
+    for key in (
+        "batch_size",
+        "shuffle_train",
+        "drop_last_train",
+        "train_shuffle_seed",
+    ):
+        if key in data_params:
+            payload[key] = data_params[key]
+    if preprocessing_policy != LEGACY_PREPROCESSING_POLICY:
+        payload["preprocessing_policy"] = preprocessing_policy
+        payload["binary_feature_names"] = data_params.get("binary_feature_names")
+    if validation_split_policy != "window_chronological_v1":
+        payload["validation_split_policy"] = validation_split_policy
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
@@ -147,6 +169,16 @@ def _extract_meta_provenance(metadata: dict) -> dict:
     }
     if warm_start is not None:
         out["warm_start"] = warm_start
+    for key in (
+        "mode",
+        "search_performed",
+        "initialization",
+        "source_label",
+        "expected_hash_id",
+        "retrain_from_scratch",
+    ):
+        if key in provenance:
+            out[key] = provenance.get(key)
     return out
 
 
@@ -200,6 +232,12 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
         "dataset": dataset_name,
         "regime": regime,
         "workflow_mode": workflow_mode,
+        "preprocessing_policy": config.get("data_params", {}).get(
+            "preprocessing_policy", LEGACY_PREPROCESSING_POLICY
+        ),
+        "validation_split_policy": config.get("data_params", {}).get(
+            "validation_split_policy", "window_chronological_v1"
+        ),
         "seed_source": seed_source,
         "generated_at": datetime.now().isoformat(),
         "config_fingerprint": _config_fingerprint(config),
@@ -212,6 +250,7 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
     last_trained_cycle: int | None = None
     alias_cycles: list[str] = []
     missing_cycles: list[str] = []
+    observed_preprocessing_policies: set[str] = set()
 
     for cycle_id in cycles:
         key = _cycle_key(cycle_id)
@@ -253,6 +292,7 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
                 else None
             )
             feature_contract = metadata.get("feature_contract") or {}
+            preprocessing_contract = metadata.get("preprocessing_contract") or {}
             sequence_contract = metadata.get("sequence_contract") or {}
             split_contract = metadata.get("split_contract") or {}
             entry = {
@@ -266,12 +306,31 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
                 "summary_path": summary_path_rel,
                 "contract_version": metadata.get("contract_version") or metadata.get("schema_version"),
                 "feature_hash": feature_contract.get("feature_hash"),
+                "preprocessing_policy": preprocessing_contract.get("policy")
+                or LEGACY_PREPROCESSING_POLICY,
+                "preprocessing_policy_version": preprocessing_contract.get(
+                    "policy_version"
+                )
+                or "1.0",
+                "preprocessing_contract_hash": preprocessing_contract.get(
+                    "contract_hash"
+                ),
+                "binary_passthrough_feature_count": preprocessing_contract.get(
+                    "passthrough_feature_count", 0
+                ),
                 "seq_len": sequence_contract.get("seq_len") or metadata.get("seq_len"),
                 "stride": sequence_contract.get("stride") or metadata.get("stride"),
                 "rolling_window": feature_contract.get("rolling_window") or metadata.get("rolling_window"),
                 "train_minutes": split_contract.get("train_minutes") or metadata.get("train_minutes"),
                 "post_train_minutes": split_contract.get("post_train_minutes") or metadata.get("post_train_minutes"),
                 "pre_maint_minutes": split_contract.get("pre_maint_minutes") or metadata.get("pre_maint_minutes"),
+                "validation_split_policy": split_contract.get(
+                    "validation_split_policy", "window_chronological_v1"
+                ),
+                "batch_size": split_contract.get("batch_size"),
+                "shuffle_train": split_contract.get("shuffle_train"),
+                "drop_last_train": split_contract.get("drop_last_train"),
+                "train_shuffle_seed": split_contract.get("train_shuffle_seed"),
                 "baseline_start": split_contract.get("baseline_start"),
                 "baseline_end": split_contract.get("baseline_end"),
                 "maintenance_start": split_contract.get("maintenance_start"),
@@ -284,6 +343,7 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
                 "run_uuid": metadata.get("run_uuid"),
                 "created_at": metadata.get("created_at"),
             }
+            observed_preprocessing_policies.add(str(entry["preprocessing_policy"]))
             provenance = _extract_meta_provenance(metadata)
             if provenance.get("source_cycle") is None:
                 search_payload = summary_payload.get("search", {}) if isinstance(summary_payload, dict) else {}
@@ -341,6 +401,14 @@ def build_manifest(config: dict, export_root: Path, cycles: list[int], paths_rel
     if missing_cycles:
         manifest["notes"].append(
             f"Missing cycle artifacts: {', '.join(missing_cycles)}"
+        )
+    manifest["observed_preprocessing_policies"] = sorted(
+        observed_preprocessing_policies
+    )
+    if len(observed_preprocessing_policies) > 1:
+        manifest["notes"].append(
+            "Mixed preprocessing policies are present across trained cycles; "
+            "consumers must honor each resolved cycle's preprocessing contract."
         )
     _validate_manifest_contract(manifest)
     return manifest

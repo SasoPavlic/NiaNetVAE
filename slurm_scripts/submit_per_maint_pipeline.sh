@@ -17,13 +17,14 @@ START_CYCLE="${START_CYCLE:-0}"
 END_CYCLE="${END_CYCLE:-21}"
 RESUME_FROM="${RESUME_FROM:-auto}"
 DETACHED_SUBMIT="${DETACHED_SUBMIT:-0}"
-CHAIN_DEPENDENCY_TYPE="${CHAIN_DEPENDENCY_TYPE:-afterany}"
+CHAIN_DEPENDENCY_TYPE="${CHAIN_DEPENDENCY_TYPE:-afterok}"
 
 # Cluster policy constants. Research/runtime settings should come from CONFIG_PATH.
-SEARCH_WALLTIME_BUFFER="10:00:00"
-FINETUNE_WALLTIME="08:00:00"
-MANIFEST_WALLTIME="00:30:00"
-SAFE_MAX_WALLTIME="4-00:00:00"
+SEARCH_WALLTIME_BUFFER="${SEARCH_WALLTIME_BUFFER:-10:00:00}"
+FIXED_RETRAIN_WALLTIME="${FIXED_RETRAIN_WALLTIME:-24:00:00}"
+FINETUNE_WALLTIME="${FINETUNE_WALLTIME:-08:00:00}"
+MANIFEST_WALLTIME="${MANIFEST_WALLTIME:-00:30:00}"
+SAFE_MAX_WALLTIME="${SAFE_MAX_WALLTIME:-4-00:00:00}"
 
 # Optional detached mode:
 #   ./submit_per_maint_pipeline.sh --detach
@@ -40,6 +41,11 @@ if [ "${1:-}" = "--detach" ] && [ "${DETACHED_SUBMIT}" != "1" ]; then
         CHAIN_DEPENDENCY_TYPE="${CHAIN_DEPENDENCY_TYPE}" \
         IMAGE_SYNC="${IMAGE_SYNC}" \
         IMAGE_BUILD_FAKEROOT="${IMAGE_BUILD_FAKEROOT}" \
+        SEARCH_WALLTIME_BUFFER="${SEARCH_WALLTIME_BUFFER}" \
+        FIXED_RETRAIN_WALLTIME="${FIXED_RETRAIN_WALLTIME}" \
+        FINETUNE_WALLTIME="${FINETUNE_WALLTIME}" \
+        MANIFEST_WALLTIME="${MANIFEST_WALLTIME}" \
+        SAFE_MAX_WALLTIME="${SAFE_MAX_WALLTIME}" \
         PROOT_NO_SECCOMP="${PROOT_NO_SECCOMP:-}" \
         bash "$0" > "${detach_log}" 2>&1 < /dev/null &
     detach_pid=$!
@@ -133,6 +139,7 @@ read_config_assignments() {
         env \
             CONFIG_PATH="${CONFIG_PATH}" \
             SEARCH_WALLTIME_BUFFER="${SEARCH_WALLTIME_BUFFER}" \
+            FIXED_RETRAIN_WALLTIME="${FIXED_RETRAIN_WALLTIME}" \
             FINETUNE_WALLTIME="${FINETUNE_WALLTIME}" \
             MANIFEST_WALLTIME="${MANIFEST_WALLTIME}" \
             SAFE_MAX_WALLTIME="${SAFE_MAX_WALLTIME}" \
@@ -207,6 +214,10 @@ if not config_path.is_absolute():
     config_path = Path.cwd() / config_path
 config = load_merged_config(config_path)
 workflow_mode = str((config.get("workflow") or {}).get("mode") or "per_maint_baseline_search").strip().lower()
+cycle0_mode = str(
+    ((((config.get("workflow") or {}).get("finetune") or {}).get("cycle0") or {}).get("mode"))
+    or "architecture_search"
+).strip().lower()
 nia_search = config.get("nia_search") or {}
 termination_cfg = nia_search.get("termination") or {}
 termination_type = str(termination_cfg.get("type") or "time").strip().lower()
@@ -225,10 +236,12 @@ derived_search_seconds = min(search_seconds + buffer_seconds, safe_max_seconds)
 
 values = {
     "WORKFLOW_MODE": workflow_mode,
+    "CYCLE0_MODE": cycle0_mode,
     "NIA_SEARCH_TIME": search_time,
     "NIA_TERMINATION_TYPE": termination_type,
     "NIA_TERMINATION_N_GEN": termination_n_gen,
     "DERIVED_SEARCH_WALLTIME": format_slurm_time(derived_search_seconds),
+    "FIXED_RETRAIN_WALLTIME_RESOLVED": os.environ["FIXED_RETRAIN_WALLTIME"],
     "FINETUNE_WALLTIME_RESOLVED": os.environ["FINETUNE_WALLTIME"],
     "MANIFEST_WALLTIME_RESOLVED": os.environ["MANIFEST_WALLTIME"],
     "SAFE_MAX_WALLTIME_RESOLVED": os.environ["SAFE_MAX_WALLTIME"],
@@ -291,8 +304,10 @@ walltime_for_cycle() {
     local cycle_id="$1"
     case "${WORKFLOW_MODE}" in
         per_maint_finetune_search)
-            if [ "${cycle_id}" -eq 0 ]; then
+            if [ "${cycle_id}" -eq 0 ] && [ "${CYCLE0_MODE}" = "architecture_search" ]; then
                 echo "${DERIVED_SEARCH_WALLTIME}"
+            elif [ "${cycle_id}" -eq 0 ] && [ "${CYCLE0_MODE}" = "fixed_architecture_retrain" ]; then
+                echo "${FIXED_RETRAIN_WALLTIME_RESOLVED}"
             else
                 echo "${FINETUNE_WALLTIME_RESOLVED}"
             fi
@@ -310,6 +325,7 @@ walltime_for_cycle() {
 echo "Sequential submission settings:"
 echo "  config_path=${CONFIG_PATH}"
 echo "  workflow_mode=${WORKFLOW_MODE}"
+echo "  cycle0_mode=${CYCLE0_MODE}"
 echo "  dataset_name=${DATASET_NAME_RESOLVED}"
 echo "  db_table=${DB_TABLE_NAME_RESOLVED:-n/a}"
 echo "  export_root=${EXPORT_ROOT_RESOLVED}"
@@ -321,6 +337,7 @@ echo "  nia_termination_type=${NIA_TERMINATION_TYPE}"
 echo "  nia_termination_n_gen=${NIA_TERMINATION_N_GEN:-n/a}"
 echo "  search_walltime_buffer=${SEARCH_WALLTIME_BUFFER}"
 echo "  derived_search_walltime=${DERIVED_SEARCH_WALLTIME}"
+echo "  fixed_retrain_walltime=${FIXED_RETRAIN_WALLTIME_RESOLVED}"
 echo "  finetune_walltime=${FINETUNE_WALLTIME_RESOLVED}"
 echo "  manifest_walltime=${MANIFEST_WALLTIME_RESOLVED}"
 echo "  safe_max_walltime=${SAFE_MAX_WALLTIME_RESOLVED}"
@@ -329,15 +346,19 @@ echo "  chain_dependency_type=${CHAIN_DEPENDENCY_TYPE}"
 submitted_job_ids=()
 prev_job_id=""
 
-# Sequential order: cycle k starts after cycle k-1 ends. The default afterany
-# keeps the campaign moving if one cycle fails; rerun missing cycles later with
-# RESUME_FROM=auto. Use CHAIN_DEPENDENCY_TYPE=afterok for strict fail-fast runs.
+# Sequential order: cycle k starts only after cycle k-1 succeeds by default.
+# Explicit CHAIN_DEPENDENCY_TYPE=afterany remains available for recovery work,
+# but fresh scientific campaigns must not fine-tune from a failed/missing cycle.
 for ((cid=SUBMIT_FROM; cid<=END_CYCLE; cid++)); do
     dep_args=()
     dep_info=""
     job_time="$(walltime_for_cycle "${cid}")"
     if [ -n "${prev_job_id}" ]; then
         dep_args+=(--dependency="${CHAIN_DEPENDENCY_TYPE}:${prev_job_id}")
+        if [ "${CHAIN_DEPENDENCY_TYPE}" = "afterok" ]; then
+            # Avoid leaving an entire failed chain in DependencyNeverSatisfied.
+            dep_args+=(--kill-on-invalid-dep=yes)
+        fi
         dep_info=" (depends on ${CHAIN_DEPENDENCY_TYPE}:${prev_job_id})"
     fi
     job_id=$(

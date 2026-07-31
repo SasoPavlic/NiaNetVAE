@@ -1,7 +1,7 @@
 # Main runtime configuration for NiaNetVAE.
-# Production finetune campaign for MetroPT per-maintenance experiments.
-# Cycle 0 performs NSGA-III architecture search with checkpoint resume.
-# Cycles 1..21 fine-tune from the latest previous trained cycle artifact.
+# Fixed-architecture parity campaign for MetroPT per-maintenance experiments.
+# Cycle 0 retrains the frozen winning architecture from scratch; no NSGA-III
+# search is performed. Cycles 1..21 fine-tune from the latest trained artifact.
 
 nia_search:
   nsga3:
@@ -13,9 +13,9 @@ nia_search:
     #   n_partitions=1 -> 3 individuals
     #   n_partitions=5 -> 21 individuals
     # Larger values improve tradeoff exploration but increase runtime.
-    # Production finetune cycle-0 search: p=8 -> 45 candidates per generation.
-    # With n_gen=300 this provides a high absolute ceiling while the 72-hour
-    # per-job time budget normally controls continued checkpointed runs.
+    # Inactive while workflow.finetune.cycle0.mode=fixed_architecture_retrain.
+    # If cycle 0 is switched back to architecture_search, p=8 gives 45
+    # candidates per generation; n_gen and the time budget below then apply.
     n_partitions: 8
 
   termination:
@@ -114,7 +114,26 @@ workflow:
     # finetune_learning_rate = exp_params.learning_rate * learning_rate_scale
     learning_rate_scale: 0.1
     min_epochs: 3
-    max_epochs: 10
+    max_epochs: 30
+    deterministic: true
+    # Freeze the previously selected six-gene architecture, but start from a
+    # fresh deterministic initialization so the old beta/short training is not
+    # carried into this experiment.
+    cycle0:
+      mode: "fixed_architecture_retrain"
+      solution:
+        - 0.4449878047181293
+        - 0.2487359121883298
+        - 0.820658977831709
+        - 0.041225993598863864
+        - 0.14128913523829004
+        - 0.5568593943994992
+      expected_hash_id: "097d23bcf34dbf38bf8a7e7978f164568b10884b"
+      source_label: "per_maint_vae_finetune_alarm_burden_200plus cycle_00 selected architecture"
+      retrain_from_scratch: true
+      deterministic: true
+      min_epochs: 3
+      max_epochs: 30
     # Keep the searched cycle-0 architecture fixed. For later cycles, train on
     # recent post-maintenance windows with a controlled replay sample from the
     # global baseline. Local validation is chronological and separated from
@@ -135,13 +154,14 @@ workflow:
       mode: min
       patience: 2
       min_delta: 0.0001
+      restore_best_weights: true
 
 # Model constructor parameters passed into RNNVAE.
 model_params:
   name: 'RecurrentVariationalAutoencoder'
 
-# Trainer defaults for candidate and final training passes.
-# Lower values reduce runtime; higher values may improve fit quality.
+# Search-candidate defaults remain short. Fixed cycle-0 retraining and later
+# fine-tuning use their explicit workflow overrides above.
 trainer_params:
   min_epochs: 3
   max_epochs: 4
@@ -152,7 +172,7 @@ exp_params:
   optimizer: Adam
   learning_rate: 0.003
   weight_decay: 1e-5
-  kld_weight: 0.01
+  kld_weight: 0.001
   manual_seed: 20260618
 
 # Logging, DB backend, and artifact export settings.
@@ -161,12 +181,12 @@ logging_params:
   logger_file: "RNNAutoencoder.log"
   save_dir: "logs"                  # local run outputs
   db_storage: "logs/solutions.db"   # used when db_backend=sqlite
-  db_table_name: "per_maint_vae_finetune_alarm_burden_200plus"
+  db_table_name: "per_maint_vae_binary_parity_v3"
   db_backend: "postgres"            # postgres or sqlite
   db_wait_seconds: 1800             # max wait for DB recovery before winner-selection fallback/fail
   db_wait_poll_seconds: 30          # retry poll interval while waiting for DB recovery
   export_enabled: true               # write model/meta/summary export artifacts
-  model_export_dir: "logs/per_maint_vae_finetune_alarm_burden_200plus"
+  model_export_dir: "logs/per_maint_vae_binary_parity_v3"
 
 # DataLoader runtime settings.
 # num_workers is a major speed lever for CPU-side input pipeline throughput.
@@ -174,6 +194,11 @@ data_loader_params:
   data_percentage: 100   # use subset (<100) for quick debug runs
   batch_size: 64
   val_size: 10           # percent of train windows for validation
+  # Match the standalone recurrent VAE optimizer-order contract: shuffle the
+  # training windows deterministically and keep the final partial batch.
+  shuffle_train: true
+  drop_last_train: false
+  train_shuffle_seed: 20260618
   # Memory-stable HPC profile: repeated candidate training creates many
   # DataLoader instances, so keep worker state modest between candidates.
   num_workers: 2

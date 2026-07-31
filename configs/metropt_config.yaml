@@ -16,10 +16,31 @@ data_params:
   data_path: "data/metropt_dataset/MetroPT3.csv"
   seq_len: 200
   # Placeholder; this will be overwritten at runtime based on engineered rolling features.
-  n_features: 96
+  n_features: 90
 
   # Feature engineering (must match metropt-pdm-framework).
   rolling_window: "60s"
+
+  # Versioned preprocessing contract.
+  # - standard_scaler_v1: historical behavior; standardize all engineered features.
+  # - binary_passthrough_v1: opt-in; standardize continuous-derived features but
+  #   leave rolling features derived from the declared binary controls unchanged.
+  # Both policies preserve the same feature names, order, and input dimension.
+  preprocessing_policy: "binary_passthrough_v1"
+  binary_feature_names:
+    - "COMP"
+    - "DV_eletric"
+    - "Towers"
+    - "MPG"
+    - "LPS"
+    - "Pressure_switch"
+    - "Oil_level"
+    - "Caudal_impulses"
+
+  # Split raw observations before constructing train/validation sequences.
+  # This prevents overlapping sequence windows and excludes validation rows
+  # from the fitted scaler.
+  validation_split_policy: "raw_non_overlapping_v1"
 
   # Split semantics
   train_minutes: 43200

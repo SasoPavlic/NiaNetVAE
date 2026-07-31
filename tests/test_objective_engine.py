@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from types import SimpleNamespace
 
@@ -381,6 +382,102 @@ def test_built_checkpoint_contract_keeps_state_identity_across_budget_extension(
         contract=new_contract,
     )
     manager._assert_compatible(old_contract)
+
+
+def test_checkpoint_contract_protects_preprocessing_policy() -> None:
+    base_config = {
+        "workflow": {"mode": "per_maint_finetune_search"},
+        "data_params": {
+            "dataset_name": "MetroPT",
+            "regime": "per_maint",
+            "cycle_id": 0,
+            "seq_len": 200,
+            "preprocessing_policy": "standard_scaler_v1",
+            "binary_feature_names": ["COMP"],
+        },
+        "trainer_params": {"min_epochs": 3, "max_epochs": 4},
+        "exp_params": {"optimizer": "Adam", "manual_seed": 42},
+    }
+    common = {
+        "dataset_name": "MetroPT_cycle00",
+        "algorithm_name": "NSGA3",
+        "n_partitions": 8,
+        "effective_population": 45,
+        "objective_contract": {"error_metric": "SMAPE"},
+        "selection_contract": {"method": "weighted_ideal_distance"},
+        "termination_contract": {
+            "type": "hybrid",
+            "n_gen": 300,
+            "time": "72:00:00",
+        },
+    }
+
+    legacy_contract = checkpointing.build_checkpoint_contract(
+        config=base_config,
+        **common,
+    )
+    implicit_legacy_config = copy.deepcopy(base_config)
+    implicit_legacy_config["data_params"].pop("preprocessing_policy")
+    implicit_legacy_config["data_params"].pop("binary_feature_names")
+    implicit_legacy_contract = checkpointing.build_checkpoint_contract(
+        config=implicit_legacy_config,
+        **common,
+    )
+    binary_config = copy.deepcopy(base_config)
+    binary_config["data_params"]["preprocessing_policy"] = "binary_passthrough_v1"
+    binary_contract = checkpointing.build_checkpoint_contract(
+        config=binary_config,
+        **common,
+    )
+
+    assert legacy_contract["state_fingerprint"] == implicit_legacy_contract[
+        "state_fingerprint"
+    ]
+    assert legacy_contract["state_fingerprint"] != binary_contract["state_fingerprint"]
+
+
+def test_checkpoint_contract_protects_batch_size() -> None:
+    base_config = {
+        "workflow": {"mode": "per_maint_finetune_search"},
+        "data_params": {
+            "dataset_name": "MetroPT",
+            "regime": "per_maint",
+            "cycle_id": 0,
+            "seq_len": 200,
+            "batch_size": 64,
+        },
+        "trainer_params": {"min_epochs": 3, "max_epochs": 4},
+        "exp_params": {"optimizer": "Adam", "manual_seed": 42},
+    }
+    common = {
+        "dataset_name": "MetroPT_cycle00",
+        "algorithm_name": "NSGA3",
+        "n_partitions": 8,
+        "effective_population": 45,
+        "objective_contract": {"error_metric": "SMAPE"},
+        "selection_contract": {"method": "weighted_ideal_distance"},
+        "termination_contract": {
+            "type": "hybrid",
+            "n_gen": 300,
+            "time": "72:00:00",
+        },
+    }
+
+    batch_64_contract = checkpointing.build_checkpoint_contract(
+        config=base_config,
+        **common,
+    )
+    batch_32_config = copy.deepcopy(base_config)
+    batch_32_config["data_params"]["batch_size"] = 32
+    batch_32_contract = checkpointing.build_checkpoint_contract(
+        config=batch_32_config,
+        **common,
+    )
+
+    assert batch_64_contract["data"]["batch_size"] == 64
+    assert batch_64_contract["state_fingerprint"] != batch_32_contract[
+        "state_fingerprint"
+    ]
 
 
 def test_checkpoint_save_detaches_and_load_reattaches_runtime_objects(tmp_path, monkeypatch):
@@ -1105,3 +1202,95 @@ def test_select_deterministic_pareto_winner_filters_postgres_real_rounded_penalt
             dataset_name="MetroPT_cycle20",
             penalty=objective_engine.DEFAULT_PENALTY,
         )
+
+
+def test_fixed_cycle0_retrain_never_calls_architecture_search(monkeypatch, tmp_path):
+    captured = {}
+
+    class _FixedModel:
+        def __init__(self, solution, **_config):
+            captured["solution"] = list(solution)
+            self.is_valid = True
+            self.hash_id = "fixed-hash"
+
+    config = {
+        "workflow": {
+            "mode": "per_maint_finetune_search",
+            "finetune": {
+                "early_stopping": {
+                    "enabled": True,
+                    "monitor": "val_loss",
+                    "mode": "min",
+                    "patience": 2,
+                    "min_delta": 0.0001,
+                    "restore_best_weights": True,
+                },
+                "cycle0": {
+                    "mode": "fixed_architecture_retrain",
+                    "solution": [0.1] * 6,
+                    "expected_hash_id": "fixed-hash",
+                    "source_label": "frozen winner",
+                    "retrain_from_scratch": True,
+                    "deterministic": True,
+                    "min_epochs": 3,
+                    "max_epochs": 30,
+                },
+            },
+        },
+        "data_params": {"dataset_name": "MetroPT", "cycle_id": 0},
+        "trainer_params": {"min_epochs": 3, "max_epochs": 4},
+        "exp_params": {
+            "manual_seed": 42,
+            "learning_rate": 0.003,
+            "kld_weight": 0.001,
+        },
+        "logging_params": {
+            "export_enabled": True,
+            "model_export_dir": str(tmp_path),
+        },
+    }
+    context = runner_module.SearchRuntimeContext(
+        run_uuid="run-fixed",
+        config=config,
+        conn=SimpleNamespace(),
+        datamodule=SimpleNamespace(val_dataset=[object()]),
+        dataset_name="MetroPT_cycle00",
+    )
+    runner = runner_module.SearchRunner(context)
+
+    monkeypatch.setattr(runner_module, "RNNVAE", _FixedModel)
+    monkeypatch.setattr(runner_module, "seed_everything", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        runner,
+        "solve_architecture_problem",
+        lambda: pytest.fail("architecture search must not run"),
+    )
+
+    def _fake_train(model, algorithm_name, **kwargs):
+        captured["algorithm_name"] = algorithm_name
+        captured["training_kwargs"] = kwargs
+        return {"model": model}
+
+    def _fake_export(**kwargs):
+        captured["search_result"] = kwargs["search_result"]
+        return (
+            tmp_path / "model.pt",
+            tmp_path / "model_meta.json",
+            tmp_path / "search_summary.json",
+        )
+
+    monkeypatch.setattr(runner_module, "_run_training_with_model", _fake_train)
+    monkeypatch.setattr(runner_module, "_export_cycle_artifacts", _fake_export)
+    monkeypatch.setattr(runner_module, "_resolve_export_dir", lambda *_args, **_kwargs: tmp_path)
+
+    runner.run_per_maint_finetune_search_cycle()
+
+    assert captured["solution"] == [0.1] * 6
+    assert captured["algorithm_name"] == "FIXED_ARCHITECTURE_RETRAIN"
+    assert captured["training_kwargs"]["trainer_params_override"] == {
+        "min_epochs": 3,
+        "max_epochs": 30,
+    }
+    assert captured["training_kwargs"]["deterministic"] is True
+    assert captured["search_result"]["search_performed"] is False
+    assert captured["search_result"]["initialization"] == "fresh_seeded"

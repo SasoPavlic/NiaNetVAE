@@ -32,13 +32,13 @@
   - `regime="per_maint"` with `cycle_id=0` as `pre_W1`.
   - `cycle_id=1..21` maps to Davari window order.
   - Phase `2` is excluded from train/test filtering in this adaptation.
-- **Export layout** (current default):
-  - `logs/per_maint_models/<dataset>/cycle_XX/model.pt`
-  - `logs/per_maint_models/<dataset>/cycle_XX/model_meta.json`
-  - `logs/per_maint_models/<dataset>/cycle_XX/search_summary.json`
-  - `logs/per_maint_models/<dataset>/cycle_manifest.json`
+- **Export layout** (under `logging_params.model_export_dir`):
+  - `<model_export_dir>/<dataset>/cycle_XX/model.pt`
+  - `<model_export_dir>/<dataset>/cycle_XX/model_meta.json`
+  - `<model_export_dir>/<dataset>/cycle_XX/search_summary.json`
+  - `<model_export_dir>/<dataset>/cycle_manifest.json`
 - **Schema expectations**:
-  - `model_meta.json`, `search_summary.json`, and `cycle_manifest.json` currently emit `schema_version: "1.0"`.
+  - `model_meta.json`, `search_summary.json`, and `cycle_manifest.json` currently emit `schema_version: "2.0"`.
   - Manifest paths are written relative to manifest directory (`paths_relative_to: manifest_directory`).
 
 If you change export formats, manifest fields, cycle naming, feature expectations, or model-loading assumptions, you must evaluate and update downstream `metropt-pdm-framework` compatibility in the same change set.
@@ -85,16 +85,16 @@ IMAGE_SYNC=0 CHAIN_DEPENDENCY_TYPE=afterany START_CYCLE=0 END_CYCLE=21 RESUME_FR
 ```
 
 Operational dependency rule:
-- Prefer `CHAIN_DEPENDENCY_TYPE=afterany` for long production campaigns. It keeps jobs sequential but allows later cycles to start after a failed cycle ends, avoiding multi-day downtime from `DependencyNeverSatisfied`.
-- Use `CHAIN_DEPENDENCY_TYPE=afterok` only for strict fail-fast runs where later cycles must not run unless the previous cycle exported successfully.
-- After an `afterany` campaign, rerun missing cycles with `RESUME_FROM=auto`; the script detects completed cycles by `model.pt` + `model_meta.json` or `skipped_non_trainable` status.
+- Keep the default `CHAIN_DEPENDENCY_TYPE=afterok` for fresh fine-tune and thesis-grade campaigns. A later cycle must not inherit from a missing predecessor. The submission wrapper also uses `--kill-on-invalid-dep=yes`, so a failed predecessor cancels its invalid dependents instead of leaving a stale `DependencyNeverSatisfied` chain.
+- Use `CHAIN_DEPENDENCY_TYPE=afterany` only for deliberate recovery work where predecessor continuity is not required, most commonly exploratory warm-start runs.
+- After any partial campaign, fix the failed cycle and resume from that cycle with `RESUME_FROM=<cycle_id>` or use `RESUME_FROM=auto`; the script detects completed cycles by `model.pt` + `model_meta.json` or `skipped_non_trainable` status.
 
 Warm-start versus fine-tune implication:
 - Warm-start search is naturally more tolerant of `afterany`: if one cycle fails, later cycles can warm-start from the latest available previous trained cycle and mix carry-over, perturbed, and random candidates.
 - Fine-tune also works operationally with `afterany`, but it is scientifically more fragile because it expects a previous exported model. If a predecessor failed, later fine-tune results may be less clean or may fall back depending on available artifacts. For final thesis-grade fine-tune comparisons, prefer filling missing cycles and confirming predecessor continuity before downstream evaluation.
 
 Observed HPC failure modes and current mitigations:
-- `DependencyNeverSatisfied`: usually caused by strict `afterok` after a failed cycle. Cancel stale dependent jobs and resubmit with `CHAIN_DEPENDENCY_TYPE=afterany`.
+- `DependencyNeverSatisfied`: older submissions without `--kill-on-invalid-dep=yes` can remain pending after an `afterok` predecessor fails. Cancel that stale chain, fix the failed cycle, and resubmit from it; do not switch a final fine-tune campaign to `afterany` merely to keep later cycles running.
 - OOM kill: observed with repeated candidate training and DataLoader worker state. Current mitigation is `--mem-per-gpu=64GB`, `num_workers=2`, `persistent_workers=False`, and `pin_memory=False`.
 - Time limit: observed because NSGA-III cannot stop cleanly until the active generation finishes; one slow candidate can consume hours. Current mitigation is a small first generation (`n_partitions=2`, effective population 6) plus a larger Slurm search buffer.
 - Within-cycle NSGA-III resume: when `nia_search.checkpoint.enabled=true`, rerunning the same cycle with the same checkpoint contract automatically resumes from `model_export_dir/<dataset>/cycle_XX/checkpoints/nsga3.dill`. The database remains the candidate evidence log and exact-hash duplicate guard; it is not the optimizer state.

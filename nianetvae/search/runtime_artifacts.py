@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import joblib
 from lightning.pytorch import Trainer, seed_everything
-from lightning.pytorch.callbacks import EarlyStopping
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 
 from log import Log
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
@@ -66,6 +66,13 @@ def _scaler_state_payload(scaler) -> dict:
     for attr in ("mean_", "scale_", "var_", "n_features_in_", "n_samples_seen_"):
         if hasattr(scaler, attr):
             payload[attr] = _as_jsonable(getattr(scaler, attr))
+    for attr in (
+        "nianetvae_preprocessing_policy_",
+        "nianetvae_preprocessing_policy_version_",
+        "nianetvae_passthrough_indices_",
+    ):
+        if hasattr(scaler, attr):
+            payload[attr] = _as_jsonable(getattr(scaler, attr))
     return payload
 
 
@@ -91,6 +98,66 @@ def _build_artifact_contracts(datamodule, data_params: dict, scaler_file: str) -
     scaler_state = _scaler_state_payload(scaler)
     split_info = dict(getattr(datamodule, "split_info", {}) or {})
     feature_hash = getattr(datamodule, "feature_hash", None) or _feature_hash(rolling_feature_names)
+    preprocessing_report = dict(
+        getattr(datamodule, "preprocessing_report", {})
+        or split_info.get("preprocessing_report")
+        or {}
+    )
+    preprocessing_policy = str(
+        preprocessing_report.get("policy")
+        or data_params.get("preprocessing_policy")
+        or "standard_scaler_v1"
+    )
+    preprocessing_report.setdefault("policy", preprocessing_policy)
+    preprocessing_report.setdefault("policy_version", "1.0")
+    standardized_feature_count = preprocessing_report.get(
+        "standardized_feature_count"
+    )
+    if standardized_feature_count is None:
+        standardized_feature_count = n_features
+    preprocessing_payload = {
+        "policy": preprocessing_policy,
+        "policy_version": preprocessing_report.get("policy_version"),
+        "behavior": preprocessing_report.get("behavior"),
+        "preserves_feature_order": preprocessing_report.get(
+            "preserves_feature_order", True
+        ),
+        "preserves_feature_count": preprocessing_report.get(
+            "preserves_feature_count", True
+        ),
+        "configured_binary_feature_names": list(
+            preprocessing_report.get("configured_binary_feature_names") or []
+        ),
+        "matched_binary_feature_names": list(
+            preprocessing_report.get("matched_binary_feature_names") or []
+        ),
+        "binary_derived_feature_indices": list(
+            preprocessing_report.get("binary_derived_feature_indices") or []
+        ),
+        "binary_derived_feature_names": list(
+            preprocessing_report.get("binary_derived_feature_names") or []
+        ),
+        "binary_derived_feature_count": int(
+            preprocessing_report.get("binary_derived_feature_count") or 0
+        ),
+        "applied_binary_feature_names": list(
+            preprocessing_report.get("applied_binary_feature_names") or []
+        ),
+        "passthrough_feature_indices": list(
+            preprocessing_report.get("passthrough_feature_indices") or []
+        ),
+        "passthrough_feature_names": list(
+            preprocessing_report.get("passthrough_feature_names") or []
+        ),
+        "passthrough_feature_count": int(
+            preprocessing_report.get("passthrough_feature_count") or 0
+        ),
+        "standardized_feature_indices": list(
+            preprocessing_report.get("standardized_feature_indices") or []
+        ),
+        "standardized_feature_count": int(standardized_feature_count),
+    }
+    preprocessing_contract_hash = _hash_json_payload(preprocessing_payload)
     return {
         "feature_contract": {
             "base_feature_names": list(getattr(datamodule, "base_feature_names", []) or []),
@@ -99,8 +166,19 @@ def _build_artifact_contracts(datamodule, data_params: dict, scaler_file: str) -
             "rolling_window": data_params.get("rolling_window") or getattr(datamodule, "rolling_window", None),
             "feature_hash": feature_hash,
             "n_features": n_features,
+            "binary_base_feature_names": preprocessing_payload[
+                "matched_binary_feature_names"
+            ],
+            "binary_derived_feature_names": preprocessing_payload[
+                "binary_derived_feature_names"
+            ],
+            "binary_derived_feature_indices": preprocessing_payload[
+                "binary_derived_feature_indices"
+            ],
         },
         "preprocessing_contract": {
+            **preprocessing_payload,
+            "contract_hash": preprocessing_contract_hash,
             "scaler_type": scaler_state["class"],
             "scaler_file": scaler_file,
             "scaler_feature_count": int(getattr(scaler, "n_features_in_", n_features)),
@@ -135,6 +213,16 @@ def _build_artifact_contracts(datamodule, data_params: dict, scaler_file: str) -
             "train_segments": list(getattr(datamodule, "train_segment_metadata", []) or []),
             "test_segments": list(getattr(datamodule, "test_segment_metadata", []) or []),
             "fine_tune_data_policy": split_info.get("fine_tune_data_policy"),
+            "validation_split_policy": data_params.get("validation_split_policy")
+            or getattr(datamodule, "validation_split_policy", "window_chronological_v1"),
+            "validation_split_report": split_info.get("validation_split_report")
+            or dict(getattr(datamodule, "validation_split_report", {}) or {}),
+            "batch_size": data_params.get("batch_size")
+            if data_params.get("batch_size") is not None
+            else getattr(datamodule, "batch_size", None),
+            "shuffle_train": split_info.get("shuffle_train"),
+            "drop_last_train": split_info.get("drop_last_train"),
+            "train_shuffle_seed": split_info.get("train_shuffle_seed"),
             "test_informative_for_pdm_objective": split_info.get("test_informative_for_pdm_objective"),
         },
     }
@@ -163,17 +251,33 @@ def _build_final_trainer(
     default_root_dir: str,
     trainer_params_override: dict | None = None,
     early_stopping_policy: dict | None = None,
+    deterministic: bool | None = None,
 ):
     trainer_params = dict(config.get('trainer_params', {}))
     if trainer_params_override:
         trainer_params.update(trainer_params_override)
     callbacks = []
     early_stopping_policy = dict(early_stopping_policy or {})
-    if bool(early_stopping_policy.get("enabled", False)):
+    early_stopping_enabled = bool(early_stopping_policy.get("enabled", False))
+    if early_stopping_enabled:
+        monitor = str(early_stopping_policy.get("monitor", "val_loss"))
+        mode = str(early_stopping_policy.get("mode", "min"))
+        callbacks.append(
+            ModelCheckpoint(
+                dirpath=Path(default_root_dir) / "best_checkpoints",
+                filename="best-{epoch:03d}",
+                monitor=monitor,
+                mode=mode,
+                save_top_k=1,
+                save_last=False,
+                save_weights_only=True,
+                auto_insert_metric_name=False,
+            )
+        )
         callbacks.append(
             EarlyStopping(
-                monitor=str(early_stopping_policy.get("monitor", "val_loss")),
-                mode=str(early_stopping_policy.get("mode", "min")),
+                monitor=monitor,
+                mode=mode,
                 patience=int(early_stopping_policy.get("patience", 2)),
                 min_delta=float(early_stopping_policy.get("min_delta", 0.0)),
                 strict=True,
@@ -187,10 +291,77 @@ def _build_final_trainer(
         default_root_dir=default_root_dir,
         log_every_n_steps=50,
         logger=False,
-        enable_checkpointing=False,
+        enable_checkpointing=early_stopping_enabled,
         callbacks=callbacks,
+        deterministic=bool(deterministic) if deterministic is not None else None,
         **trainer_params
     )
+
+
+def _restore_best_validation_weights(
+    experiment: RNNVAExperiment,
+    trainer: Trainer,
+    early_stopping_policy: dict | None,
+) -> dict:
+    """Restore the best validation checkpoint before calibration and export."""
+    policy = dict(early_stopping_policy or {})
+    report = {
+        "enabled": bool(policy.get("enabled", False)),
+        "requested": bool(policy.get("restore_best_weights", True)),
+        "restored_best_weights": False,
+        "best_epoch": None,
+        "best_validation_loss": None,
+        "best_checkpoint_path": None,
+    }
+    if not report["enabled"] or not report["requested"]:
+        return report
+
+    callback = next(
+        (
+            item
+            for item in getattr(trainer, "callbacks", [])
+            if isinstance(item, ModelCheckpoint)
+        ),
+        None,
+    )
+    if callback is None or not str(callback.best_model_path or "").strip():
+        raise RuntimeError(
+            "Early stopping requested best-weight restoration, but no best checkpoint was produced."
+        )
+
+    checkpoint_path = Path(callback.best_model_path)
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    state_dict = checkpoint.get("state_dict") if isinstance(checkpoint, dict) else None
+    if not isinstance(state_dict, dict) or not state_dict:
+        raise RuntimeError(
+            f"Best validation checkpoint has no state_dict: {checkpoint_path}"
+        )
+    experiment.load_state_dict(state_dict, strict=True)
+
+    best_score = getattr(callback, "best_model_score", None)
+    if best_score is not None:
+        try:
+            best_score = float(best_score.detach().cpu().item())
+        except Exception:
+            best_score = float(best_score)
+    best_epoch = checkpoint.get("epoch") if isinstance(checkpoint, dict) else None
+    report.update(
+        {
+            "restored_best_weights": True,
+            "best_epoch": int(best_epoch) if best_epoch is not None else None,
+            "best_validation_loss": best_score,
+            "best_checkpoint_path": str(checkpoint_path),
+        }
+    )
+    Log.info(
+        "BEST_WEIGHTS_RESTORED "
+        f"checkpoint={checkpoint_path} best_epoch={report['best_epoch']} "
+        f"best_validation_loss={report['best_validation_loss']}"
+    )
+    return report
 
 
 def _cleanup_candidate_runtime(trainer=None, experiment=None, model=None):
@@ -234,6 +405,7 @@ def _run_training_with_model(
     learning_rate: float | None = None,
     trainer_params_override: dict | None = None,
     early_stopping_policy: dict | None = None,
+    deterministic: bool | None = None,
 ):
     from .objective_engine import calculate_objective_bundle
 
@@ -256,10 +428,16 @@ def _run_training_with_model(
         default_root_dir=final_root,
         trainer_params_override=trainer_params_override,
         early_stopping_policy=early_stopping_policy,
+        deterministic=deterministic,
     )
 
     started_at = datetime.now()
     trainer.fit(experiment, datamodule=datamodule)
+    best_weights_report = _restore_best_validation_weights(
+        experiment,
+        trainer,
+        early_stopping_policy,
+    )
     experiment.collect_calibration_scores(datamodule.train_dataloader())
     trainer.test(experiment, datamodule=datamodule)
     ended_at = datetime.now()
@@ -302,6 +480,8 @@ def _run_training_with_model(
             "max_epochs": effective_trainer_params.get("max_epochs"),
             "completed_epochs": int(getattr(trainer, "current_epoch", 0)),
             "early_stopping": dict(early_stopping_policy or {}),
+            "deterministic": bool(deterministic) if deterministic is not None else None,
+            **best_weights_report,
         },
     }
 
@@ -366,6 +546,16 @@ def _export_cycle_artifacts(
         "seed_source": seed_source,
         "search_init_mode": search_init_mode,
     }
+    for key in (
+        "mode",
+        "search_performed",
+        "initialization",
+        "source_label",
+        "expected_hash_id",
+        "retrain_from_scratch",
+    ):
+        if key in search_result:
+            provenance[key] = _as_jsonable(search_result.get(key))
     if isinstance(warm_start_payload, dict):
         provenance["warm_start"] = _as_jsonable(warm_start_payload)
     winner_selection = search_result.get("winner_selection")
@@ -403,6 +593,10 @@ def _export_cycle_artifacts(
             "optimizer": str(model.optimizer_name),
             "learning_rate": float(final_result["experiment"].learning_rate),
             "weight_decay": float(final_result["experiment"].weight_decay),
+            "kld_weight": float((config.get("exp_params") or {}).get("kld_weight", 0.01)),
+            "batch_size": _as_jsonable(
+                (contracts.get("split_contract") or {}).get("batch_size")
+            ),
             "trainer": _as_jsonable(final_result.get("trainer_policy") or {}),
             "fine_tune_data_policy": _as_jsonable(
                 (contracts.get("split_contract") or {}).get("fine_tune_data_policy")
@@ -444,6 +638,10 @@ def _export_cycle_artifacts(
                 "optimizer": str(model.optimizer_name),
                 "learning_rate": float(final_result["experiment"].learning_rate),
                 "weight_decay": float(final_result["experiment"].weight_decay),
+                "kld_weight": float((config.get("exp_params") or {}).get("kld_weight", 0.01)),
+                "batch_size": _as_jsonable(
+                    (contracts.get("split_contract") or {}).get("batch_size")
+                ),
                 "trainer": _as_jsonable(final_result.get("trainer_policy") or {}),
                 "fine_tune_data_policy": _as_jsonable(
                     (contracts.get("split_contract") or {}).get("fine_tune_data_policy")
@@ -474,6 +672,10 @@ def _export_cycle_artifacts(
             "optimizer": str(model.optimizer_name),
             "learning_rate": float(final_result["experiment"].learning_rate),
             "weight_decay": float(final_result["experiment"].weight_decay),
+            "kld_weight": float((config.get("exp_params") or {}).get("kld_weight", 0.01)),
+            "batch_size": _as_jsonable(
+                (contracts.get("split_contract") or {}).get("batch_size")
+            ),
             "trainer": _as_jsonable(final_result.get("trainer_policy") or {}),
             "fine_tune_data_policy": _as_jsonable(
                 (contracts.get("split_contract") or {}).get("fine_tune_data_policy")

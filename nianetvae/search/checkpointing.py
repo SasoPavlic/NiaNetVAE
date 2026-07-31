@@ -28,6 +28,9 @@ _MUTABLE_BUDGET_KEYS = {
     "state_fingerprint",
     "termination",
 }
+_LEGACY_PREPROCESSING_POLICY = "standard_scaler_v1"
+_BINARY_AWARE_PREPROCESSING_POLICY = "binary_passthrough_v1"
+_LEGACY_VALIDATION_SPLIT_POLICY = "window_chronological_v1"
 
 
 class SearchCheckpointError(RuntimeError):
@@ -63,11 +66,28 @@ def _stable_hash(payload: dict[str, Any]) -> str:
 def _checkpoint_state_contract(payload: dict[str, Any]) -> dict[str, Any]:
     """Return fields that must remain unchanged while resuming optimizer state."""
     excluded = _RUNTIME_METADATA_KEYS | _MUTABLE_BUDGET_KEYS
-    return {
+    contract = {
         key: _jsonable(value)
         for key, value in payload.items()
         if key not in excluded
     }
+    data_contract = dict(contract.get("data") or {})
+    preprocessing_policy = str(
+        data_contract.get("preprocessing_policy")
+        or _LEGACY_PREPROCESSING_POLICY
+    )
+    data_contract["preprocessing_policy"] = preprocessing_policy
+    # Older schema-1.0 checkpoints did not record preprocessing because all
+    # features used the legacy scaler. Binary names only affect state identity
+    # once the opt-in policy is active.
+    if preprocessing_policy != _BINARY_AWARE_PREPROCESSING_POLICY:
+        data_contract.pop("binary_feature_names", None)
+    data_contract["validation_split_policy"] = str(
+        data_contract.get("validation_split_policy")
+        or _LEGACY_VALIDATION_SPLIT_POLICY
+    )
+    contract["data"] = data_contract
+    return contract
 
 
 def _checkpoint_state_fingerprint(payload: dict[str, Any]) -> str:
@@ -214,6 +234,13 @@ def build_checkpoint_contract(
                 "post_train_minutes",
                 "pre_maint_minutes",
                 "rolling_window",
+                "preprocessing_policy",
+                "binary_feature_names",
+                "validation_split_policy",
+                "batch_size",
+                "shuffle_train",
+                "drop_last_train",
+                "train_shuffle_seed",
                 "stride",
                 "train_phases",
                 "test_phases",

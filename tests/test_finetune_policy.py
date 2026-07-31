@@ -2,6 +2,7 @@ import pytest
 
 from nianetvae.search.cycle_warmstart import (
     _apply_finetune_data_constraints,
+    _resolve_cycle0_training_policy,
     _resolve_finetune_policy,
     export_skipped_non_trainable_cycle,
 )
@@ -14,6 +15,7 @@ def test_finetune_policy_resolves_learning_rate_epochs_and_early_stopping() -> N
                 "learning_rate_scale": 0.1,
                 "min_epochs": 3,
                 "max_epochs": 10,
+                "deterministic": True,
                 "early_stopping": {
                     "enabled": True,
                     "monitor": "val_loss",
@@ -30,6 +32,7 @@ def test_finetune_policy_resolves_learning_rate_epochs_and_early_stopping() -> N
     policy = _resolve_finetune_policy(config)
 
     assert policy["finetune_learning_rate"] == pytest.approx(0.0003)
+    assert policy["deterministic"] is True
     assert policy["trainer_params_override"] == {"min_epochs": 3, "max_epochs": 10}
     assert policy["early_stopping"] == {
         "enabled": True,
@@ -37,7 +40,67 @@ def test_finetune_policy_resolves_learning_rate_epochs_and_early_stopping() -> N
         "mode": "min",
         "patience": 2,
         "min_delta": 0.0001,
+        "restore_best_weights": True,
     }
+
+
+def test_cycle0_fixed_architecture_policy_is_explicit_and_fresh() -> None:
+    solution = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    config = {
+        "workflow": {
+            "finetune": {
+                "early_stopping": {
+                    "enabled": True,
+                    "monitor": "val_loss",
+                    "mode": "min",
+                    "patience": 2,
+                    "min_delta": 0.0001,
+                    "restore_best_weights": True,
+                },
+                "cycle0": {
+                    "mode": "fixed_architecture_retrain",
+                    "solution": solution,
+                    "expected_hash_id": "expected-hash",
+                    "retrain_from_scratch": True,
+                    "deterministic": True,
+                    "min_epochs": 3,
+                    "max_epochs": 30,
+                },
+            }
+        },
+        "trainer_params": {"min_epochs": 1, "max_epochs": 4},
+    }
+
+    policy = _resolve_cycle0_training_policy(config)
+
+    assert policy["mode"] == "fixed_architecture_retrain"
+    assert policy["search_performed"] is False
+    assert policy["solution"] == solution
+    assert policy["expected_hash_id"] == "expected-hash"
+    assert policy["initialization"] == "fresh_seeded"
+    assert policy["trainer_params_override"] == {
+        "min_epochs": 3,
+        "max_epochs": 30,
+    }
+    assert policy["early_stopping"]["restore_best_weights"] is True
+
+
+def test_cycle0_fixed_architecture_policy_rejects_weight_reuse() -> None:
+    config = {
+        "workflow": {
+            "finetune": {
+                "cycle0": {
+                    "mode": "fixed_architecture_retrain",
+                    "solution": [0.1] * 6,
+                    "expected_hash_id": "expected-hash",
+                    "retrain_from_scratch": False,
+                }
+            }
+        }
+    }
+
+    with pytest.raises(ValueError, match="retrain_from_scratch must be true"):
+        _resolve_cycle0_training_policy(config)
 
 
 def test_finetune_policy_rejects_invalid_early_stopping_mode() -> None:

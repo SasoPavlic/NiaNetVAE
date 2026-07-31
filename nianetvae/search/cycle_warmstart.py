@@ -1,10 +1,114 @@
 import json
+import math
 from datetime import datetime
 
 import numpy as np
 
 from log import Log
 from .runtime_artifacts import _as_jsonable, _resolve_export_dir
+
+
+def _resolve_early_stopping_policy(raw_policy: dict | None) -> dict:
+    raw_policy = dict(raw_policy or {})
+    policy = {
+        "enabled": bool(raw_policy.get("enabled", False)),
+        "monitor": str(raw_policy.get("monitor", "val_loss")),
+        "mode": str(raw_policy.get("mode", "min")).strip().lower(),
+        "patience": int(raw_policy.get("patience", 2)),
+        "min_delta": float(raw_policy.get("min_delta", 0.0)),
+        "restore_best_weights": bool(raw_policy.get("restore_best_weights", True)),
+    }
+    if policy["mode"] not in {"min", "max"}:
+        raise ValueError("Early-stopping mode must be 'min' or 'max'.")
+    if policy["patience"] < 0:
+        raise ValueError("Early-stopping patience must be >= 0.")
+    if not math.isfinite(policy["min_delta"]) or policy["min_delta"] < 0:
+        raise ValueError("Early-stopping min_delta must be a finite value >= 0.")
+    if policy["enabled"] and not policy["monitor"].strip():
+        raise ValueError("Early-stopping monitor must not be empty when enabled.")
+    return policy
+
+
+def _resolve_cycle0_training_policy(config: dict) -> dict:
+    """Resolve the optional fixed-architecture cycle-0 retraining contract."""
+    workflow = dict(config.get("workflow") or {})
+    finetune_cfg = dict(workflow.get("finetune") or {})
+    cycle0_cfg = dict(finetune_cfg.get("cycle0") or {})
+    raw_mode = cycle0_cfg.get("mode", "architecture_search")
+    mode = str(raw_mode).strip().lower()
+    allowed_modes = {"architecture_search", "fixed_architecture_retrain"}
+    if mode not in allowed_modes:
+        raise ValueError(
+            f"Invalid workflow.finetune.cycle0.mode={raw_mode!r}. "
+            f"Allowed values: {', '.join(sorted(allowed_modes))}."
+        )
+
+    if mode == "architecture_search":
+        return {
+            "mode": mode,
+            "search_performed": True,
+        }
+
+    raw_solution = cycle0_cfg.get("solution")
+    try:
+        solution = np.asarray(raw_solution, dtype=float).reshape(-1)
+    except Exception:
+        raise ValueError(
+            "workflow.finetune.cycle0.solution must be a finite six-value architecture vector."
+        ) from None
+    if solution.size != 6 or not np.isfinite(solution).all():
+        raise ValueError(
+            "workflow.finetune.cycle0.solution must be a finite six-value architecture vector."
+        )
+    if np.any(solution < 0.0) or np.any(solution > 1.0):
+        raise ValueError(
+            "workflow.finetune.cycle0.solution values must all be within [0, 1]."
+        )
+
+    expected_hash_id = str(cycle0_cfg.get("expected_hash_id") or "").strip()
+    if not expected_hash_id:
+        raise ValueError(
+            "workflow.finetune.cycle0.expected_hash_id is required for fixed retraining."
+        )
+    if cycle0_cfg.get("retrain_from_scratch") is not True:
+        raise ValueError(
+            "workflow.finetune.cycle0.retrain_from_scratch must be true; "
+            "Stage-3 retraining must not reuse the old weights."
+        )
+
+    trainer_params = dict(config.get("trainer_params") or {})
+    default_min_epochs = int(trainer_params.get("min_epochs", 1))
+    min_epochs = int(cycle0_cfg.get("min_epochs", default_min_epochs))
+    max_epochs = int(cycle0_cfg.get("max_epochs", 30))
+    if min_epochs < 1 or max_epochs < 1 or min_epochs > max_epochs:
+        raise ValueError(
+            "Invalid workflow.finetune.cycle0 epoch policy: require "
+            "1 <= min_epochs <= max_epochs."
+        )
+
+    early_stopping_cfg = dict(finetune_cfg.get("early_stopping") or {})
+    early_stopping_cfg.update(dict(cycle0_cfg.get("early_stopping") or {}))
+    early_stopping = _resolve_early_stopping_policy(early_stopping_cfg)
+    if not early_stopping["enabled"]:
+        raise ValueError(
+            "workflow.finetune.cycle0 fixed retraining requires early_stopping.enabled=true."
+        )
+
+    return {
+        "mode": mode,
+        "search_performed": False,
+        "solution": solution.tolist(),
+        "expected_hash_id": expected_hash_id,
+        "source_label": str(cycle0_cfg.get("source_label") or "").strip() or None,
+        "retrain_from_scratch": True,
+        "initialization": "fresh_seeded",
+        "deterministic": bool(cycle0_cfg.get("deterministic", True)),
+        "trainer_params_override": {
+            "min_epochs": min_epochs,
+            "max_epochs": max_epochs,
+        },
+        "early_stopping": early_stopping,
+    }
 
 
 def _resolve_finetune_policy(config: dict) -> dict:
@@ -41,25 +145,15 @@ def _resolve_finetune_policy(config: dict) -> dict:
             f"workflow.finetune.min_epochs={min_epochs} > max_epochs={max_epochs}."
         )
 
-    early_stopping_cfg = dict(finetune_cfg.get("early_stopping") or {})
-    early_stopping = {
-        "enabled": bool(early_stopping_cfg.get("enabled", False)),
-        "monitor": str(early_stopping_cfg.get("monitor", "val_loss")),
-        "mode": str(early_stopping_cfg.get("mode", "min")).strip().lower(),
-        "patience": int(early_stopping_cfg.get("patience", 2)),
-        "min_delta": float(early_stopping_cfg.get("min_delta", 0.0)),
-    }
-    if early_stopping["mode"] not in {"min", "max"}:
-        raise ValueError("workflow.finetune.early_stopping.mode must be 'min' or 'max'.")
-    if early_stopping["patience"] < 0:
-        raise ValueError("workflow.finetune.early_stopping.patience must be >= 0.")
-    if early_stopping["min_delta"] < 0:
-        raise ValueError("workflow.finetune.early_stopping.min_delta must be >= 0.")
+    early_stopping = _resolve_early_stopping_policy(
+        finetune_cfg.get("early_stopping")
+    )
 
     return {
         "base_learning_rate": base_lr,
         "learning_rate_scale": lr_scale,
         "finetune_learning_rate": finetune_lr,
+        "deterministic": bool(finetune_cfg.get("deterministic", False)),
         "trainer_params_override": {
             "min_epochs": min_epochs,
             "max_epochs": max_epochs,

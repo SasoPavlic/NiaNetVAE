@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 MetroPT-3 DataLoader for NiaNetVAE.
 
@@ -24,12 +22,13 @@ An explicit goal is to prevent sequence windows from crossing gaps between disjo
 we build windows within each contiguous True-run of the selected masks (baseline/post-train/test) only.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
-import os
 import platform
 import re
-from typing import Iterable, List, Optional, Sequence, Tuple, Dict
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -53,6 +52,37 @@ LIKELY_METROPT_FEATURES = [
 ]
 
 ROLLING_AGGREGATIONS = ["mean", "median", "std", "skew", "min", "max"]
+
+LEGACY_PREPROCESSING_POLICY = "standard_scaler_v1"
+BINARY_AWARE_PREPROCESSING_POLICY = "binary_passthrough_v1"
+SUPPORTED_PREPROCESSING_POLICIES = {
+    LEGACY_PREPROCESSING_POLICY,
+    BINARY_AWARE_PREPROCESSING_POLICY,
+}
+PREPROCESSING_POLICY_VERSIONS = {
+    LEGACY_PREPROCESSING_POLICY: "1.0",
+    BINARY_AWARE_PREPROCESSING_POLICY: "1.0",
+}
+LEGACY_VALIDATION_SPLIT_POLICY = "window_chronological_v1"
+LEAKAGE_FREE_VALIDATION_SPLIT_POLICY = "raw_non_overlapping_v1"
+SUPPORTED_VALIDATION_SPLIT_POLICIES = {
+    LEGACY_VALIDATION_SPLIT_POLICY,
+    LEAKAGE_FREE_VALIDATION_SPLIT_POLICY,
+}
+
+# These MetroPT channels are physical on/off controls or status indicators.
+# The binary-aware policy leaves every rolling feature derived from them in its
+# natural units instead of dividing rare state changes by a near-zero scale.
+DEFAULT_METROPT_BINARY_FEATURES = [
+    "COMP",
+    "DV_eletric",
+    "Towers",
+    "MPG",
+    "LPS",
+    "Pressure_switch",
+    "Oil_level",
+    "Caudal_impulses",
+]
 
 
 # ===== MetroPT-3 failure windows (Davari et al., 2021) =====
@@ -207,6 +237,157 @@ def _as_int_list(values: Optional[Iterable[object]], default: Sequence[int]) -> 
 def build_feature_hash(feature_names: Sequence[str]) -> str:
     payload = json.dumps(list(feature_names), separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def resolve_metropt_preprocessing_policy(value: Optional[str]) -> str:
+    """Resolve the versioned MetroPT preprocessing policy."""
+    policy = str(value or LEGACY_PREPROCESSING_POLICY).strip().lower()
+    if policy not in SUPPORTED_PREPROCESSING_POLICIES:
+        allowed = ", ".join(sorted(SUPPORTED_PREPROCESSING_POLICIES))
+        raise ValueError(
+            f"Unsupported MetroPT preprocessing_policy={value!r}. Allowed: {allowed}."
+        )
+    return policy
+
+
+def resolve_validation_split_policy(value: Optional[str]) -> str:
+    """Resolve the versioned train/validation separation policy."""
+    policy = str(value or LEGACY_VALIDATION_SPLIT_POLICY).strip().lower()
+    if policy not in SUPPORTED_VALIDATION_SPLIT_POLICIES:
+        allowed = ", ".join(sorted(SUPPORTED_VALIDATION_SPLIT_POLICIES))
+        raise ValueError(
+            f"Unsupported MetroPT validation_split_policy={value!r}. Allowed: {allowed}."
+        )
+    return policy
+
+
+def _as_feature_name_list(
+    values: Optional[Sequence[str]],
+    default: Sequence[str],
+) -> List[str]:
+    if values is None:
+        return [str(value) for value in default]
+    if isinstance(values, str):
+        return [part.strip() for part in values.split(",") if part.strip()]
+    return [str(value).strip() for value in values if str(value).strip()]
+
+
+def fit_metropt_preprocessing_scaler(
+    train_segments: Sequence[np.ndarray],
+    feature_names: Sequence[str],
+    *,
+    policy: Optional[str] = None,
+    binary_feature_names: Optional[Sequence[str]] = None,
+) -> Tuple[StandardScaler, Dict[str, object]]:
+    """Fit the selected scaler without changing feature order or dimensionality.
+
+    ``standard_scaler_v1`` reproduces the historical behavior exactly.
+    ``binary_passthrough_v1`` still fits one ordinary sklearn StandardScaler,
+    but sets mean=0 and scale=1 for rolling columns derived from declared
+    binary controls. The serialized scaler therefore remains consumable by
+    existing inference code that only calls ``transform``.
+    """
+    resolved_policy = resolve_metropt_preprocessing_policy(policy)
+    ordered_feature_names = [str(name) for name in feature_names]
+    if not ordered_feature_names:
+        raise ValueError("MetroPT preprocessing requires at least one feature name.")
+
+    scaler = StandardScaler()
+    fitted_rows = 0
+    for segment in train_segments:
+        values = np.asarray(segment)
+        if values.ndim != 2 or values.shape[1] != len(ordered_feature_names):
+            raise ValueError(
+                "MetroPT preprocessing segment shape does not match feature contract: "
+                f"shape={values.shape} features={len(ordered_feature_names)}."
+            )
+        if values.shape[0] > 0:
+            scaler.partial_fit(values)
+            fitted_rows += int(values.shape[0])
+    if fitted_rows < 1:
+        raise ValueError("MetroPT preprocessing cannot fit a scaler on zero rows.")
+
+    configured_binary_features = _as_feature_name_list(
+        binary_feature_names,
+        default=DEFAULT_METROPT_BINARY_FEATURES,
+    )
+    matched_binary_features: List[str] = []
+    binary_derived_indices: List[int] = []
+    for binary_name in configured_binary_features:
+        prefix = f"{binary_name}__"
+        matches = [
+            index
+            for index, feature_name in enumerate(ordered_feature_names)
+            if feature_name.startswith(prefix)
+        ]
+        if matches:
+            matched_binary_features.append(binary_name)
+            binary_derived_indices.extend(matches)
+    binary_derived_indices = sorted(set(binary_derived_indices))
+    binary_derived_feature_names = [
+        ordered_feature_names[index] for index in binary_derived_indices
+    ]
+
+    passthrough_indices: List[int] = []
+    passthrough_feature_names: List[str] = []
+    applied_binary_features: List[str] = []
+
+    if resolved_policy == BINARY_AWARE_PREPROCESSING_POLICY:
+        applied_binary_features = list(matched_binary_features)
+        passthrough_indices = list(binary_derived_indices)
+        if not passthrough_indices:
+            raise ValueError(
+                "binary_passthrough_v1 matched no engineered features. "
+                "Check data_params.binary_feature_names against the MetroPT columns."
+            )
+        passthrough_feature_names = [
+            ordered_feature_names[index] for index in passthrough_indices
+        ]
+        index_array = np.asarray(passthrough_indices, dtype=np.int64)
+        scaler.mean_[index_array] = 0.0
+        scaler.scale_[index_array] = 1.0
+        scaler.var_[index_array] = 1.0
+
+    # These extra attributes are safe for sklearn/joblib consumers and make the
+    # transformation self-describing even before model metadata is inspected.
+    scaler.nianetvae_preprocessing_policy_ = resolved_policy
+    scaler.nianetvae_preprocessing_policy_version_ = PREPROCESSING_POLICY_VERSIONS[
+        resolved_policy
+    ]
+    scaler.nianetvae_passthrough_indices_ = np.asarray(
+        passthrough_indices, dtype=np.int64
+    )
+
+    passthrough_index_set = set(passthrough_indices)
+    standardized_indices = [
+        index
+        for index in range(len(ordered_feature_names))
+        if index not in passthrough_index_set
+    ]
+    report: Dict[str, object] = {
+        "policy": resolved_policy,
+        "policy_version": PREPROCESSING_POLICY_VERSIONS[resolved_policy],
+        "behavior": (
+            "all_engineered_features_standardized"
+            if resolved_policy == LEGACY_PREPROCESSING_POLICY
+            else "continuous_derived_standardized_binary_derived_passthrough"
+        ),
+        "preserves_feature_order": True,
+        "preserves_feature_count": True,
+        "configured_binary_feature_names": configured_binary_features,
+        "matched_binary_feature_names": matched_binary_features,
+        "binary_derived_feature_indices": binary_derived_indices,
+        "binary_derived_feature_names": binary_derived_feature_names,
+        "binary_derived_feature_count": len(binary_derived_indices),
+        "applied_binary_feature_names": applied_binary_features,
+        "passthrough_feature_indices": passthrough_indices,
+        "passthrough_feature_names": passthrough_feature_names,
+        "passthrough_feature_count": len(passthrough_indices),
+        "standardized_feature_indices": standardized_indices,
+        "standardized_feature_count": len(standardized_indices),
+        "fitted_row_count": fitted_rows,
+    }
+    return scaler, report
 
 
 def _segments_from_mask(values: np.ndarray, mask: np.ndarray) -> List[np.ndarray]:
@@ -367,6 +548,12 @@ class MetroPTDataLoader(BaseDataLoader):
         drop_unnamed_index: bool = True,
         train_phases: Optional[Sequence[int]] = (0, 1),
         test_phases: Optional[Sequence[int]] = (0, 1),
+        preprocessing_policy: str = LEGACY_PREPROCESSING_POLICY,
+        binary_feature_names: Optional[Sequence[str]] = None,
+        validation_split_policy: str = LEGACY_VALIDATION_SPLIT_POLICY,
+        shuffle_train: bool = False,
+        drop_last_train: bool = True,
+        train_shuffle_seed: Optional[int] = None,
         workflow_mode: Optional[str] = None,
         finetune_data_policy: Optional[Dict[str, object]] = None,
         **kwargs,
@@ -395,6 +582,16 @@ class MetroPTDataLoader(BaseDataLoader):
         self.drop_unnamed_index = bool(drop_unnamed_index)
         self.train_phases = _as_int_list(train_phases, default=(0, 1))
         self.test_phases = _as_int_list(test_phases, default=(0, 1))
+        self.preprocessing_policy = resolve_metropt_preprocessing_policy(
+            preprocessing_policy
+        )
+        self.binary_feature_names = _as_feature_name_list(
+            binary_feature_names,
+            default=DEFAULT_METROPT_BINARY_FEATURES,
+        )
+        self.validation_split_policy = resolve_validation_split_policy(
+            validation_split_policy
+        )
         self.workflow_mode = str(workflow_mode or "").strip().lower()
         self.finetune_data_policy = dict(finetune_data_policy or {})
         self._finetune_data_policy_active = bool(
@@ -403,8 +600,13 @@ class MetroPTDataLoader(BaseDataLoader):
             and self.regime == "per_maint"
             and self.cycle_id > 0
         )
-        self._train_shuffle = False
-        self._train_shuffle_seed = int(self.finetune_data_policy.get("random_seed", 42))
+        self._train_shuffle = bool(shuffle_train)
+        self._train_drop_last = bool(drop_last_train)
+        self._train_shuffle_seed = int(
+            train_shuffle_seed
+            if train_shuffle_seed is not None
+            else self.finetune_data_policy.get("random_seed", 42)
+        )
 
         self.n_features: Optional[int] = None
         self.base_feature_names: List[str] = []
@@ -412,6 +614,9 @@ class MetroPTDataLoader(BaseDataLoader):
         self.rolling_aggregations: List[str] = list(ROLLING_AGGREGATIONS)
         self.feature_hash: Optional[str] = None
         self.scaler: Optional[StandardScaler] = None
+        self.preprocessing_report: Dict[str, object] = {}
+        self.validation_split_report: Dict[str, object] = {}
+        self._finetune_split_plan: Optional[Dict[str, object]] = None
         self.train_segment_metadata: List[Dict[str, object]] = []
         self.test_segment_metadata: List[Dict[str, object]] = []
         self.split_info: Dict[str, object] = {}
@@ -457,6 +662,226 @@ class MetroPTDataLoader(BaseDataLoader):
         positions = np.floor((np.arange(count, dtype=np.float64) + 0.5) * total / count).astype(np.int64)
         return positions.tolist()
 
+    def _sequence_window_count(self, row_count: int) -> int:
+        row_count = int(row_count)
+        if row_count < self.seq_len:
+            return 0
+        return 1 + (row_count - self.seq_len) // self.stride
+
+    def _overlap_embargo_window_count(self) -> int:
+        """Return the minimum skipped starts needed for disjoint raw windows."""
+        return int(max(0, self.seq_len - 1) // self.stride)
+
+    def _resolve_finetune_split_plan(self, local_row_count: int) -> Dict[str, object]:
+        """Plan the local chronological split once for scaling and datasets."""
+        if self._finetune_split_plan is not None:
+            return dict(self._finetune_split_plan)
+
+        local_total = self._sequence_window_count(local_row_count)
+        if local_total < 1:
+            raise ValueError("Fine-tune data policy produced zero local fine-tune windows.")
+        local_val_fraction = float(
+            self.finetune_data_policy.get("local_validation_fraction", 0.2)
+        )
+        local_val_windows = max(1, int(np.floor(local_total * local_val_fraction)))
+        local_val_start = local_total - local_val_windows
+        embargo_enabled = bool(
+            self.finetune_data_policy.get("validation_embargo", True)
+        )
+        requested_embargo_windows = (
+            self._overlap_embargo_window_count()
+            if embargo_enabled
+            else 0
+        )
+        local_train_stop = local_val_start - requested_embargo_windows
+        short_local_fallback = str(
+            self.finetune_data_policy.get(
+                "short_local_fallback", "train_all_fixed_min_epochs"
+            )
+        ).strip().lower()
+        fallback_applied = bool(local_train_stop < 1)
+        fallback_reason = None
+        if fallback_applied:
+            fallback_reason = (
+                "insufficient_local_windows_for_non_overlapping_train_validation_split:"
+                f"local={local_total},validation={local_val_windows},"
+                f"requested_embargo={requested_embargo_windows}"
+            )
+            if short_local_fallback == "error":
+                raise ValueError(
+                    "Fine-tune local segment is too short for chronological "
+                    "train/validation splitting with embargo: "
+                    f"local_windows={local_total}, validation_windows={local_val_windows}, "
+                    f"embargo_windows={requested_embargo_windows}."
+                )
+            local_train_indices = list(range(local_total))
+            local_val_indices: List[int] = []
+            applied_embargo_windows = 0
+            validation_strategy = "disabled_short_local_fallback"
+            early_stopping_eligible = False
+            validation_start_row = int(local_row_count)
+            scaler_local_train_rows = int(local_row_count)
+        else:
+            local_train_indices = list(range(local_train_stop))
+            local_val_indices = list(range(local_val_start, local_total))
+            applied_embargo_windows = requested_embargo_windows
+            validation_strategy = "chronological_non_overlapping_local"
+            early_stopping_eligible = True
+            validation_start_row = int(local_val_start * self.stride)
+            scaler_local_train_rows = int(
+                (local_train_stop - 1) * self.stride + self.seq_len
+            )
+            if scaler_local_train_rows > validation_start_row:
+                raise RuntimeError(
+                    "Fine-tune split planner produced overlapping raw train/validation rows."
+                )
+
+        plan: Dict[str, object] = {
+            "local_total_windows": int(local_total),
+            "local_train_indices": local_train_indices,
+            "local_validation_indices": local_val_indices,
+            "requested_local_validation_windows": int(local_val_windows),
+            "requested_embargo_windows": int(requested_embargo_windows),
+            "applied_embargo_windows": int(applied_embargo_windows),
+            "short_local_fallback": short_local_fallback,
+            "short_local_fallback_applied": fallback_applied,
+            "short_local_fallback_reason": fallback_reason,
+            "validation_strategy": validation_strategy,
+            "early_stopping_eligible": early_stopping_eligible,
+            "validation_start_row": validation_start_row,
+            "scaler_local_train_rows": scaler_local_train_rows,
+            "unused_boundary_raw_rows": int(
+                max(0, validation_start_row - scaler_local_train_rows)
+            ),
+            "validation_rows_excluded_from_scaler": int(
+                max(0, int(local_row_count) - validation_start_row)
+            ),
+            "total_local_rows_excluded_from_scaler": int(
+                max(0, int(local_row_count) - scaler_local_train_rows)
+            ),
+        }
+        self._finetune_split_plan = dict(plan)
+        return plan
+
+    def _split_raw_validation_segment(
+        self,
+        train_segments_raw: List[np.ndarray],
+    ) -> Tuple[List[np.ndarray], List[np.ndarray], Dict[str, object]]:
+        """Split the chronological validation tail before fitting preprocessing.
+
+        Validation windows are counted across the flattened, chronological
+        segment order.  The split can therefore start in an earlier segment
+        when the final post-maintenance segment is smaller than the requested
+        validation fraction.  At most one segment is split; later segments are
+        assigned wholly to validation and are excluded from scaler fitting.
+        """
+        if not train_segments_raw:
+            raise ValueError("Cannot split validation from an empty training segment list.")
+        window_counts = [self._sequence_window_count(len(segment)) for segment in train_segments_raw]
+        total_windows = int(sum(window_counts))
+        if total_windows < 2:
+            raise ValueError("Not enough training windows for chronological validation.")
+        val_windows = max(1, int(np.floor(total_windows * (float(self.val_size) / 100.0))))
+        if val_windows >= total_windows:
+            val_windows = total_windows - 1
+
+        requested_embargo_windows = self._overlap_embargo_window_count()
+        remaining_validation_windows = int(val_windows)
+        split_segment_index: Optional[int] = None
+        split_segment_validation_windows = 0
+        for segment_index in range(len(train_segments_raw) - 1, -1, -1):
+            segment_windows = int(window_counts[segment_index])
+            if segment_windows < 1:
+                continue
+            if remaining_validation_windows <= segment_windows:
+                split_segment_index = segment_index
+                split_segment_validation_windows = remaining_validation_windows
+                break
+            remaining_validation_windows -= segment_windows
+
+        if split_segment_index is None:
+            raise RuntimeError("Could not locate the raw validation split boundary.")
+
+        split_segment = train_segments_raw[split_segment_index]
+        split_segment_windows = int(window_counts[split_segment_index])
+        validation_start_window = int(
+            split_segment_windows - split_segment_validation_windows
+        )
+        train_segments = list(train_segments_raw[:split_segment_index])
+        validation_segments: List[np.ndarray]
+        applied_embargo_windows = 0
+        unused_boundary_raw_rows = 0
+        train_raw_end: Optional[int] = None
+        validation_raw_start = 0
+
+        if validation_start_window == 0:
+            # The requested tail begins exactly at this segment boundary.
+            validation_segments = list(train_segments_raw[split_segment_index:])
+        else:
+            train_stop_window = (
+                validation_start_window - requested_embargo_windows
+            )
+            if train_stop_window < 1:
+                # There is no non-overlapping training window to preserve in
+                # this segment. Assign it wholly to validation; the overshoot
+                # is bounded by the overlap embargo and keeps earlier segments
+                # available for training.
+                validation_start_window = 0
+                validation_segments = list(
+                    train_segments_raw[split_segment_index:]
+                )
+            else:
+                applied_embargo_windows = requested_embargo_windows
+                train_raw_end = int(
+                    (train_stop_window - 1) * self.stride + self.seq_len
+                )
+                validation_raw_start = int(validation_start_window * self.stride)
+                if train_raw_end > validation_raw_start:
+                    raise RuntimeError(
+                        "Raw validation split produced overlapping train/validation observations."
+                    )
+                train_segments.append(split_segment[:train_raw_end])
+                validation_segments = [
+                    split_segment[validation_raw_start:]
+                ] + list(train_segments_raw[split_segment_index + 1 :])
+                unused_boundary_raw_rows = int(
+                    validation_raw_start - train_raw_end
+                )
+
+        train_windows_actual = int(
+            sum(self._sequence_window_count(len(segment)) for segment in train_segments)
+        )
+        val_windows_actual = int(
+            sum(
+                self._sequence_window_count(len(segment))
+                for segment in validation_segments
+            )
+        )
+        if train_windows_actual < 1 or val_windows_actual < 1:
+            raise ValueError(
+                "Leakage-free chronological split produced an empty train or validation dataset."
+            )
+        validation_rows = int(sum(len(segment) for segment in validation_segments))
+        original_rows = int(sum(len(segment) for segment in train_segments_raw))
+        scaler_rows = int(sum(len(segment) for segment in train_segments))
+        report: Dict[str, object] = {
+            "policy": LEAKAGE_FREE_VALIDATION_SPLIT_POLICY,
+            "validation_strategy": "raw_chronological_non_overlapping_tail",
+            "train_windows": train_windows_actual,
+            "validation_windows": int(val_windows_actual),
+            "requested_validation_windows": int(val_windows),
+            "requested_sequence_embargo_windows": requested_embargo_windows,
+            "sequence_embargo_windows": applied_embargo_windows,
+            "split_segment_index": int(split_segment_index),
+            "train_raw_end": train_raw_end,
+            "validation_raw_start": validation_raw_start,
+            "unused_boundary_raw_rows": unused_boundary_raw_rows,
+            "validation_rows_excluded_from_scaler": validation_rows,
+            "total_rows_excluded_from_scaler": int(original_rows - scaler_rows),
+            "early_stopping_eligible": True,
+        }
+        return train_segments, validation_segments, report
+
     def _build_finetune_datasets(self, train_segments: List[np.ndarray]) -> None:
         """Build local-first fine-tune datasets with deterministic baseline replay."""
         self._validate_finetune_data_policy()
@@ -478,46 +903,18 @@ class MetroPTDataLoader(BaseDataLoader):
         if local_total < 1:
             raise ValueError("Fine-tune data policy produced zero local fine-tune windows.")
 
+        split_plan = self._resolve_finetune_split_plan(len(train_segments[-1]))
         local_val_fraction = float(self.finetune_data_policy.get("local_validation_fraction", 0.2))
-        local_val_windows = max(1, int(np.floor(local_total * local_val_fraction)))
-        local_val_start = local_total - local_val_windows
-        embargo_enabled = bool(self.finetune_data_policy.get("validation_embargo", True))
-        requested_embargo_windows = (
-            int(np.ceil(max(0, self.seq_len - 1) / float(self.stride)))
-            if embargo_enabled
-            else 0
-        )
-        local_train_stop = local_val_start - requested_embargo_windows
-        short_local_fallback = str(
-            self.finetune_data_policy.get(
-                "short_local_fallback", "train_all_fixed_min_epochs"
-            )
-        ).strip().lower()
-        fallback_applied = bool(local_train_stop < 1)
-        fallback_reason = None
-        if fallback_applied:
-            fallback_reason = (
-                "insufficient_local_windows_for_non_overlapping_train_validation_split:"
-                f"local={local_total},validation={local_val_windows},"
-                f"requested_embargo={requested_embargo_windows}"
-            )
-            if short_local_fallback == "error":
-                raise ValueError(
-                    "Fine-tune local segment is too short for chronological train/validation splitting "
-                    f"with embargo: local_windows={local_total}, validation_windows={local_val_windows}, "
-                    f"embargo_windows={requested_embargo_windows}."
-                )
-            local_train_indices = list(range(local_total))
-            local_val_indices: List[int] = []
-            applied_embargo_windows = 0
-            validation_strategy = "disabled_short_local_fallback"
-            early_stopping_eligible = False
-        else:
-            local_train_indices = list(range(local_train_stop))
-            local_val_indices = list(range(local_val_start, local_total))
-            applied_embargo_windows = requested_embargo_windows
-            validation_strategy = "chronological_non_overlapping_local"
-            early_stopping_eligible = True
+        local_val_windows = int(split_plan["requested_local_validation_windows"])
+        requested_embargo_windows = int(split_plan["requested_embargo_windows"])
+        local_train_indices = list(split_plan["local_train_indices"])
+        local_val_indices = list(split_plan["local_validation_indices"])
+        applied_embargo_windows = int(split_plan["applied_embargo_windows"])
+        short_local_fallback = str(split_plan["short_local_fallback"])
+        fallback_applied = bool(split_plan["short_local_fallback_applied"])
+        fallback_reason = split_plan["short_local_fallback_reason"]
+        validation_strategy = str(split_plan["validation_strategy"])
+        early_stopping_eligible = bool(split_plan["early_stopping_eligible"])
 
         baseline_fraction = float(self.finetune_data_policy.get("baseline_replay_fraction", 0.5))
         if baseline_fraction <= 0.0:
@@ -536,6 +933,9 @@ class MetroPTDataLoader(BaseDataLoader):
         self.train_dataset = train_parts[0] if len(train_parts) == 1 else ConcatDataset(train_parts)
         self.val_dataset = Subset(local_dataset, local_val_indices) if local_val_indices else None
         self._train_shuffle = bool(self.finetune_data_policy.get("shuffle_train", True))
+        self.split_info["shuffle_train"] = self._train_shuffle
+        self.split_info["drop_last_train"] = self._train_drop_last
+        self.split_info["train_shuffle_seed"] = self._train_shuffle_seed
 
         train_total = int(len(self.train_dataset))
         effective_baseline_fraction = (
@@ -568,6 +968,15 @@ class MetroPTDataLoader(BaseDataLoader):
             ),
             "shuffle_train": self._train_shuffle,
             "random_seed": self._train_shuffle_seed,
+            "validation_rows_excluded_from_scaler": int(
+                split_plan["validation_rows_excluded_from_scaler"]
+            ),
+            "unused_boundary_raw_rows": int(
+                split_plan["unused_boundary_raw_rows"]
+            ),
+            "total_local_rows_excluded_from_scaler": int(
+                split_plan["total_local_rows_excluded_from_scaler"]
+            ),
         }
         self.split_info["fine_tune_data_policy"] = policy_report
         Log.info(
@@ -783,13 +1192,80 @@ class MetroPTDataLoader(BaseDataLoader):
         if len(test_segments_raw) != len(test_phase_segments_raw):
             raise ValueError("Test phase segments are not aligned with test signal segments.")
 
-        scaler = StandardScaler()
-        for seg in train_segments_raw:
-            if seg.shape[0] > 0:
-                scaler.partial_fit(seg)
-        self.scaler = scaler
+        train_segments_for_dataset_raw = list(train_segments_raw)
+        scaler_fit_segments_raw = list(train_segments_raw)
+        raw_validation_segments: List[np.ndarray] = []
+        validation_split_report: Dict[str, object] = {
+            "policy": self.validation_split_policy,
+            "validation_strategy": "window_level_chronological_legacy",
+            "validation_rows_excluded_from_scaler": 0,
+        }
+        if self.validation_split_policy == LEAKAGE_FREE_VALIDATION_SPLIT_POLICY:
+            if self._finetune_data_policy_active:
+                split_plan = self._resolve_finetune_split_plan(
+                    len(train_segments_raw[-1])
+                )
+                scaler_local_train_rows = int(
+                    split_plan["scaler_local_train_rows"]
+                )
+                scaler_fit_segments_raw = list(train_segments_raw[:-1]) + [
+                    train_segments_raw[-1][:scaler_local_train_rows]
+                ]
+                validation_split_report = {
+                    "policy": self.validation_split_policy,
+                    "validation_strategy": split_plan["validation_strategy"],
+                    "validation_rows_excluded_from_scaler": split_plan[
+                        "validation_rows_excluded_from_scaler"
+                    ],
+                    "unused_boundary_raw_rows": split_plan[
+                        "unused_boundary_raw_rows"
+                    ],
+                    "total_local_rows_excluded_from_scaler": split_plan[
+                        "total_local_rows_excluded_from_scaler"
+                    ],
+                    "sequence_embargo_windows": split_plan[
+                        "applied_embargo_windows"
+                    ],
+                    "early_stopping_eligible": split_plan[
+                        "early_stopping_eligible"
+                    ],
+                    "short_local_fallback_applied": split_plan[
+                        "short_local_fallback_applied"
+                    ],
+                }
+            elif self.val_size and float(self.val_size) > 0.0:
+                (
+                    train_segments_for_dataset_raw,
+                    raw_validation_segments,
+                    validation_split_report,
+                ) = self._split_raw_validation_segment(train_segments_raw)
+                scaler_fit_segments_raw = list(train_segments_for_dataset_raw)
+            else:
+                validation_split_report = {
+                    "policy": self.validation_split_policy,
+                    "validation_strategy": "disabled_no_validation_fraction",
+                    "validation_rows_excluded_from_scaler": 0,
+                    "early_stopping_eligible": False,
+                }
 
-        train_segments = [scaler.transform(seg).astype(np.float32) for seg in train_segments_raw]
+        scaler, preprocessing_report = fit_metropt_preprocessing_scaler(
+            scaler_fit_segments_raw,
+            self.rolling_feature_names,
+            policy=self.preprocessing_policy,
+            binary_feature_names=self.binary_feature_names,
+        )
+        self.scaler = scaler
+        self.preprocessing_report = preprocessing_report
+        self.validation_split_report = dict(validation_split_report)
+
+        train_segments = [
+            scaler.transform(seg).astype(np.float32)
+            for seg in train_segments_for_dataset_raw
+        ]
+        validation_segments = [
+            scaler.transform(segment).astype(np.float32)
+            for segment in raw_validation_segments
+        ]
         test_segments = [scaler.transform(seg).astype(np.float32) for seg in test_segments_raw]
 
         train_val_ds = MetroPTSegmentedSequenceDataset(
@@ -802,7 +1278,11 @@ class MetroPTDataLoader(BaseDataLoader):
             stride=self.stride,
         )
 
-        if len(train_val_ds) < 2 and self.val_size > 0:
+        minimum_windows_before_validation = 1 if validation_segments else 2
+        if (
+            len(train_val_ds) < minimum_windows_before_validation
+            and self.val_size > 0
+        ):
             raise ValueError(
                 f"Not enough train windows to create a validation split: "
                 f"train_windows={len(train_val_ds)}, val_size={self.val_size}%"
@@ -845,6 +1325,14 @@ class MetroPTDataLoader(BaseDataLoader):
                 "rolling_feature_names": list(self.rolling_feature_names),
                 "rolling_aggregations": list(self.rolling_aggregations),
                 "feature_hash": self.feature_hash,
+                "preprocessing_policy": self.preprocessing_policy,
+                "preprocessing_policy_version": preprocessing_report.get("policy_version"),
+                "preprocessing_report": dict(preprocessing_report),
+                "validation_split_policy": self.validation_split_policy,
+                "validation_split_report": dict(validation_split_report),
+                "shuffle_train": self._train_shuffle,
+                "drop_last_train": self._train_drop_last,
+                "train_shuffle_seed": self._train_shuffle_seed,
                 "train_segments": int(len(train_segments)),
                 "test_segments": int(len(test_segments)),
                 "train_segment_metadata": self.train_segment_metadata,
@@ -857,6 +1345,13 @@ class MetroPTDataLoader(BaseDataLoader):
 
         if self._finetune_data_policy_active:
             self._build_finetune_datasets(train_segments)
+        elif validation_segments:
+            self.train_dataset = train_val_ds
+            self.val_dataset = MetroPTSegmentedSequenceDataset(
+                validation_segments,
+                seq_len=self.seq_len,
+                stride=self.stride,
+            )
         elif self.val_size and float(self.val_size) > 0.0:
             total = len(train_val_ds)
             val_windows = max(1, int(np.floor(total * (float(self.val_size) / 100.0))))
@@ -879,6 +1374,10 @@ class MetroPTDataLoader(BaseDataLoader):
                 "DATALOADER_SUMMARY "
                 f"dataset={self.dataset_name} regime={self.split_info.get('regime')} cycle_id={self.split_info.get('cycle_id')} "
                 f"n_features={self.n_features} seq_len={self.seq_len} stride={self.stride} rolling_window={self.rolling_window} "
+                f"preprocessing_policy={self.preprocessing_policy} "
+                f"validation_split_policy={self.validation_split_policy} "
+                f"validation_rows_excluded_from_scaler={validation_split_report.get('validation_rows_excluded_from_scaler', 0)} "
+                f"binary_passthrough_features={preprocessing_report.get('passthrough_feature_count', 0)} "
                 f"train_rows={self.split_info.get('train_rows')} test_rows={self.split_info.get('test_rows')} "
                 f"test_phase0_rows={self.split_info.get('test_phase0_rows')} "
                 f"test_phase1_rows={self.split_info.get('test_phase1_rows')} "
@@ -898,7 +1397,9 @@ class MetroPTDataLoader(BaseDataLoader):
             Log.warning("Train dataset is empty. Returning an empty DataLoader.")
             return self._empty_dataloader()
         persistent = bool(self.persistent_workers and self.num_workers > 0)
-        drop_last = bool(len(self.train_dataset) >= self.batch_size)
+        drop_last = bool(
+            self._train_drop_last and len(self.train_dataset) >= self.batch_size
+        )
         generator = None
         if self._train_shuffle:
             generator = torch.Generator()

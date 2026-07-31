@@ -9,10 +9,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
+from lightning.pytorch.callbacks import ModelCheckpoint
 from sklearn.preprocessing import StandardScaler
 
 from nianetvae.experiments.rnn_vae_experiment import RNNVAExperiment
-from nianetvae.search.runtime_artifacts import _export_cycle_artifacts
+from nianetvae.search.runtime_artifacts import (
+    _export_cycle_artifacts,
+    _restore_best_validation_weights,
+)
 from nianetvae.storage.experiment_storage import SQLiteConnector
 
 
@@ -49,6 +53,35 @@ class _DummyMetrics:
     MAPE = 0.4
     RMAPE = 0.5
     SMAPE = 1.25
+
+
+def test_restore_best_validation_weights_restores_checkpoint_before_export(
+    tmp_path: Path,
+) -> None:
+    model = _DummyModel()
+    with torch.no_grad():
+        model.linear.weight.zero_()
+
+    best_state = {name: torch.full_like(value, 2.5) for name, value in model.state_dict().items()}
+    checkpoint_path = tmp_path / "best.ckpt"
+    torch.save({"state_dict": best_state, "epoch": 4}, checkpoint_path)
+
+    callback = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1)
+    callback.best_model_path = str(checkpoint_path)
+    callback.best_model_score = torch.tensor(0.125)
+    trainer = SimpleNamespace(callbacks=[callback])
+
+    report = _restore_best_validation_weights(
+        model,
+        trainer,
+        {"enabled": True, "restore_best_weights": True},
+    )
+
+    assert torch.allclose(model.linear.weight, torch.full_like(model.linear.weight, 2.5))
+    assert report["restored_best_weights"] is True
+    assert report["best_epoch"] == 4
+    assert report["best_validation_loss"] == pytest.approx(0.125)
+    assert report["best_checkpoint_path"] == str(checkpoint_path)
 
 
 def test_sqlite_objective_only_schema_and_insert(tmp_path: Path):
@@ -241,6 +274,24 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
         rolling_aggregations=["mean", "median", "std", "skew", "min", "max"],
         feature_hash=None,
         scaler=scaler,
+        preprocessing_report={
+            "policy": "binary_passthrough_v1",
+            "policy_version": "1.0",
+            "behavior": "continuous_derived_standardized_binary_derived_passthrough",
+            "preserves_feature_order": True,
+            "preserves_feature_count": True,
+            "configured_binary_feature_names": ["sensor_0"],
+            "matched_binary_feature_names": ["sensor_0"],
+            "binary_derived_feature_indices": [0],
+            "binary_derived_feature_names": ["sensor_0__mean"],
+            "binary_derived_feature_count": 1,
+            "applied_binary_feature_names": ["sensor_0"],
+            "passthrough_feature_indices": [0],
+            "passthrough_feature_names": ["sensor_0__mean"],
+            "passthrough_feature_count": 1,
+            "standardized_feature_indices": list(range(1, 90)),
+            "standardized_feature_count": 89,
+        },
         train_segment_metadata=[
             {"start": "2020-04-11T00:00:00", "end": "2020-04-11T23:59:00", "rows": 10}
         ],
@@ -255,6 +306,7 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
             "cycle_id": 0,
             "n_features": 90,
             "seq_len": 200,
+            "batch_size": 64,
             "stride": 1,
             "rolling_window": "60s",
             "train_minutes": 1440,
@@ -348,9 +400,18 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
     assert meta["feature_contract"]["rolling_window"] == "60s"
     assert meta["preprocessing_contract"]["scaler_feature_count"] == 90
     assert meta["preprocessing_contract"]["scaler_file"] == "scaler.joblib"
+    assert meta["preprocessing_contract"]["policy"] == "binary_passthrough_v1"
+    assert meta["preprocessing_contract"]["policy_version"] == "1.0"
+    assert meta["preprocessing_contract"]["passthrough_feature_indices"] == [0]
+    assert meta["preprocessing_contract"]["passthrough_feature_names"] == [
+        "sensor_0__mean"
+    ]
+    assert len(meta["preprocessing_contract"]["contract_hash"]) == 64
+    assert meta["feature_contract"]["binary_derived_feature_indices"] == [0]
     assert meta["sequence_contract"]["seq_len"] == 200
     assert meta["sequence_contract"]["stride"] == 1
     assert meta["split_contract"]["train_segments"] == datamodule.train_segment_metadata
+    assert meta["split_contract"]["batch_size"] == 64
     assert summary["schema_version"] == "2.0"
     assert summary["artifacts"]["scaler_file"] == "scaler.joblib"
     assert meta["winner_selection"]["method"] == "weighted_ideal_distance"
@@ -359,8 +420,12 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
     assert meta["training_policy"]["optimizer"] == "Adam"
     assert meta["training_policy"]["learning_rate"] == 0.003
     assert meta["training_policy"]["weight_decay"] == 0.0
+    assert meta["training_policy"]["kld_weight"] == 0.01
+    assert meta["training_policy"]["batch_size"] == 64
     final_training = summary["final_training"]
     assert final_training["training_policy"]["optimizer"] == "Adam"
+    assert final_training["training_policy"]["batch_size"] == 64
+    assert summary["training_policy"]["batch_size"] == 64
     assert final_training["obj_error"] == 1.25
     assert final_training["obj_pdm"] == 0.33
     assert final_training["obj_alarm_burden"] == 0.10
@@ -370,6 +435,86 @@ def test_export_artifacts_include_objective_and_selection_provenance(tmp_path: P
     assert "complexity" not in final_training
     assert "fitness" not in final_training
     assert "window_auprc" not in final_training["anomaly_metrics"]
+
+
+def test_fixed_retrain_provenance_is_exported_in_model_metadata(
+    tmp_path: Path,
+) -> None:
+    export_dir = tmp_path / "MetroPT" / "cycle_00"
+    export_dir.mkdir(parents=True)
+    model = _DummyModel()
+    scaler = StandardScaler().fit(np.arange(270, dtype=float).reshape(3, 90))
+    datamodule = SimpleNamespace(
+        scaler=scaler,
+        rolling_feature_names=[f"sensor_{index}" for index in range(90)],
+        base_feature_names=[f"sensor_{index}" for index in range(15)],
+        rolling_aggregations=["mean", "median", "std", "skew", "min", "max"],
+        feature_hash="feature-hash",
+        preprocessing_report={"policy": "standard_scaler_v1", "policy_version": "1.0"},
+        split_info={},
+        train_segment_metadata=[],
+        test_segment_metadata=[],
+    )
+    config = {
+        "data_params": {
+            "dataset_name": "MetroPT",
+            "regime": "per_maint",
+            "cycle_id": 0,
+            "n_features": 90,
+            "seq_len": 200,
+            "stride": 1,
+        },
+        "workflow": {"mode": "per_maint_finetune_search"},
+        "exp_params": {"manual_seed": 42, "kld_weight": 0.001},
+        "logging_params": {},
+    }
+    final_result = {
+        "experiment": SimpleNamespace(learning_rate=0.003, weight_decay=0.0),
+        "started_at": datetime(2026, 7, 30, 9, 0, 0),
+        "ended_at": datetime(2026, 7, 30, 9, 0, 1),
+        "duration_s": 1.0,
+        "obj_error": 1.0,
+        "obj_pdm": 0.5,
+        "obj_alarm_burden": 0.2,
+        "pdm_signal_quality": 0.5,
+        "diagnostic_params": 1.0,
+        "diagnostic_macs": 1.0,
+        "diagnostic_macs_reason": None,
+        "objective_reason": None,
+        "objective_contract": {},
+        "metrics": {},
+        "anomaly_metrics": {},
+        "trainer_policy": {},
+    }
+    search_result = {
+        "mode": "fixed_architecture_retrain",
+        "search_performed": False,
+        "initialization": "fresh_seeded",
+        "source_label": "frozen cycle-0 winner",
+        "expected_hash_id": "dummy-hash",
+        "retrain_from_scratch": True,
+    }
+
+    _, meta_path, _ = _export_cycle_artifacts(
+        export_dir=export_dir,
+        model=model,
+        best_solution=np.asarray([0.1] * 6, dtype=float),
+        best_algorithm="FIXED_ARCHITECTURE_RETRAIN",
+        search_result=search_result,
+        final_result=final_result,
+        config=config,
+        dataset_name="MetroPT_cycle00",
+        run_uuid="fixed-retrain-test",
+        datamodule=datamodule,
+    )
+
+    provenance = json.loads(meta_path.read_text(encoding="utf-8"))["provenance"]
+    assert provenance["mode"] == "fixed_architecture_retrain"
+    assert provenance["search_performed"] is False
+    assert provenance["initialization"] == "fresh_seeded"
+    assert provenance["source_label"] == "frozen cycle-0 winner"
+    assert provenance["expected_hash_id"] == "dummy-hash"
+    assert provenance["retrain_from_scratch"] is True
 
 
 def test_experiment_uses_fixed_adam_training_policy():

@@ -18,8 +18,9 @@ from nianetvae.dataloaders.wadi_dataloader import WADIDataLoader
 from nianetvae.dataloaders.yahoo_dataloader import YahooA1DataLoader
 from nianetvae.dataloaders.metropt_dataloader import MetroPTDataLoader
 from nianetvae.search.runner import SearchRunner, SearchRuntimeContext
+from nianetvae.search.cycle_warmstart import _resolve_cycle0_training_policy
 from nianetvae.storage.experiment_storage import get_db_connector
-import nianetvae.experiments.metrics_evaluation
+import nianetvae.experiments.metrics_evaluation  # noqa: F401
 
 ALLOWED_WORKFLOW_MODES = {"per_maint_baseline_search", "per_maint_finetune_search", "per_maint_warmstart_search"}
 ALLOWED_ERROR_OBJECTIVE_METRICS = {"MAE", "MSE", "RMSE", "MAPE", "RMAPE", "SMAPE"}
@@ -112,6 +113,7 @@ def _config_summary_line(config: dict) -> str:
     workflow_mode = workflow.get("mode")
     finetune_cfg = workflow.get("finetune") or {}
     finetune_data_policy = finetune_cfg.get("data_policy") or {}
+    cycle0_cfg = finetune_cfg.get("cycle0") or {}
     parts = [
         "CONFIG_SUMMARY",
         f"workflow_mode={_value_or_na(workflow_mode)}",
@@ -121,9 +123,13 @@ def _config_summary_line(config: dict) -> str:
         f"seq_len={_value_or_na(data_params.get('seq_len'))}",
         f"batch_size={_value_or_na(data_params.get('batch_size'))}",
         f"n_features={_value_or_na(data_params.get('n_features'))}",
+        f"preprocessing_policy={_value_or_na(data_params.get('preprocessing_policy', 'standard_scaler_v1'))}",
+        f"validation_split_policy={_value_or_na(data_params.get('validation_split_policy', 'window_chronological_v1'))}",
         f"min_epochs={_value_or_na(trainer_params.get('min_epochs'))}",
         f"max_epochs={_value_or_na(trainer_params.get('max_epochs'))}",
         f"finetune_max_epochs={_value_or_na(finetune_cfg.get('max_epochs'))}",
+        f"cycle0_mode={_value_or_na(cycle0_cfg.get('mode', 'architecture_search'))}",
+        f"cycle0_expected_hash={_value_or_na(cycle0_cfg.get('expected_hash_id'))}",
         f"finetune_baseline_replay_fraction={_value_or_na(finetune_data_policy.get('baseline_replay_fraction'))}",
         f"finetune_local_validation_fraction={_value_or_na(finetune_data_policy.get('local_validation_fraction'))}",
         f"finetune_short_local_fallback={_value_or_na(finetune_data_policy.get('short_local_fallback'))}",
@@ -422,14 +428,28 @@ def _resolve_training_policy(config: dict) -> dict:
             f"Invalid exp_params.weight_decay={raw_weight_decay!r}. Expected finite float >= 0."
         )
 
+    raw_kld_weight = exp_params.get("kld_weight", 0.01)
+    try:
+        kld_weight = float(raw_kld_weight)
+    except Exception:
+        raise ValueError(
+            f"Invalid exp_params.kld_weight={raw_kld_weight!r}. Expected finite float >= 0."
+        ) from None
+    if not math.isfinite(kld_weight) or kld_weight < 0:
+        raise ValueError(
+            f"Invalid exp_params.kld_weight={raw_kld_weight!r}. Expected finite float >= 0."
+        )
+
     exp_params["optimizer"] = optimizer_name
     exp_params["learning_rate"] = learning_rate
     exp_params["weight_decay"] = weight_decay
+    exp_params["kld_weight"] = kld_weight
     config["exp_params"] = exp_params
     return {
         "optimizer": optimizer_name,
         "learning_rate": learning_rate,
         "weight_decay": weight_decay,
+        "kld_weight": kld_weight,
     }
 
 
@@ -479,6 +499,7 @@ def _training_policy_contract_line(contract: dict) -> str:
         f"optimizer={_value_or_na(contract.get('optimizer'))} "
         f"learning_rate={_value_or_na(contract.get('learning_rate'))} "
         f"weight_decay={_value_or_na(contract.get('weight_decay'))} "
+        f"kld_weight={_value_or_na(contract.get('kld_weight'))} "
         "search_space=architecture_only"
     )
 
@@ -616,6 +637,8 @@ if __name__ == '__main__':
         _resolve_nsga3_search_config(config)
         objective_contract = _resolve_objective_contract(config)
         training_policy_contract = _resolve_training_policy(config)
+        if workflow_mode == "per_maint_finetune_search":
+            _resolve_cycle0_training_policy(config)
         winner_selection_contract = _resolve_winner_selection_contract(config)
     except ValueError as exc:
         _err(str(exc))

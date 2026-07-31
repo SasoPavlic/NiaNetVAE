@@ -191,8 +191,14 @@ def test_resolve_training_policy_defaults_and_validation() -> None:
 
     contract = main._resolve_training_policy(cfg)
 
-    assert contract == {"optimizer": "Adam", "learning_rate": 0.003, "weight_decay": 0.0}
+    assert contract == {
+        "optimizer": "Adam",
+        "learning_rate": 0.003,
+        "weight_decay": 0.0,
+        "kld_weight": 0.01,
+    }
     assert cfg["exp_params"]["optimizer"] == "Adam"
+    assert cfg["exp_params"]["kld_weight"] == 0.01
 
 
 def test_resolve_training_policy_rejects_invalid_values() -> None:
@@ -204,6 +210,9 @@ def test_resolve_training_policy_rejects_invalid_values() -> None:
 
     with pytest.raises(ValueError, match="exp_params.weight_decay"):
         main._resolve_training_policy({"exp_params": {"optimizer": "Adam", "weight_decay": -1}})
+
+    with pytest.raises(ValueError, match="exp_params.kld_weight"):
+        main._resolve_training_policy({"exp_params": {"optimizer": "Adam", "kld_weight": -0.1}})
 
 
 def test_validate_pdm_objective_scope_accepts_metropt_per_maint() -> None:

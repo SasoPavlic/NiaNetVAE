@@ -74,7 +74,7 @@ You can run the NiaNet script once your setup is complete.
 
 ##### Running NiaNetVAE script with Docker:
 
-```docker build --tag spartan300/nianet:vae . ```
+```docker build --tag spartan300/nianet:vaepymoo . ```
 
 ```
 docker run \
@@ -107,7 +107,7 @@ Notes:
   - Runs a full architecture search for the selected cycle.
   - Does not reuse previous-cycle architecture or weights.
 - `per_maint_finetune_search` behavior:
-  - `cycle_id=0`: runs baseline architecture search to initialize the first model.
+  - `cycle_id=0`: follows `workflow.finetune.cycle0.mode`. The backward-compatible default `architecture_search` searches normally. `fixed_architecture_retrain` rebuilds the declared six-gene architecture with fresh seeded weights and does not call NSGA-III.
   - `cycle_id>0`: reuses latest previous trained cycle architecture/weights and performs fine-tune training.
   - The cycle-0 architecture and model are not searched again when the pipeline is resumed from cycle 1.
   - If a cycle has no usable training or test rows, it is skipped gracefully and `cycle_status.json` is written with `status=skipped_non_trainable`.
@@ -121,15 +121,30 @@ Notes:
   - If a short local segment cannot support both training and a non-overlapping validation sequence, `short_local_fallback: train_all_fixed_min_epochs` uses every local window, disables local validation and early stopping, and trains for exactly the configured minimum of three epochs. The artifact records this fallback explicitly.
   - `workflow.finetune.data_policy.baseline_replay_fraction` controls the share of historical baseline windows in the final fine-tune training set (default `0.50`).
   - `workflow.finetune.data_policy.local_validation_fraction` reserves the newest local windows for validation (default `0.20`).
-  - The fine-tune epoch range is `3..10`; early stopping monitors local `val_loss` with patience `2`.
-  - Exported metadata records the requested and effective replay shares, local split sizes, embargo, seed, and completed epochs.
+  - The v3 parity campaign allows `3..30` epochs; early stopping monitors local `val_loss` with patience `2`, then explicitly restores the best validation checkpoint before calibration, testing, and export.
+  - `raw_non_overlapping_v1` separates validation at the raw-row level before scaler fitting. Validation windows cannot share observations with training windows, and every validation row is excluded from fitted preprocessing statistics.
+  - The v3 loader uses batch size `64`, shuffles training windows with a recorded seed, and retains the final partial batch, matching the standalone recurrent VAE optimization order.
+  - Exported metadata records the configured batch size, requested and effective replay shares, local split sizes, excluded scaler rows, embargo, shuffle/drop-last policy, seed, completed epochs, and best-checkpoint restoration.
 - If previous cycle artifacts are missing (`model.pt`, `model_meta.json`), run exits with an explicit error.
 - Workflow mode is config-only (`workflow.mode` in YAML).
+
+##### MetroPT preprocessing policy
+
+`data_params.preprocessing_policy` is a versioned model-input contract:
+
+- `standard_scaler_v1` is the backward-compatible default and applies the historical `StandardScaler` transformation to every engineered rolling feature.
+- `binary_passthrough_v1` is opt-in. Continuous-derived rolling features remain standardized, while rolling features derived from the binary controls listed in `data_params.binary_feature_names` use identity scaling (`mean=0`, `scale=1`). This prevents rare binary state changes from being amplified by a near-zero fitted standard deviation.
+
+Both policies preserve the engineered feature names, order, count, and model input dimensionality. Exported model metadata records the policy, its version, the exact passthrough names and indices, and a preprocessing-contract hash. A missing policy in an older schema-v2 artifact is interpreted as `standard_scaler_v1`.
+
+##### Fixed-architecture v3 parity campaign
+
+The checked-in v3 configuration freezes the previously selected cycle-0 architecture (`097d23bcf34dbf38bf8a7e7978f164568b10884b`) but trains it from scratch. It uses KL beta `0.001`, a 30-epoch ceiling, deterministic training, leakage-free chronological validation, and best-weight restoration. Cycles 1..21 inherit the newly trained weights and continue through the corrected local-plus-baseline replay policy. The export root is `logs/per_maint_vae_binary_parity_v3`, so the earlier corrected campaign is not overwritten.
 
 ##### Running NiaNetVAE script with HPC SLURM:
 
 1. First build an image with docker (above example)
-2. Docker push to Docker Hub: ```docker push username/nianet:vae```
+2. Docker push to Docker Hub: ```docker push spartan300/nianet:vaepymoo```
 3. SSH into a HPC Cluster via your access credentials
 4. Copy the scripts from `slurm_scripts/` to your HPC working directory:
    - `run_per_maint_job.sbatch` (single-cycle training or manifest job; mode and cycle id passed via env)
@@ -144,7 +159,16 @@ Notes:
    - `RESUME_FROM=auto` (default): starts from first missing cycle artifact.
    - `RESUME_FROM=<cycle_id>`: force resume from a specific cycle.
    - `START_CYCLE=<n> END_CYCLE=<m>`: limit submission range.
-   - In auto mode, cycles with `cycle_status.json` marker `skipped_non_trainable` are treated as already handled.
+    - In auto mode, cycles with `cycle_status.json` marker `skipped_non_trainable` are treated as already handled.
+
+For the fresh v3 campaign, submit from cycle 0. `afterok` is now the default and downstream jobs are cancelled when a required predecessor fails, preventing invalid fine-tuning and stale `DependencyNeverSatisfied` chains:
+
+```bash
+START_CYCLE=0 END_CYCLE=21 RESUME_FROM=0 IMAGE_SYNC=1 \
+  ./submit_per_maint_pipeline.sh
+```
+
+The wrapper assigns the fixed cycle-0 retrain a 24-hour safety limit and later fine-tune cycles an 8-hour limit. These are scheduling ceilings, not requested training durations; early stopping can finish sooner. Both remain environment-overridable.
 
 To rerun only the corrected fine-tuning while preserving the already searched cycle-0 model, keep the requested range at `0-21` so the rebuilt manifest still contains every cycle, but force submission to start at cycle 1:
 
@@ -159,7 +183,7 @@ Use `IMAGE_SYNC=1` only after the updated image has been pushed. Use `IMAGE_SYNC
 
 1. In `configs/main_config.yaml` set:
    - `logging_params.export_enabled: true`
-   - `logging_params.model_export_dir: logs/per_maint_models`
+   - `logging_params.model_export_dir` to a new campaign-specific directory (the checked-in v3 configuration uses `logs/per_maint_vae_binary_parity_v3`).
 2. Run per-maint cycles sequentially via `submit_per_maint_pipeline.sh`.
 3. Manifest generation runs automatically as the final dependent job.
 4. If you run only `run_per_maint_job.sbatch`, generate the manifest manually:
@@ -167,13 +191,13 @@ Use `IMAGE_SYNC=1` only after the updated image has been pushed. Use `IMAGE_SYNC
    python -m nianetvae.tools.generate_cycle_manifest --config configs/main_config.yaml --cycles 0-21
    ```
 5. This writes:
-   - `logs/per_maint_models/MetroPT/cycle_XX/model.pt`
-   - `logs/per_maint_models/MetroPT/cycle_XX/model_meta.json`
-   - `logs/per_maint_models/MetroPT/cycle_XX/search_summary.json`
-   - `logs/per_maint_models/MetroPT/cycle_XX/cycle_status.json` (only for skipped non-trainable cycles)
-   - `logs/per_maint_models/MetroPT/cycle_manifest.json`
+   - `<model_export_dir>/MetroPT/cycle_XX/model.pt`
+   - `<model_export_dir>/MetroPT/cycle_XX/model_meta.json`
+   - `<model_export_dir>/MetroPT/cycle_XX/search_summary.json`
+   - `<model_export_dir>/MetroPT/cycle_XX/cycle_status.json` (only for skipped non-trainable cycles)
+   - `<model_export_dir>/MetroPT/cycle_manifest.json`
 6. Manifest artifact paths are stored relative to the manifest directory for cross-platform portability (HPC Linux -> local Windows).
-7. Manifest now includes top-level `workflow_mode` (for example `per_maint_finetune_search`) to make run context explicit downstream.
+7. Manifest includes top-level `workflow_mode` and `preprocessing_policy`. Each trained-cycle entry also records its effective preprocessing policy, version, contract hash, and binary passthrough feature count.
 
 ### HELP ⚠️
 

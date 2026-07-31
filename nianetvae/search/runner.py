@@ -28,6 +28,7 @@ from nianetvae.search.checkpointing import (
 from nianetvae.search.cycle_warmstart import (
     _apply_finetune_data_constraints,
     _find_latest_trained_cycle_artifacts_before,
+    _resolve_cycle0_training_policy,
     _resolve_finetune_policy,
     _resolve_warm_start_sampling,
     export_skipped_non_trainable_cycle as _export_skipped_non_trainable_cycle,
@@ -541,8 +542,105 @@ class SearchRunner:
         cycle_id = int(cycle_id)
 
         if cycle_id == 0:
-            Log.info("FINETUNE_MODE cycle_id=0 uses per_maint_baseline_search for initial architecture.")
-            self.solve_architecture_problem()
+            cycle0_policy = _resolve_cycle0_training_policy(self.ctx.config)
+            if cycle0_policy["mode"] == "architecture_search":
+                Log.info(
+                    "FINETUNE_MODE cycle_id=0 uses per_maint_baseline_search "
+                    "for initial architecture."
+                )
+                self.solve_architecture_problem()
+                return
+
+            best_solution = np.asarray(cycle0_policy["solution"], dtype=float)
+            seed = int((self.ctx.config.get("exp_params") or {}).get("manual_seed", 42))
+            seed_everything(seed, workers=True)
+            model = RNNVAE(best_solution, **self.ctx.config)
+            if not model.is_valid:
+                raise ValueError(
+                    "Configured fixed cycle-0 solution produced an invalid architecture."
+                )
+            actual_hash_id = str(model.hash_id)
+            expected_hash_id = str(cycle0_policy["expected_hash_id"])
+            if actual_hash_id != expected_hash_id:
+                raise ValueError(
+                    "Fixed cycle-0 architecture hash mismatch: "
+                    f"expected={expected_hash_id}, actual={actual_hash_id}. "
+                    "Check the solution, feature dimension, and mapping contract."
+                )
+            if (
+                cycle0_policy["early_stopping"]["enabled"]
+                and getattr(self.ctx.datamodule, "val_dataset", None) is None
+            ):
+                raise ValueError(
+                    "Fixed cycle-0 retraining requires a non-empty chronological "
+                    "validation dataset for early stopping."
+                )
+
+            trainer_override = dict(cycle0_policy["trainer_params_override"])
+            early_stopping = dict(cycle0_policy["early_stopping"])
+            deterministic = bool(cycle0_policy["deterministic"])
+            base_learning_rate = float(
+                (self.ctx.config.get("exp_params") or {}).get("learning_rate", 0.003)
+            )
+            Log.info(
+                "FIXED_ARCHITECTURE_RETRAIN_START "
+                f"cycle_id=00 hash_id={actual_hash_id} initialization=fresh_seeded "
+                f"seed={seed} learning_rate={base_learning_rate} "
+                f"kld_weight={(self.ctx.config.get('exp_params') or {}).get('kld_weight')} "
+                f"min_epochs={trainer_override['min_epochs']} "
+                f"max_epochs={trainer_override['max_epochs']} "
+                f"early_stopping={str(early_stopping['enabled']).lower()} "
+                f"restore_best_weights={str(early_stopping['restore_best_weights']).lower()} "
+                f"deterministic={str(deterministic).lower()}"
+            )
+            final_result = _run_training_with_model(
+                model,
+                "FIXED_ARCHITECTURE_RETRAIN",
+                learning_rate=base_learning_rate,
+                trainer_params_override=trainer_override,
+                early_stopping_policy=early_stopping,
+                deterministic=deterministic,
+                config=self.ctx.config,
+                dataset_name=self.ctx.dataset_name,
+                datamodule=self.ctx.datamodule,
+                penalty=self.ctx.penalty,
+            )
+
+            if not bool(
+                self.ctx.config.get("logging_params", {}).get("export_enabled", False)
+            ):
+                return
+            current_cycle_dir = _resolve_export_dir(
+                self.ctx.config,
+                run_uuid=self.ctx.run_uuid,
+            )
+            search_result = {
+                "mode": "fixed_architecture_retrain",
+                "search_performed": False,
+                "initialization": "fresh_seeded",
+                "source_label": cycle0_policy.get("source_label"),
+                "expected_hash_id": expected_hash_id,
+                "selected_hash": actual_hash_id,
+                "selected_solution": _as_jsonable(best_solution),
+                "retrain_from_scratch": True,
+            }
+            model_path, meta_path, summary_path = _export_cycle_artifacts(
+                export_dir=current_cycle_dir,
+                model=final_result["model"],
+                best_solution=best_solution,
+                best_algorithm="FIXED_ARCHITECTURE_RETRAIN",
+                search_result=search_result,
+                final_result=final_result,
+                config=self.ctx.config,
+                dataset_name=self.ctx.dataset_name,
+                run_uuid=self.ctx.run_uuid,
+                datamodule=self.ctx.datamodule,
+            )
+            Log.info(
+                f"MODEL_EXPORT_READY dir={current_cycle_dir} "
+                f"weights={model_path.name} meta={meta_path.name} "
+                f"summary={summary_path.name}"
+            )
             return
 
         previous_source = _find_latest_trained_cycle_artifacts_before(
@@ -593,6 +691,7 @@ class SearchRunner:
             f"max_epochs={finetune_policy['trainer_params_override']['max_epochs']} "
             f"early_stopping={str(finetune_policy['early_stopping']['enabled']).lower()} "
             f"early_stopping_patience={finetune_policy['early_stopping']['patience']} "
+            f"deterministic={str(finetune_policy['deterministic']).lower()} "
             f"short_local_fallback={str(finetune_policy['short_local_fallback_applied']).lower()} "
             "scheduler=none"
         )
@@ -602,6 +701,7 @@ class SearchRunner:
             learning_rate=finetune_policy["finetune_learning_rate"],
             trainer_params_override=finetune_policy["trainer_params_override"],
             early_stopping_policy=finetune_policy["early_stopping"],
+            deterministic=finetune_policy["deterministic"],
             config=self.ctx.config,
             dataset_name=self.ctx.dataset_name,
             datamodule=self.ctx.datamodule,
