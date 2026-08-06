@@ -1,250 +1,54 @@
-<p align="center"><img src=".github/NiaNetLogo.png" alt="NiaPy" title="NiaNet"/></p>
+# NiaNetVAE controlled MetroPT study
 
----
-![PyPI - Python Version](https://img.shields.io/badge/python-3.10-blue)
-[![GitHub license](https://img.shields.io/badge/license-MIT-green)](https://github.com/SasoPavlic/NiaNet/blob/main/LICENSE)
+This repository is a MetroPT-only research system for comparing global and per-maintenance anomaly detectors under one shared experimental contract. It owns the complete path from frozen data preparation and NiaNetVAE architecture search to event-level predictive-maintenance evaluation.
 
-## NiaNetVAE: Designing and Constructing Variational Recurrent Autoencoders using Nature-Inspired Algorithms
+The legacy multi-dataset runtime, model-specific preprocessing paths, PostgreSQL candidate state, schema-v2 export bridge, and separate downstream evaluation runtime are intentionally unsupported.
 
-### Next Generation 🧬
+## Controlled workflows
 
-This code is based on the original [NiaNet](https://github.com/SasoPavlic/NiaNet) version, which is where it all began. It was then followed by [NiaNetCAE](https://github.com/SasoPavlic/NiaNetCAE) version.
+| Workflow | Model | Update strategy |
+|---|---|---|
+| `iforest_static` | Isolation Forest | Initial baseline only |
+| `iforest_per_maintenance` | Isolation Forest | Refit after trainable maintenance cycles |
+| `sae_static` | Recurrent sparse autoencoder | Initial baseline only |
+| `vae_static` | Recurrent variational autoencoder | Initial baseline only |
+| `nianetvae_per_maintenance` | Searched recurrent VAE | Sequential fine-tuning |
 
-### Description 📝
+All workflows use the same MetroPT preparation, frozen preprocessing, calibration timestamps, sequence-anchor evaluation population, risk construction, threshold selection, and event metrics. This is a controlled system comparison rather than a causal architecture-versus-adaptation ablation.
 
-NiaNetVAE is a sophisticated framework for designing and optimizing variational autoencoders (VAEs) with recurrent neural network (RNN) layers. This includes layers such as GRU (Gated Recurrent Unit) and LSTM (Long Short-Term Memory) using PyTorch. The framework leverages nature-inspired algorithms to efficiently explore the hyperparameter space and VAE architectures to achieve optimal encoding and decoding performance.
+## Local setup
 
-### What It Can Do? 👀
+The controlled environment uses Python 3.11 and exact direct-dependency versions:
 
-* **Construct Novel RNN-VAR-AE Architectures**: Utilizes nature-inspired algorithms to design recurrent variational autoencoders (RNN-VAR-AEs) with RNN, LSTM, and GRU layers.
-* **Versatile Time-Series Analysis**: Can be applied to any time-series dataset with numerical values to discover efficient encoding and decoding architectures.
-
-### Installation ✅
-
-To install NiaNetVAE using pip3 (pending publication to PyPi):
-
-```sh
-pip3 install nianetvae
+```powershell
+poetry env use C:\Users\sasop\AppData\Local\Programs\Python\Python311\python.exe
+poetry install --sync
+poetry run python main.py --config configs/metropt_study.yaml validate-config
+poetry run pytest -q
 ```
 
-### Documentation 📘
+Safe PyCharm review consists of configuration validation, the full tests, and the synthetic end-to-end integration test. `prepare` reads the real MetroPT dataset and initializes an artifact root. Production `search` and `run-all` workloads belong on Slurm.
 
-The purpose of this paper is to get an understanding of the NiaNetVAE approach.
+## CLI
 
-**TODO - Future Journal:**
-[NiaNetVAE for anomaly detection in time-series]()
-
-### Examples
-
-Usage examples can be found [here](nianetcae/experiments). Currently, there is an example for finding the appropriate Recurrent Variational Autoencoder on ECG 500 Dataset.
-
-### Getting started 🔨
-
-##### Create your own example:
-
-1. Replace the dataset in [data](data) folder.
-2. Modify the parameters in [main_config.py](configs/main_config.yaml)
-2. Adjust the dataloader logic in [dataloaders](nianetvae/dataloaders) folder.
-3. Specify the search space in [rnn_vae.py](nianetvae/models/rnn_vae.py) from your problem domain.
-3. Redesign objective/search behavior in [runner.py](nianetvae/search/runner.py) and [objective_engine.py](nianetvae/search/objective_engine.py) based on your optimization.
-
-##### Changing dataset:
-
-Once the dataset is changed, dataloaders needs to be modified to be able for forwarding new shape of data to models.
-
-
-##### Specify the search space:
-
-Set the boundaries of your search space as presented in [rnn_vae.py](nianetvae/models/rnn_vae.py).
-
-The following dimensions can be modified:
-
-* **Topology shape:** (symmetrical, asymmetrical)
-* **Layer type:** (RNN, LSTM, GRU)
-* **Layer step:** (Determined by dataset shape)
-* **Number of layers:** (Determined by dataset shape)
-* **Activation functions:** (ELU, RELU, Leaky RELU, RRELU, SELU, CELU, GELU, TANH)
-
-Current methodology note:
-- optimizer is **not** part of the searched genome,
-- all candidates are trained with the same fixed policy from `exp_params`,
-- default fixed policy is `Adam` with shared learning-rate / weight-decay settings.
-
-You can run the NiaNet script once your setup is complete.
-
-##### Running NiaNetVAE script with Docker:
-
-```docker build --tag spartan300/nianet:vaepymoo . ```
-
-```
-docker run \
-  --name=nianet-vae \
-  -it \
-  -v $(pwd)/logs:/app/nianetvae/logs \
-  -v $(pwd)/data:/app/data \
-  -v $(pwd)/configs:/app/configs \
-  -w="/app" \
-  --shm-size 8G \
-  --gpus all spartan300/nianet:vae \
-  python main.py
+```powershell
+poetry run python main.py --config configs/metropt_study.yaml validate-config
+poetry run python main.py --config configs/metropt_study.yaml prepare
+poetry run python main.py --config configs/metropt_study.yaml search
+poetry run python main.py --config configs/metropt_study.yaml run --workflow iforest_static
+poetry run python main.py --config configs/metropt_study.yaml finalize --workflow iforest_static
+poetry run python main.py --config configs/metropt_study.yaml compare
+poetry run python main.py --config configs/metropt_study.yaml validate-study
 ```
 
-##### Running NiaNetVAE script with Poetry [help](https://github.com/python-poetry/poetry/issues/4231#issuecomment-1182766775):
-1. Run the installation via ```poetry install ```
-2. Then run the task with```poetry run poe autoinstall-torch-cuda```
+Use a new `artifacts.study_id` after any input, controlled constant, architecture-search contract, or implementation change. Completed schema-1.0 evidence is accepted only when `validate-study` succeeds.
 
-##### Workflow Mode
+## Production execution
 
-Set `workflow.mode` in `configs/main_config.yaml`:
-
-- `per_maint_baseline_search` (default): independent per-cycle architecture-search workflow.
-- `per_maint_finetune_search`: Experiment A workflow.
-- `per_maint_warmstart_search`: per-cycle warm-started architecture search.
-
-Notes:
-- All workflow modes are per-maintenance workflows and require `data_params.regime: "per_maint"` and `data_params.cycle_id` to be set. The Slurm pipeline sets these with `--cycle-id`.
-- `per_maint_baseline_search` behavior:
-  - Runs a full architecture search for the selected cycle.
-  - Does not reuse previous-cycle architecture or weights.
-- `per_maint_finetune_search` behavior:
-  - `cycle_id=0`: follows `workflow.finetune.cycle0.mode`. The backward-compatible default `architecture_search` searches normally. `fixed_architecture_retrain` rebuilds the declared six-gene architecture with fresh seeded weights and does not call NSGA-III.
-  - `cycle_id>0`: reuses latest previous trained cycle architecture/weights and performs fine-tune training.
-  - The cycle-0 architecture and model are not searched again when the pipeline is resumed from cycle 1.
-  - If a cycle has no usable training or test rows, it is skipped gracefully and `cycle_status.json` is written with `status=skipped_non_trainable`.
-  - A cycle with usable healthy fine-tune data but no positive phase-1 test windows is still trained; its metadata marks the final-training PdM objective as non-informative.
-- Controlled fine-tune policy (cycle `>0`) is config-driven:
-  - Fixed optimizer: `exp_params.optimizer` (default `Adam`).
-  - Base LR: `exp_params.learning_rate` (default `0.003`).
-  - Fine-tune LR: `base_lr * workflow.finetune.learning_rate_scale` (default scale `0.1`).
-  - Local post-maintenance windows are split chronologically into training and validation data.
-  - A sequence-length embargo separates local training and validation windows so they cannot overlap.
-  - If a short local segment cannot support both training and a non-overlapping validation sequence, `short_local_fallback: train_all_fixed_min_epochs` uses every local window, disables local validation and early stopping, and trains for exactly the configured minimum of three epochs. The artifact records this fallback explicitly.
-  - `workflow.finetune.data_policy.baseline_replay_fraction` controls the share of historical baseline windows in the final fine-tune training set (default `0.50`).
-  - `workflow.finetune.data_policy.local_validation_fraction` reserves the newest local windows for validation (default `0.20`).
-  - The v3 parity campaign allows `3..30` epochs; early stopping monitors local `val_loss` with patience `2`, then explicitly restores the best validation checkpoint before calibration, testing, and export.
-  - `raw_non_overlapping_v1` separates validation at the raw-row level before scaler fitting. Validation windows cannot share observations with training windows, and every validation row is excluded from fitted preprocessing statistics.
-  - The v3 loader uses batch size `64`, shuffles training windows with a recorded seed, and retains the final partial batch, matching the standalone recurrent VAE optimization order.
-  - Exported metadata records the configured batch size, requested and effective replay shares, local split sizes, excluded scaler rows, embargo, shuffle/drop-last policy, seed, completed epochs, and best-checkpoint restoration.
-- If previous cycle artifacts are missing (`model.pt`, `model_meta.json`), run exits with an explicit error.
-- Workflow mode is config-only (`workflow.mode` in YAML).
-
-##### MetroPT preprocessing policy
-
-`data_params.preprocessing_policy` is a versioned model-input contract:
-
-- `standard_scaler_v1` is the backward-compatible default and applies the historical `StandardScaler` transformation to every engineered rolling feature.
-- `binary_passthrough_v1` is opt-in. Continuous-derived rolling features remain standardized, while rolling features derived from the binary controls listed in `data_params.binary_feature_names` use identity scaling (`mean=0`, `scale=1`). This prevents rare binary state changes from being amplified by a near-zero fitted standard deviation.
-
-Both policies preserve the engineered feature names, order, count, and model input dimensionality. Exported model metadata records the policy, its version, the exact passthrough names and indices, and a preprocessing-contract hash. A missing policy in an older schema-v2 artifact is interpreted as `standard_scaler_v1`.
-
-##### Fixed-architecture v3 parity campaign
-
-The checked-in v3 configuration freezes the previously selected cycle-0 architecture (`097d23bcf34dbf38bf8a7e7978f164568b10884b`) but trains it from scratch. It uses KL beta `0.001`, a 30-epoch ceiling, deterministic training, leakage-free chronological validation, and best-weight restoration. Cycles 1..21 inherit the newly trained weights and continue through the corrected local-plus-baseline replay policy. The export root is `logs/per_maint_vae_binary_parity_v3`, so the earlier corrected campaign is not overwritten.
-
-##### Running NiaNetVAE script with HPC SLURM:
-
-1. First build an image with docker (above example)
-2. Docker push to Docker Hub: ```docker push spartan300/nianet:vaepymoo```
-3. SSH into a HPC Cluster via your access credentials
-4. Copy the scripts from `slurm_scripts/` to your HPC working directory:
-   - `run_per_maint_job.sbatch` (single-cycle training or manifest job; mode and cycle id passed via env)
-   - `submit_per_maint_pipeline.sh` (submits sequential cycle chain + final manifest dependency)
-5. Make scripts executable: ```chmod +x submit_per_maint_pipeline.sh```
-6. Make sure folders `logs`, `data`, `configs` exist in your HPC working directory.
-7. Submit the full pipeline (sequential cycles + final manifest):
-   ```bash
-   ./submit_per_maint_pipeline.sh
-   ```
-8. Optional resume controls:
-   - `RESUME_FROM=auto` (default): starts from first missing cycle artifact.
-   - `RESUME_FROM=<cycle_id>`: force resume from a specific cycle.
-   - `START_CYCLE=<n> END_CYCLE=<m>`: limit submission range.
-    - In auto mode, cycles with `cycle_status.json` marker `skipped_non_trainable` are treated as already handled.
-
-For the fresh v3 campaign, submit from cycle 0. `afterok` is now the default and downstream jobs are cancelled when a required predecessor fails, preventing invalid fine-tuning and stale `DependencyNeverSatisfied` chains:
+Submit heavy work through the provided Slurm scripts:
 
 ```bash
-START_CYCLE=0 END_CYCLE=21 RESUME_FROM=0 IMAGE_SYNC=1 \
-  ./submit_per_maint_pipeline.sh
+IMAGE_SYNC=0 CONFIG_PATH=configs/metropt_study.yaml bash slurm_scripts/submit_study.sh
 ```
 
-The wrapper assigns the fixed cycle-0 retrain a 24-hour safety limit and later fine-tune cycles an 8-hour limit. These are scheduling ceilings, not requested training durations; early stopping can finish sooner. Both remain environment-overridable.
-
-To rerun only the corrected fine-tuning while preserving the already searched cycle-0 model, keep the requested range at `0-21` so the rebuilt manifest still contains every cycle, but force submission to start at cycle 1:
-
-```bash
-START_CYCLE=0 END_CYCLE=21 RESUME_FROM=1 CHAIN_DEPENDENCY_TYPE=afterok IMAGE_SYNC=1 \
-  ./submit_per_maint_pipeline.sh
-```
-
-Use `IMAGE_SYNC=1` only after the updated image has been pushed. Use `IMAGE_SYNC=0` when the active HPC SIF already contains this correction. `afterok` deliberately stops the chain if one cycle fails, because each new cycle must inherit the immediately preceding corrected model. Submit once without `--detach` initially so the resolved image, cycle range, and first submitted cycle remain visible; the Slurm jobs continue after the shell command finishes.
-
-##### Per-maint exported artifacts and manifest (for metropt consumption)
-
-1. In `configs/main_config.yaml` set:
-   - `logging_params.export_enabled: true`
-   - `logging_params.model_export_dir` to a new campaign-specific directory (the checked-in v3 configuration uses `logs/per_maint_vae_binary_parity_v3`).
-2. Run per-maint cycles sequentially via `submit_per_maint_pipeline.sh`.
-3. Manifest generation runs automatically as the final dependent job.
-4. If you run only `run_per_maint_job.sbatch`, generate the manifest manually:
-   ```bash
-   python -m nianetvae.tools.generate_cycle_manifest --config configs/main_config.yaml --cycles 0-21
-   ```
-5. This writes:
-   - `<model_export_dir>/MetroPT/cycle_XX/model.pt`
-   - `<model_export_dir>/MetroPT/cycle_XX/model_meta.json`
-   - `<model_export_dir>/MetroPT/cycle_XX/search_summary.json`
-   - `<model_export_dir>/MetroPT/cycle_XX/cycle_status.json` (only for skipped non-trainable cycles)
-   - `<model_export_dir>/MetroPT/cycle_manifest.json`
-6. Manifest artifact paths are stored relative to the manifest directory for cross-platform portability (HPC Linux -> local Windows).
-7. Manifest includes top-level `workflow_mode` and `preprocessing_policy`. Each trained-cycle entry also records its effective preprocessing policy, version, contract hash, and binary passthrough feature count.
-
-### HELP ⚠️
-
-**saso.pavlic@student.um.si**
-
-## Acknowledgments 🎓
-
-* NiaNet was developed under the supervision
-  of [doc. dr Sašo Karakatič](https://ii.feri.um.si/en/person/saso-karakatic-2/)
-  and [doc. dr Iztok Fister ml.](http://www.iztok-jr-fister.eu/)
-  at [University of Maribor](https://www.um.si/en/home-page/).
-
-* This code is a fork of [NiaPy](https://github.com/NiaOrg/NiaPy). I am grateful that the authors chose to
-  open-source their work for future use.
-
-## License
-
-This package is distributed under the MIT License. This license can be found online
-at <http://www.opensource.org/licenses/MIT>.
-
-## Disclaimer
-
-This framework is provided as-is, and there are no guarantees that it fits your purposes or that it is bug-free. Use it
-at your own risk!
-
-
-
-# Current Search Objective Overview
-
-The current MetroPT architecture search is a three-objective NSGA-III problem.
-All objectives are minimized:
-
-1. `obj_error`: the selected reconstruction metric, currently `SMAPE`.
-2. `obj_pdm`: the PdM ranking proxy, computed as `1 - pdm_smoothed_auroc`.
-3. `obj_alarm_burden`: the share of normal smoothed-risk windows above the configured high-risk threshold.
-
-The PdM proxy converts reconstruction error into percentile-style risk scores
-against the training/calibration distribution, smooths those risks over ordered
-test windows, and checks whether pre-maintenance windows rank above normal
-windows. The alarm-burden objective uses the same smoothed risk stream, but
-looks only at normal windows and penalizes candidates that keep normal operation
-at high risk too often.
-
-Parameter count and estimated MACs are still recorded as diagnostics in the
-candidate database and exported summaries, but they are not search objectives in
-the current campaign. This keeps architecture search focused on reconstruction
-quality, PdM ranking signal, and practical alarm burden.
-
-Invalid or incomplete objective bundles receive the configured high penalty
-`9e10` so they are filtered out during winner selection.
+`metropt-pdm-framework` remains a historical evaluation oracle and version-3 evidence archive. It does not consume new schema-1.0 artifacts implicitly.

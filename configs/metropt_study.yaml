@@ -1,0 +1,98 @@
+schema_version: "1.0"
+study_name: "NiaNetVAE MetroPT controlled comparison"
+
+workflows:
+  - iforest_static
+  - iforest_per_maintenance
+  - sae_static
+  - vae_static
+  - nianetvae_per_maintenance
+
+data:
+  input_path: "data/metropt_dataset/MetroPT3.csv"
+  timestamp_column: "timestamp"
+  rolling_window: "60s"
+  initial_train_minutes: 43200
+  post_maintenance_train_minutes: 600
+  pre_maintenance_minutes: 120
+  sequence_length: 200
+  stride: 1
+  validation_fraction: 0.10
+  train_phases: [0, 1]
+  test_phases: [0, 1]
+
+preprocessing:
+  policy: "binary_passthrough_v1"
+  fit_scope: "initial_baseline_train"
+  frozen_after_fit: true
+
+training:
+  seed: 42
+  batch_size: 64
+  learning_rate: 0.003
+  weight_decay: 0.00001
+  kl_beta: 0.001
+  sae_sparsity_beta: 0.05
+  sae_sparsity_rho: 0.05
+  min_epochs: 3
+  max_epochs: 30
+  patience: 2
+  min_delta: 0.0001
+  restore_best_weights: true
+  deterministic: true
+  shuffle: true
+  drop_last: false
+  num_workers: 2
+  pin_memory: false
+  persistent_workers: false
+  device: "auto"
+
+adaptation:
+  learning_rate_scale: 0.1
+  baseline_replay_fraction: 0.50
+  local_validation_fraction: 0.20
+  validation_embargo: true
+  short_local_fallback: "train_all_fixed_min_epochs"
+  min_epochs: 3
+  max_epochs: 30
+
+search:
+  enabled: true
+  n_partitions: 8
+  max_generations: 300
+  max_time: "72:00:00"
+  checkpoint_interval_generations: 1
+  candidate_min_epochs: 3
+  candidate_max_epochs: 4
+  reconstruction_metric: "SMAPE"
+  pdm_metric: "one_minus_smoothed_auroc"
+  alarm_burden_metric: "normal_high_risk_rate"
+  alarm_burden_risk_threshold: 0.95
+  winner_weights: [0.20, 0.50, 0.30]
+  invalid_penalty: 90000000000.0
+  database_backend: "sqlite"
+  database_path: "search/candidates.sqlite"
+  database_table: "architecture_candidates_v1"
+
+calibration:
+  method: "empirical_cdf_v1"
+  reference_scope: "fixed_initial_baseline"
+  exceedance_quantile: 0.95
+
+evaluation:
+  risk_window_minutes: 120
+  theta_grid: "0.10:0.90:0.05"
+  extra_thresholds: [0.925, 0.95, 0.975, 0.985, 0.99, 0.995]
+  target_recall: 0.60
+  target_coverage: 0.20
+  fixed_lead_minutes: 120
+  sensitivity_leads: [30, 60, 90]
+  lead_step_minutes: 30
+  selection_scope: "retrospective_full_timeline"
+
+artifacts:
+  root: "artifacts"
+  study_id: "metropt_controlled_v1"
+  save_predictions: true
+  save_models: true
+  save_plots: true
