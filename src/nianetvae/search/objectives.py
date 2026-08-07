@@ -12,7 +12,7 @@ import torch
 from sklearn.metrics import roc_auc_score
 
 from ..config import StudyConfig
-from ..dataloaders.metropt import PreparedMetroPTData
+from ..dataloaders.metropt import PreparedMetroPTData, cycle_source_and_anchor_masks
 from ..dataloaders.sequences import contiguous_frames
 from ..evaluation.calibration import EmpiricalCDFCalibrator
 from ..evaluation.risk import build_segmented_maintenance_risk
@@ -164,15 +164,11 @@ class CandidateEvaluator:
                 torch.cuda.empty_cache()
 
     def _cycle_zero_masks(self) -> tuple[pd.Series, pd.Series]:
-        index = self.prepared.scaled_features.index
-        baseline_times = self.prepared.baseline_mask[self.prepared.baseline_mask].index
-        start = pd.Timestamp(baseline_times.max())
-        end = self.prepared.cycles[0].score_end
-        source = pd.Series((index > start) & (index < end), index=index, dtype=bool)
-        source &= self.prepared.operation_phase.isin(self.config.data.test_phases)
-        source &= ~self.prepared.baseline_mask
-        source &= ~self.prepared.post_maintenance_train_mask
-        anchors = self.prepared.evaluation_mask & source
+        source, anchors = cycle_source_and_anchor_masks(
+            self.prepared,
+            self.prepared.cycles[0],
+            self.config.data.test_phases,
+        )
         if not anchors.any():
             raise ValueError("Cycle-0 search population has no shared evaluation anchors.")
         return source, anchors

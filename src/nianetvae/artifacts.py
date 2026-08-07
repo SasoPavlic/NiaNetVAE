@@ -23,7 +23,7 @@ import sklearn
 import torch
 
 from .config import StudyConfig
-from .dataloaders.metropt import PreparedMetroPTData
+from .dataloaders.metropt import PreparedMetroPTData, cycle_source_and_anchor_masks
 
 ARTIFACT_SCHEMA_VERSION = "1.0"
 
@@ -280,7 +280,17 @@ class StudyArtifactStore:
             "baseline_validation_rows": int(prepared.baseline_validation_mask.sum()),
             "calibration_anchors": int(prepared.calibration_mask.sum()),
             "evaluation_rows": int(prepared.evaluation_mask.sum()),
-            "cycles": [asdict(cycle) for cycle in prepared.cycles],
+            "cycles": [
+                {
+                    **asdict(cycle),
+                    "evaluation_anchor_count": int(anchors.sum()),
+                    "evaluation_index_hash": _selected_index_hash(anchors),
+                }
+                for cycle in prepared.cycles
+                for _source, anchors in [
+                    cycle_source_and_anchor_masks(prepared, cycle, config.data.test_phases)
+                ]
+            ],
             "maintenance_events": [asdict(event) for event in prepared.events],
         }
         atomic_write_json(self.shared_dir / "data_contract.json", data_contract)
@@ -555,11 +565,32 @@ class StudyArtifactStore:
                     errors.append(f"workflow {workflow_id} output hash mismatch: {label}")
 
             lineage = payload.get("cycle_lineage", [])
-            if len(lineage) != len(data_contract.get("cycles", [])):
+            contract_cycles = {
+                int(cycle["cycle_id"]): cycle for cycle in data_contract.get("cycles", [])
+            }
+            if len(lineage) != len(contract_cycles):
                 errors.append(f"workflow {workflow_id} has incomplete cycle lineage")
             prediction_total = 0
             for cycle_result in lineage:
-                prediction_total += int(cycle_result.get("prediction_count", 0))
+                cycle_id = int(cycle_result.get("cycle_id", -1))
+                prediction_count = int(cycle_result.get("prediction_count", -1))
+                prediction_total += max(0, prediction_count)
+                expected_cycle = contract_cycles.get(cycle_id)
+                if expected_cycle is None:
+                    errors.append(f"workflow {workflow_id} has unknown cycle {cycle_id}")
+                else:
+                    expected_count = int(expected_cycle.get("evaluation_anchor_count", -1))
+                    if prediction_count != expected_count:
+                        errors.append(
+                            f"workflow {workflow_id} cycle {cycle_id} has a different "
+                            "evaluation population size"
+                        )
+                    expected_status = "scored" if expected_count > 0 else "no_evaluation_anchors"
+                    if cycle_result.get("evaluation_status") != expected_status:
+                        errors.append(
+                            f"workflow {workflow_id} cycle {cycle_id} has an invalid "
+                            "evaluation status"
+                        )
                 for label in ("checkpoint", "predictions", "calibration"):
                     artifact = self.root / str(cycle_result.get(label, ""))
                     expected_hash = cycle_result.get(f"{label}_sha256")
@@ -571,6 +602,31 @@ class StudyArtifactStore:
                         errors.append(
                             f"workflow {workflow_id} cycle {cycle_result.get('cycle_id')} "
                             f"{label} hash mismatch"
+                        )
+                predictions = self.root / str(cycle_result.get("predictions", ""))
+                if predictions.is_file() and expected_cycle is not None:
+                    cycle_predictions = pd.read_csv(
+                        predictions,
+                        usecols=["timestamp", "cycle_id"],
+                        parse_dates=["timestamp"],
+                    )
+                    if len(cycle_predictions) != prediction_count:
+                        errors.append(
+                            f"workflow {workflow_id} cycle {cycle_id} prediction row count mismatch"
+                        )
+                    if (
+                        not cycle_predictions.empty
+                        and not cycle_predictions["cycle_id"].eq(cycle_id).all()
+                    ):
+                        errors.append(
+                            f"workflow {workflow_id} cycle {cycle_id} prediction cycle ids differ"
+                        )
+                    observed_index_hash = _timestamp_index_hash(
+                        pd.DatetimeIndex(cycle_predictions["timestamp"])
+                    )
+                    if observed_index_hash != expected_cycle.get("evaluation_index_hash"):
+                        errors.append(
+                            f"workflow {workflow_id} cycle {cycle_id} changed evaluation timestamps"
                         )
                 calibration = self.root / str(cycle_result.get("calibration", ""))
                 if not calibration.is_file():

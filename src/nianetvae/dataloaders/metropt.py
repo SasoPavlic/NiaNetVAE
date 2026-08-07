@@ -69,6 +69,55 @@ class PreparedMetroPTData:
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def cycle_source_and_anchor_masks(
+    prepared: PreparedMetroPTData,
+    cycle: CyclePlan,
+    test_phases: tuple[int, ...],
+) -> tuple[pd.Series, pd.Series]:
+    """Return the scoreable rows and frozen evaluation anchors for one cycle.
+
+    Closely spaced maintenance events can legitimately produce a cycle with no
+    evaluation anchors. Such cycles remain part of model lineage even though
+    they contribute no predictions to the global evaluation population.
+    """
+    index = prepared.scaled_features.index
+    start = cycle.score_start
+    if cycle.cycle_id == 0:
+        baseline_times = prepared.baseline_mask[prepared.baseline_mask].index
+        start = pd.Timestamp(baseline_times.max())
+    after_start = index > start
+    before_end = (
+        index <= cycle.score_end
+        if cycle.cycle_id == len(prepared.cycles) - 1
+        else index < cycle.score_end
+    )
+    source = pd.Series(after_start & before_end, index=index, dtype=bool)
+    source &= prepared.operation_phase.isin(test_phases)
+    source &= ~prepared.baseline_mask
+    source &= ~prepared.post_maintenance_train_mask
+    return source, prepared.evaluation_mask & source
+
+
+def validate_cycle_evaluation_partition(
+    prepared: PreparedMetroPTData,
+    test_phases: tuple[int, ...],
+) -> None:
+    """Prove that cycle anchors partition the frozen evaluation population."""
+    observed = pd.Series(False, index=prepared.evaluation_mask.index, dtype=bool)
+    for cycle in prepared.cycles:
+        _source, anchors = cycle_source_and_anchor_masks(prepared, cycle, test_phases)
+        if (observed & anchors).any():
+            raise ValueError(f"Cycle {cycle.cycle_id} overlaps an earlier evaluation population.")
+        observed |= anchors
+    if not observed.equals(prepared.evaluation_mask.astype(bool)):
+        missing = int((prepared.evaluation_mask & ~observed).sum())
+        unexpected = int((observed & ~prepared.evaluation_mask).sum())
+        raise ValueError(
+            "Cycle plan does not exactly partition the shared evaluation population; "
+            f"missing={missing}, unexpected={unexpected}."
+        )
+
+
 def metropt_file_hash(path: str | Path) -> str:
     path = Path(path).expanduser().resolve()
     digest = hashlib.sha256()
@@ -327,7 +376,7 @@ def prepare_metropt(config: DataConfig, preprocessing_policy: str) -> PreparedMe
     )
     feature_payload = json.dumps(list(raw_features.columns), separators=(",", ":"))
     feature_hash = hashlib.sha256(feature_payload.encode("utf-8")).hexdigest()
-    return PreparedMetroPTData(
+    prepared = PreparedMetroPTData(
         scaled_features=scaled_features,
         feature_names=tuple(str(column) for column in raw_features.columns),
         operation_phase=operation_phase,
@@ -344,3 +393,5 @@ def prepare_metropt(config: DataConfig, preprocessing_policy: str) -> PreparedMe
         feature_hash=feature_hash,
         schedule_hash=_schedule_hash(events, cycles),
     )
+    validate_cycle_evaluation_partition(prepared, config.test_phases)
+    return prepared

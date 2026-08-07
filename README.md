@@ -16,6 +16,8 @@ The legacy multi-dataset runtime, model-specific preprocessing paths, PostgreSQL
 
 All workflows use the same MetroPT preparation, frozen preprocessing, calibration timestamps, sequence-anchor evaluation population, risk construction, threshold selection, and event metrics. This is a controlled system comparison rather than a causal architecture-versus-adaptation ablation.
 
+Maintenance cycles with no valid sequence anchors remain explicit in model lineage and produce zero-row prediction artifacts. They are not dropped or allowed to change the shared evaluation population.
+
 ## Local setup
 
 The controlled environment uses Python 3.11 and exact direct-dependency versions:

@@ -25,7 +25,11 @@ from ..contracts import (
     handcrafted_vae_spec,
     iforest_spec,
 )
-from ..dataloaders.metropt import CyclePlan, PreparedMetroPTData
+from ..dataloaders.metropt import (
+    CyclePlan,
+    PreparedMetroPTData,
+    cycle_source_and_anchor_masks,
+)
 from ..dataloaders.sequences import contiguous_frames
 from ..evaluation.calibration import EmpiricalCDFCalibrator
 from ..evaluation.event import evaluate_maintenance_prediction
@@ -166,6 +170,7 @@ class WorkflowRunner:
                 "calibration": self.store.relative(calibration_path),
                 "calibration_sha256": sha256_file(calibration_path),
                 "prediction_count": len(predictions),
+                "evaluation_status": ("scored" if len(predictions) else "no_evaluation_anchors"),
                 "fit_result": asdict(fit_result) if fit_result is not None else None,
                 "training_policy": policy,
             }
@@ -199,7 +204,10 @@ class WorkflowRunner:
             path = self.store.root / str(result["predictions"])
             frame = pd.read_csv(path, parse_dates=["timestamp"])
             frames.append(frame)
-        predictions = pd.concat(frames, ignore_index=True).sort_values("timestamp")
+        scored_frames = [frame for frame in frames if not frame.empty]
+        if not scored_frames:
+            raise ValueError(f"Workflow {workflow_id} has no predictions in any cycle.")
+        predictions = pd.concat(scored_frames, ignore_index=True).sort_values("timestamp")
         if predictions["timestamp"].duplicated().any():
             duplicates = (
                 predictions.loc[predictions["timestamp"].duplicated(), "timestamp"].head().tolist()
@@ -415,6 +423,8 @@ class WorkflowRunner:
     def _score_cycle(self, runtime: Runtime, workflow: WorkflowSpec, cycle: CyclePlan) -> pd.Series:
         source_mask, anchor_mask = self._cycle_masks(cycle)
         expected = anchor_mask[anchor_mask].index
+        if expected.empty:
+            return pd.Series(index=expected, dtype=float, name="anomaly_score")
         if workflow.model_kind == "iforest":
             assert isinstance(runtime, IsolationForestRuntime)
             scores = runtime.score(self.prepared.scaled_features.loc[anchor_mask])
@@ -432,25 +442,11 @@ class WorkflowRunner:
         return scores.astype(float)
 
     def _cycle_masks(self, cycle: CyclePlan) -> tuple[pd.Series, pd.Series]:
-        index = self.prepared.scaled_features.index
-        start = cycle.score_start
-        if cycle.cycle_id == 0:
-            baseline_times = self.prepared.baseline_mask[self.prepared.baseline_mask].index
-            start = pd.Timestamp(baseline_times.max())
-        after_start = index > start
-        before_end = (
-            index <= cycle.score_end
-            if cycle.cycle_id == len(self.prepared.cycles) - 1
-            else index < cycle.score_end
+        return cycle_source_and_anchor_masks(
+            self.prepared,
+            cycle,
+            self.config.data.test_phases,
         )
-        source = pd.Series(after_start & before_end, index=index, dtype=bool)
-        source &= self.prepared.operation_phase.isin(self.config.data.test_phases)
-        source &= ~self.prepared.baseline_mask
-        source &= ~self.prepared.post_maintenance_train_mask
-        anchors = self.prepared.evaluation_mask & source
-        if not anchors.any():
-            raise ValueError(f"Cycle {cycle.cycle_id} has no shared evaluation anchors.")
-        return source, anchors
 
     def _local_segments(self, cycle: CyclePlan) -> list[pd.DataFrame]:
         if cycle.update_start is None or cycle.update_end is None:
@@ -687,6 +683,25 @@ class WorkflowRunner:
             expected_hash = result.get(f"{key}_sha256")
             if not expected_hash or sha256_file(artifact) != expected_hash:
                 raise ValueError(f"Saved cycle result has an invalid {key} hash.")
+        cycle = self._cycle(int(result.get("cycle_id", -1)))
+        expected_index = self._cycle_masks(cycle)[1]
+        expected_index = expected_index[expected_index].index
+        expected_status = "scored" if len(expected_index) else "no_evaluation_anchors"
+        if int(result.get("prediction_count", -1)) != len(expected_index):
+            raise ValueError("Saved cycle result has an invalid prediction count.")
+        if result.get("evaluation_status") != expected_status:
+            raise ValueError("Saved cycle result has an invalid evaluation status.")
+        predictions = pd.read_csv(
+            self.store.root / str(result["predictions"]),
+            usecols=["timestamp", "cycle_id"],
+            parse_dates=["timestamp"],
+        )
+        if len(predictions) != len(expected_index):
+            raise ValueError("Saved cycle predictions have an invalid row count.")
+        if not predictions.empty and not predictions["cycle_id"].eq(cycle.cycle_id).all():
+            raise ValueError("Saved cycle predictions contain another cycle id.")
+        if not pd.DatetimeIndex(predictions["timestamp"]).equals(expected_index):
+            raise ValueError("Saved cycle predictions changed the evaluation timestamps.")
 
     def _validate_workflow_enabled(self, workflow_id: str) -> None:
         if workflow_id not in self.config.workflows:

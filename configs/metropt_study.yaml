@@ -92,7 +92,7 @@ evaluation:
 
 artifacts:
   root: "artifacts"
-  study_id: "metropt_controlled_v1"
+  study_id: "metropt_controlled_v2"
   save_predictions: true
   save_models: true
   save_plots: true
