@@ -6,10 +6,10 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --mem-per-gpu=64GB
-#SBATCH --cpus-per-task=10
+#SBATCH --mem=16GB
+#SBATCH --cpus-per-task=4
 #SBATCH --time=08:00:00
-#SBATCH --exclude=wn211
+#SBATCH --exclude=gwn04,wn211
 
 set -euo pipefail
 
@@ -17,6 +17,8 @@ JOB_MODE="${JOB_MODE:?JOB_MODE is required}"
 CONFIG_PATH="${CONFIG_PATH:-configs/metropt_study.yaml}"
 WORKFLOW_ID="${WORKFLOW_ID:-}"
 CYCLE_ID="${CYCLE_ID:-}"
+DONOR_STUDY_ROOT="${DONOR_STUDY_ROOT:-}"
+DONOR_SEARCH_RUNTIME_FINGERPRINT="${DONOR_SEARCH_RUNTIME_FINGERPRINT:-}"
 IMAGE_PATH="${IMAGE_PATH:-/d/hpc/home/sasop/images/nianet-vaepymoo-current.sif}"
 REPOSITORY_ROOT="${REPOSITORY_ROOT:-$(pwd)}"
 
@@ -40,6 +42,18 @@ srun nvidia-smi || true
 case "${JOB_MODE}" in
     prepare|search|compare|validate-study)
         COMMAND=("${CLI[@]}" "${JOB_MODE}")
+        ;;
+    migrate-search)
+        [ -n "${DONOR_STUDY_ROOT}" ] || { echo "DONOR_STUDY_ROOT is required" >&2; exit 1; }
+        [ -n "${DONOR_SEARCH_RUNTIME_FINGERPRINT}" ] || {
+            echo "DONOR_SEARCH_RUNTIME_FINGERPRINT is required" >&2
+            exit 1
+        }
+        COMMAND=(
+            "${CLI[@]}" migrate-search
+            --from-study-root "${DONOR_STUDY_ROOT}"
+            --donor-search-runtime-fingerprint "${DONOR_SEARCH_RUNTIME_FINGERPRINT}"
+        )
         ;;
     workflow)
         [ -n "${WORKFLOW_ID}" ] || { echo "WORKFLOW_ID is required" >&2; exit 1; }

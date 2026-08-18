@@ -13,6 +13,11 @@ from .config import DEFAULT_WORKFLOWS, StudyConfig, load_study_config
 from .dataloaders.metropt import PreparedMetroPTData, metropt_file_hash, prepare_metropt
 from .experiments import WorkflowRunner, build_comparison
 from .search import SearchEngine
+from .search.migration import (
+    migrate_search_artifacts,
+    search_runtime_fingerprint,
+    search_runtime_sources,
+)
 
 DEFAULT_CONFIG = "configs/metropt_study.yaml"
 
@@ -28,6 +33,20 @@ def _parser() -> argparse.ArgumentParser:
     subcommands.add_parser("validate-config", help="Validate configuration without loading data.")
     subcommands.add_parser("prepare", help="Build and freeze the shared data contract.")
     subcommands.add_parser("search", help="Run or resume fresh cycle-0 NSGA-III search.")
+    subcommands.add_parser(
+        "fingerprint-search-runtime",
+        help="Hash source files that can affect architecture-search results.",
+    )
+    migrate = subcommands.add_parser(
+        "migrate-search",
+        help="Import a completed search after strict runtime and artifact verification.",
+    )
+    migrate.add_argument("--from-study-root", required=True, help="Completed donor study root.")
+    migrate.add_argument(
+        "--donor-search-runtime-fingerprint",
+        required=True,
+        help="Fingerprint independently calculated inside the donor runtime image.",
+    )
 
     run = subcommands.add_parser("run", help="Run/resume a controlled workflow.")
     run.add_argument("--workflow", required=True, choices=DEFAULT_WORKFLOWS)
@@ -105,6 +124,16 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
         return 0
+    if args.command == "fingerprint-search-runtime":
+        sources = search_runtime_sources()
+        package_root = Path(__file__).resolve().parent
+        _emit(
+            {
+                "search_runtime_fingerprint": search_runtime_fingerprint(),
+                "sources": [path.relative_to(package_root).as_posix() for path in sources],
+            }
+        )
+        return 0
 
     config, prepared, store = _context(args.config)
     if args.command == "prepare":
@@ -119,6 +148,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.command == "search":
         _emit(SearchEngine(config, prepared, store).run())
+    elif args.command == "migrate-search":
+        _emit(
+            migrate_search_artifacts(
+                config,
+                prepared,
+                store,
+                donor_study_root=args.from_study_root,
+                donor_search_runtime_fingerprint=args.donor_search_runtime_fingerprint,
+            )
+        )
     elif args.command == "run":
         runner = WorkflowRunner(config, prepared, store)
         if args.cycle_id is None:

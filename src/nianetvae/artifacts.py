@@ -510,6 +510,18 @@ class StudyArtifactStore:
                 search_payload = read_json(search_manifest)
                 if search_payload.get("status") != "completed":
                     errors.append("shared-core architecture search is not completed")
+                if selected_payload.get("study_id") != study.get("study_id"):
+                    errors.append("selected architecture belongs to another study")
+                if search_payload.get("study_id") != study.get("study_id"):
+                    errors.append("search manifest belongs to another study")
+                if search_payload.get("source_contract_fingerprint") != study.get(
+                    "source_contract_fingerprint"
+                ):
+                    errors.append("search manifest has an inconsistent source fingerprint")
+                if search_payload.get("data_contract_fingerprint") != study.get(
+                    "data_contract_fingerprint"
+                ):
+                    errors.append("search manifest has an inconsistent data fingerprint")
                 if selected_payload.get("search_contract_fingerprint") != search_payload.get(
                     "search_contract_fingerprint"
                 ):
@@ -533,6 +545,38 @@ class StudyArtifactStore:
                         or sha256_file(output) != expected_hash
                     ):
                         errors.append(f"shared-core search output hash mismatch: {label}")
+                execution_mode = search_payload.get("execution_mode", "fresh_search")
+                if execution_mode == "verified_search_migration":
+                    from .search.migration import search_runtime_fingerprint
+
+                    migration = search_payload.get("migration") or {}
+                    selected_migration = selected_payload.get("migration") or {}
+                    runtime_fingerprint = search_runtime_fingerprint()
+                    if migration.get("method") != "verified_search_runtime_v1":
+                        errors.append("search migration method is unsupported")
+                    if not migration.get("donor_study_id") or migration.get(
+                        "donor_study_id"
+                    ) == study.get("study_id"):
+                        errors.append("search migration donor study is invalid")
+                    if migration.get("donor_search_runtime_fingerprint") != runtime_fingerprint:
+                        errors.append("search migration donor runtime fingerprint differs")
+                    if migration.get("target_search_runtime_fingerprint") != runtime_fingerprint:
+                        errors.append("search migration target runtime fingerprint differs")
+                    if selected_migration != migration:
+                        errors.append("selected architecture search migration record differs")
+                    for label, record in migration.get("donor_outputs", {}).items():
+                        copied = self.root / str(record.get("copied_relative", ""))
+                        expected_hash = record.get("sha256")
+                        if (
+                            not copied.is_file()
+                            or not expected_hash
+                            or sha256_file(copied) != expected_hash
+                        ):
+                            errors.append(f"search migration donor output hash mismatch: {label}")
+                elif execution_mode != "fresh_search":
+                    errors.append(
+                        f"unsupported architecture-search execution mode: {execution_mode}"
+                    )
         for workflow_id in expected:
             path = self.workflow_manifest_path(workflow_id)
             if not path.is_file():

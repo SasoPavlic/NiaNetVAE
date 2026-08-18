@@ -10,10 +10,67 @@ from nianetvae.dataloaders.metropt import (
     cycle_source_and_anchor_masks,
     prepare_metropt,
 )
+from nianetvae.dataloaders.sequences import SegmentedSequenceDataset
 from nianetvae.experiments import WorkflowRunner, build_comparison
 from nianetvae.search.engine import SearchEngine
 
 from .helpers import synthetic_config
+
+
+def test_local_finetune_split_preserves_multiple_contiguous_segments(tmp_path) -> None:
+    config = synthetic_config(tmp_path, workflows=("nianetvae_per_maintenance",))
+    prepared = prepare_metropt(config.data, config.preprocessing.policy)
+    store = StudyArtifactStore.from_config(config)
+    store.initialize(config, prepared, repository=tmp_path)
+    runner = WorkflowRunner(config, prepared, store)
+
+    first = prepared.scaled_features.iloc[200:230].copy()
+    second = prepared.scaled_features.iloc[240:260].copy()
+    train, validation, policy = runner._split_local_segments([first, second])
+
+    assert policy["validation_strategy"] == "chronological_non_overlapping_local_segments"
+    assert policy["local_segment_count"] == 2
+    assert policy["local_total_rows"] == 50
+    assert policy["local_total_windows"] == 40
+    assert policy["local_train_windows"] == 27
+    assert policy["local_validation_windows"] == 8
+    assert policy["applied_embargo_windows"] == config.data.sequence_length - 1
+    assert len(train) == 2
+    assert len(validation) == 1
+    assert train[0].index.equals(first.index)
+    assert train[1].index.equals(second.index[:7])
+    assert validation[0].index.equals(second.index[7:])
+    assert train[1].index.intersection(validation[0].index).empty
+    assert (
+        len(SegmentedSequenceDataset(train, sequence_length=config.data.sequence_length))
+        == policy["local_train_windows"]
+    )
+    assert (
+        len(SegmentedSequenceDataset(validation, sequence_length=config.data.sequence_length))
+        == policy["local_validation_windows"]
+    )
+
+
+def test_local_finetune_split_needs_no_embargo_across_a_real_gap(tmp_path) -> None:
+    config = synthetic_config(tmp_path, workflows=("nianetvae_per_maintenance",))
+    prepared = prepare_metropt(config.data, config.preprocessing.policy)
+    store = StudyArtifactStore.from_config(config)
+    store.initialize(config, prepared, repository=tmp_path)
+    runner = WorkflowRunner(config, prepared, store)
+
+    first = prepared.scaled_features.iloc[200:217].copy()
+    second = prepared.scaled_features.iloc[240:248].copy()
+    train, validation, policy = runner._split_local_segments([first, second])
+
+    assert policy["local_total_windows"] == 15
+    assert policy["requested_validation_windows"] == 3
+    assert policy["local_train_windows"] == 12
+    assert policy["local_validation_windows"] == 3
+    assert policy["applied_embargo_windows"] == 0
+    assert len(train) == 1
+    assert len(validation) == 1
+    assert train[0].index.equals(first.index)
+    assert validation[0].index.equals(second.index)
 
 
 def test_iforest_static_and_nianetvae_share_end_to_end_contract(tmp_path) -> None:

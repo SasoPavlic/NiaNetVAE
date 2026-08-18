@@ -471,45 +471,85 @@ class WorkflowRunner:
         segments: list[pd.DataFrame],
     ) -> tuple[list[pd.DataFrame], list[pd.DataFrame], dict[str, Any]]:
         sequence_length = self.config.data.sequence_length
-        if len(segments) != 1:
-            # MetroPT post-maintenance update intervals are expected to be one
-            # contiguous segment. Fail instead of silently concatenating gaps.
-            raise ValueError(
-                f"Expected one contiguous local update segment, observed {len(segments)}."
-            )
-        local = segments[0]
-        total_windows = max(0, len(local) - sequence_length + 1)
+        segment_windows = [max(0, len(segment) - sequence_length + 1) for segment in segments]
+        usable_segments = [
+            (segment, windows)
+            for segment, windows in zip(segments, segment_windows, strict=True)
+            if windows > 0
+        ]
+        total_windows = sum(windows for _segment, windows in usable_segments)
+        if total_windows < 1:
+            raise ValueError("Local update segments produced no complete sequence windows.")
         requested_validation = max(
             1,
             int(np.floor(total_windows * self.config.adaptation.local_validation_fraction)),
         )
-        validation_start_window = total_windows - requested_validation
         requested_embargo = sequence_length - 1 if self.config.adaptation.validation_embargo else 0
-        train_stop_windows = validation_start_window - requested_embargo
-        fallback = train_stop_windows < 1
+
+        validation_windows_by_segment = [0] * len(usable_segments)
+        remaining_validation = requested_validation
+        for index in range(len(usable_segments) - 1, -1, -1):
+            windows = usable_segments[index][1]
+            selected = min(windows, remaining_validation)
+            validation_windows_by_segment[index] = selected
+            remaining_validation -= selected
+            if remaining_validation == 0:
+                break
+
+        train_segments: list[pd.DataFrame] = []
+        validation_segments: list[pd.DataFrame] = []
+        local_train_windows = 0
+        local_validation_windows = 0
+        applied_embargo = 0
+        unused_rows = 0
+        for (segment, windows), validation_windows in zip(
+            usable_segments,
+            validation_windows_by_segment,
+            strict=True,
+        ):
+            if validation_windows == 0:
+                train_segments.append(segment)
+                local_train_windows += windows
+                continue
+            if validation_windows == windows:
+                validation_segments.append(segment)
+                local_validation_windows += windows
+                continue
+
+            validation_start_window = windows - validation_windows
+            segment_embargo = min(requested_embargo, validation_start_window)
+            train_windows = validation_start_window - segment_embargo
+            if train_windows > 0:
+                train_raw_end = (train_windows - 1) + sequence_length
+                train_segments.append(segment.iloc[:train_raw_end].copy())
+                unused_rows += validation_start_window - train_raw_end
+            else:
+                unused_rows += validation_start_window
+            validation_segments.append(segment.iloc[validation_start_window:].copy())
+            local_train_windows += train_windows
+            local_validation_windows += validation_windows
+            applied_embargo += segment_embargo
+
+        fallback = local_train_windows < 1
         if fallback:
             if self.config.adaptation.short_local_fallback != "train_all_fixed_min_epochs":
                 raise ValueError(
                     "Local update interval is too short for non-overlapping "
                     "train/validation windows."
                 )
-            train_segments = [local]
-            validation_segments: list[pd.DataFrame] = []
+            train_segments = [segment for segment, _windows in usable_segments]
+            validation_segments = []
             local_train_windows = total_windows
             local_validation_windows = 0
             applied_embargo = 0
             strategy = "disabled_short_local_fallback"
             unused_rows = 0
         else:
-            train_raw_end = (train_stop_windows - 1) + sequence_length
-            validation_raw_start = validation_start_window
-            train_segments = [local.iloc[:train_raw_end].copy()]
-            validation_segments = [local.iloc[validation_raw_start:].copy()]
-            local_train_windows = train_stop_windows
-            local_validation_windows = requested_validation
-            applied_embargo = requested_embargo
-            strategy = "chronological_non_overlapping_local"
-            unused_rows = validation_raw_start - train_raw_end
+            strategy = (
+                "chronological_non_overlapping_local"
+                if len(usable_segments) == 1
+                else "chronological_non_overlapping_local_segments"
+            )
         baseline_windows = sum(
             max(0, len(segment) - sequence_length + 1)
             for segment in contiguous_frames(
@@ -534,7 +574,11 @@ class WorkflowRunner:
             validation_segments,
             {
                 "mode": "local_train_with_frozen_baseline_replay",
-                "local_total_rows": len(local),
+                "local_segment_count": len(segments),
+                "usable_local_segment_count": len(usable_segments),
+                "local_train_segment_count": len(train_segments),
+                "local_validation_segment_count": len(validation_segments),
+                "local_total_rows": sum(len(segment) for segment in segments),
                 "local_total_windows": total_windows,
                 "local_train_windows": local_train_windows,
                 "local_validation_windows": local_validation_windows,
