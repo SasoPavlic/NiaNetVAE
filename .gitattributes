@@ -1,0 +1,19 @@
+# This project is built and executed exclusively on Linux (Docker images and
+# Singularity on HPC), so the working tree is LF on every platform, not just
+# in the index.
+#
+# This is not a style preference. `source_contract_fingerprint` and
+# `search_runtime_fingerprint` hash the *bytes* of the Python sources, and
+# `docker build` COPYs the working tree. A CRLF checkout on Windows would
+# produce an image whose fingerprints differ from the repository, silently
+# failing the verified search migration in src/nianetvae/search/migration.py.
+* text=auto eol=lf
+
+# Generated / binary artifacts must never be transformed.
+*.csv    -text
+*.joblib binary
+*.sif    binary
+*.png    binary
+*.sqlite binary
+*.dill   binary
+*.zip    binary
