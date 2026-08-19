@@ -46,6 +46,28 @@ from ..visualization import plot_theta_tradeoff, plot_workflow_comparison, plot_
 Runtime = IsolationForestRuntime | RecurrentRuntime
 
 
+def _json_safe_fit_result(fit_result: FitResult | None) -> dict[str, Any] | None:
+    """Record undefined training statistics as JSON null instead of NaN.
+
+    A cycle whose local update interval is too short for a non-overlapping
+    train/validation split fine-tunes without a validation loader, so the
+    trainer reports an undefined validation loss for every epoch. Study
+    artifacts are strict JSON and reject NaN, so the absence is encoded
+    explicitly rather than dropped.
+    """
+    if fit_result is None:
+        return None
+    payload = asdict(fit_result)
+    payload["history"] = [
+        {key: (value if np.isfinite(value) else None) for key, value in entry.items()}
+        for entry in payload["history"]
+    ]
+    best_validation_loss = payload["best_validation_loss"]
+    if best_validation_loss is not None and not np.isfinite(best_validation_loss):
+        payload["best_validation_loss"] = None
+    return payload
+
+
 class WorkflowRunner:
     """Incremental and resumable runner over a prepared immutable study."""
 
@@ -171,7 +193,7 @@ class WorkflowRunner:
                 "calibration_sha256": sha256_file(calibration_path),
                 "prediction_count": len(predictions),
                 "evaluation_status": ("scored" if len(predictions) else "no_evaluation_anchors"),
-                "fit_result": asdict(fit_result) if fit_result is not None else None,
+                "fit_result": _json_safe_fit_result(fit_result),
                 "training_policy": policy,
             }
             atomic_write_json(result_path, result)

@@ -5,14 +5,16 @@ from dataclasses import replace
 import pandas as pd
 import pytest
 
-from nianetvae.artifacts import StudyArtifactStore, read_json
+from nianetvae.artifacts import StudyArtifactStore, atomic_write_json, read_json
 from nianetvae.dataloaders.metropt import (
     cycle_source_and_anchor_masks,
     prepare_metropt,
 )
 from nianetvae.dataloaders.sequences import SegmentedSequenceDataset
 from nianetvae.experiments import WorkflowRunner, build_comparison
+from nianetvae.experiments.runner import _json_safe_fit_result
 from nianetvae.search.engine import SearchEngine
+from nianetvae.training.trainer import FitResult
 
 from .helpers import synthetic_config
 
@@ -162,3 +164,47 @@ def test_empty_evaluation_cycle_preserves_lineage_and_validates(tmp_path) -> Non
     contract = read_json(store.shared_dir / "data_contract.json")
     assert contract["cycles"][1]["evaluation_anchor_count"] == 0
     assert len(contract["cycles"][1]["evaluation_index_hash"]) == 64
+
+
+def test_fallback_fit_history_without_validation_is_json_writable(tmp_path) -> None:
+    """A short local interval trains without validation and must stay serializable."""
+    fit = FitResult(
+        completed_epochs=3,
+        best_epoch=None,
+        best_validation_loss=None,
+        restored_best_weights=False,
+        training_windows=12,
+        validation_windows=0,
+        history=tuple(
+            {"epoch": float(epoch), "train_loss": 0.5, "validation_loss": float("nan")}
+            for epoch in (1, 2, 3)
+        ),
+    )
+
+    payload = _json_safe_fit_result(fit)
+
+    assert payload is not None
+    assert payload["validation_windows"] == 0
+    assert [entry["validation_loss"] for entry in payload["history"]] == [None, None, None]
+    assert [entry["train_loss"] for entry in payload["history"]] == [0.5, 0.5, 0.5]
+    written = atomic_write_json(tmp_path / "cycle_result.json", {"fit_result": payload})
+    assert read_json(written)["fit_result"]["history"][0]["validation_loss"] is None
+
+
+def test_json_safe_fit_result_passes_through_finite_history() -> None:
+    fit = FitResult(
+        completed_epochs=1,
+        best_epoch=1,
+        best_validation_loss=0.25,
+        restored_best_weights=True,
+        training_windows=8,
+        validation_windows=2,
+        history=({"epoch": 1.0, "train_loss": 0.4, "validation_loss": 0.25},),
+    )
+
+    payload = _json_safe_fit_result(fit)
+
+    assert payload is not None
+    assert payload["best_validation_loss"] == 0.25
+    assert payload["history"][0]["validation_loss"] == 0.25
+    assert _json_safe_fit_result(None) is None
