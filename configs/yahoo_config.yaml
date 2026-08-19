@@ -1,7 +1,0 @@
-# yahoo_config.yaml
-
-data_params:
-  dataset_name: "YahooA1"
-  data_path: "data/yahoo_dataset/"
-  seq_len: 100  #Mayority of files are shorter then 200
-  n_features: 1
