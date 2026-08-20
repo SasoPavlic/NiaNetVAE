@@ -127,6 +127,12 @@ four baseline workflows, 22 sequential NiaNetVAE cycles, finalize, compare, and
 `validate-study`. Monitor with `squeue --me`; a failed cycle cancels every
 dependent job via `afterok`.
 
+## Research knowledge base
+
+Use the configured `kvaltko-wiki` MCP server for all Outline reads and updates
+to the `PhD` collection. The previous direct Outline API token has been revoked;
+do not use direct bearer-token API calls or restore that token.
+
 
 ## Validation
 
