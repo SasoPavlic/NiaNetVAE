@@ -21,6 +21,12 @@ case "${DONOR_STUDY_ROOT}" in
 esac
 
 mkdir -p artifacts outputs logs /d/hpc/home/sasop/outputs
+# Derive the SLURM job-name prefix from the study identity so job records can
+# never claim to belong to a different study than the one they wrote.
+STUDY_ID=$(sed -n 's/^[[:space:]]*study_id:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$//p'     "${CONFIG_PATH}" | head -1)
+[ -n "${STUDY_ID}" ] || { echo "Could not read artifacts.study_id from ${CONFIG_PATH}" >&2; exit 1; }
+JOB_PREFIX="${JOB_PREFIX:-nianet-${STUDY_ID##*_}}"
+
 
 submit() {
     local name="$1"
@@ -36,17 +42,17 @@ submit() {
         "${WORKER}"
 }
 
-prepare_job=$(submit "nianet-v3-prepare" "01:00:00" "" "JOB_MODE=prepare")
-migration_job=$(submit "nianet-v3-migrate" "01:00:00" "${prepare_job}" \
+prepare_job=$(submit "${JOB_PREFIX}-prepare" "01:00:00" "" "JOB_MODE=prepare")
+migration_job=$(submit "${JOB_PREFIX}-migrate" "01:00:00" "${prepare_job}" \
     "JOB_MODE=migrate-search,DONOR_STUDY_ROOT=${DONOR_STUDY_ROOT},DONOR_SEARCH_RUNTIME_FINGERPRINT=${DONOR_SEARCH_RUNTIME_FINGERPRINT}")
 
-iforest_static_job=$(submit "nianet-v3-if-static" "01:00:00" "${migration_job}" \
+iforest_static_job=$(submit "${JOB_PREFIX}-if-static" "01:00:00" "${migration_job}" \
     "JOB_MODE=workflow,WORKFLOW_ID=iforest_static")
-iforest_per_job=$(submit "nianet-v3-if-per" "01:00:00" "${migration_job}" \
+iforest_per_job=$(submit "${JOB_PREFIX}-if-per" "01:00:00" "${migration_job}" \
     "JOB_MODE=workflow,WORKFLOW_ID=iforest_per_maintenance")
-sae_job=$(submit "nianet-v3-sae" "02:00:00" "${migration_job}" \
+sae_job=$(submit "${JOB_PREFIX}-sae" "02:00:00" "${migration_job}" \
     "JOB_MODE=workflow,WORKFLOW_ID=sae_static")
-vae_job=$(submit "nianet-v3-vae" "02:00:00" "${migration_job}" \
+vae_job=$(submit "${JOB_PREFIX}-vae" "02:00:00" "${migration_job}" \
     "JOB_MODE=workflow,WORKFLOW_ID=vae_static")
 
 previous="${migration_job}"
@@ -57,17 +63,17 @@ for cycle_id in $(seq 0 21); do
     else
         walltime="04:00:00"
     fi
-    job=$(submit "nianet-v3-cycle-${cycle_id}" "${walltime}" "${previous}" \
+    job=$(submit "${JOB_PREFIX}-cycle-${cycle_id}" "${walltime}" "${previous}" \
         "JOB_MODE=cycle,WORKFLOW_ID=nianetvae_per_maintenance,CYCLE_ID=${cycle_id}")
     nianet_jobs+=("${job}")
     previous="${job}"
 done
-nianet_finalize_job=$(submit "nianet-v3-finalize" "01:00:00" "${previous}" \
+nianet_finalize_job=$(submit "${JOB_PREFIX}-finalize" "01:00:00" "${previous}" \
     "JOB_MODE=finalize,WORKFLOW_ID=nianetvae_per_maintenance")
 
 all_workflows="${iforest_static_job}:${iforest_per_job}:${sae_job}:${vae_job}:${nianet_finalize_job}"
-comparison_job=$(submit "nianet-v3-compare" "01:00:00" "${all_workflows}" "JOB_MODE=compare")
-validation_job=$(submit "nianet-v3-validate" "01:00:00" "${comparison_job}" "JOB_MODE=validate-study")
+comparison_job=$(submit "${JOB_PREFIX}-compare" "01:00:00" "${all_workflows}" "JOB_MODE=compare")
+validation_job=$(submit "${JOB_PREFIX}-validate" "01:00:00" "${comparison_job}" "JOB_MODE=validate-study")
 
 echo "Submitted migrated controlled study:"
 echo "  prepare=${prepare_job}"

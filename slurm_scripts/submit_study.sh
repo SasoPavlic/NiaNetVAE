@@ -15,6 +15,12 @@ done
 [ -f "${WORKER}" ] || { echo "Missing worker: ${WORKER}" >&2; exit 1; }
 [ -f "${CONFIG_PATH}" ] || { echo "Missing config: ${CONFIG_PATH}" >&2; exit 1; }
 mkdir -p artifacts outputs logs /d/hpc/home/sasop/images /d/hpc/home/sasop/outputs
+# Derive the SLURM job-name prefix from the study identity so job records can
+# never claim to belong to a different study than the one they wrote.
+STUDY_ID=$(sed -n 's/^[[:space:]]*study_id:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$//p'     "${CONFIG_PATH}" | head -1)
+[ -n "${STUDY_ID}" ] || { echo "Could not read artifacts.study_id from ${CONFIG_PATH}" >&2; exit 1; }
+JOB_PREFIX="${JOB_PREFIX:-nianet-${STUDY_ID##*_}}"
+
 
 if [ "${IMAGE_SYNC}" = "1" ]; then
     singularity pull --force "${IMAGE_LATEST}" "${IMAGE_REF}"
@@ -39,16 +45,16 @@ submit() {
         "${WORKER}"
 }
 
-prepare_job=$(submit "nianet-prepare" "04:00:00" "" "JOB_MODE=prepare")
-search_job=$(submit "nianet-search" "3-10:00:00" "${prepare_job}" "JOB_MODE=search")
+prepare_job=$(submit "${JOB_PREFIX}-prepare" "04:00:00" "" "JOB_MODE=prepare")
+search_job=$(submit "${JOB_PREFIX}-search" "3-10:00:00" "${prepare_job}" "JOB_MODE=search")
 
-iforest_static_job=$(submit "nianet-if-static" "08:00:00" "${prepare_job}" \
+iforest_static_job=$(submit "${JOB_PREFIX}-if-static" "08:00:00" "${prepare_job}" \
     "JOB_MODE=workflow,WORKFLOW_ID=iforest_static")
-iforest_per_job=$(submit "nianet-if-per" "12:00:00" "${prepare_job}" \
+iforest_per_job=$(submit "${JOB_PREFIX}-if-per" "12:00:00" "${prepare_job}" \
     "JOB_MODE=workflow,WORKFLOW_ID=iforest_per_maintenance")
-sae_job=$(submit "nianet-sae" "2-00:00:00" "${prepare_job}" \
+sae_job=$(submit "${JOB_PREFIX}-sae" "2-00:00:00" "${prepare_job}" \
     "JOB_MODE=workflow,WORKFLOW_ID=sae_static")
-vae_job=$(submit "nianet-vae" "2-00:00:00" "${prepare_job}" \
+vae_job=$(submit "${JOB_PREFIX}-vae" "2-00:00:00" "${prepare_job}" \
     "JOB_MODE=workflow,WORKFLOW_ID=vae_static")
 
 previous="${search_job}"
@@ -59,17 +65,17 @@ for cycle_id in $(seq 0 21); do
     else
         walltime="08:00:00"
     fi
-    job=$(submit "nianet-cycle-${cycle_id}" "${walltime}" "${previous}" \
+    job=$(submit "${JOB_PREFIX}-cycle-${cycle_id}" "${walltime}" "${previous}" \
         "JOB_MODE=cycle,WORKFLOW_ID=nianetvae_per_maintenance,CYCLE_ID=${cycle_id}")
     nianet_jobs+=("${job}")
     previous="${job}"
 done
-nianet_finalize_job=$(submit "nianet-finalize" "01:00:00" "${previous}" \
+nianet_finalize_job=$(submit "${JOB_PREFIX}-finalize" "01:00:00" "${previous}" \
     "JOB_MODE=finalize,WORKFLOW_ID=nianetvae_per_maintenance")
 
 all_workflows="${iforest_static_job}:${iforest_per_job}:${sae_job}:${vae_job}:${nianet_finalize_job}"
-comparison_job=$(submit "nianet-compare" "01:00:00" "${all_workflows}" "JOB_MODE=compare")
-validation_job=$(submit "nianet-validate" "01:00:00" "${comparison_job}" "JOB_MODE=validate-study")
+comparison_job=$(submit "${JOB_PREFIX}-compare" "01:00:00" "${all_workflows}" "JOB_MODE=compare")
+validation_job=$(submit "${JOB_PREFIX}-validate" "01:00:00" "${comparison_job}" "JOB_MODE=validate-study")
 
 echo "Submitted controlled study:"
 echo "  prepare=${prepare_job}"
