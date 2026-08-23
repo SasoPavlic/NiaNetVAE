@@ -90,6 +90,11 @@ class DataConfig:
     train_phases: tuple[int, ...] = (0, 1)
     test_phases: tuple[int, ...] = (0, 1)
     maintenance_windows: tuple[tuple[str, str, str, str], ...] = DEFAULT_MAINTENANCE_WINDOWS
+    # Davari et al. (2021) Table II reports multi-day failures one calendar day
+    # at a time, so five consecutive rows are separated by a single minute at
+    # midnight. Rows closer than this tolerance describe one physical failure
+    # and are merged. Set to 0 to keep the reported rows verbatim.
+    failure_merge_gap_minutes: int = 1
 
 
 @dataclass(frozen=True)
@@ -143,7 +148,12 @@ class SearchConfig:
     candidate_min_epochs: int = 3
     candidate_max_epochs: int = 4
     reconstruction_metric: str = "SMAPE"
-    pdm_metric: str = "one_minus_smoothed_auroc"
+    # The second objective was 'one_minus_smoothed_auroc': point-wise AUROC of the
+    # smoothed risk against the pre-failure label on cycle 0. That population holds a
+    # single failure (726 positive windows, 0.25% prevalence) and no architecture ever
+    # exceeded chance on it, so the term contributed noise at the heaviest weight.
+    # It is replaced by a label-free calibration-drift term; see search/objectives.py.
+    stability_metric: str = "calibration_drift_v1"
     alarm_burden_metric: str = "normal_high_risk_rate"
     alarm_burden_risk_threshold: float = 0.95
     winner_weights: tuple[float, float, float] = (0.20, 0.50, 0.30)
@@ -291,8 +301,14 @@ class StudyConfig:
         _validate_duration(self.search.max_time)
         if self.search.reconstruction_metric != "SMAPE":
             raise ValueError("The controlled search requires SMAPE reconstruction error.")
-        if self.search.pdm_metric != "one_minus_smoothed_auroc":
-            raise ValueError("The controlled search requires one_minus_smoothed_auroc.")
+        if self.search.stability_metric not in {
+            "calibration_drift_v1",
+            "one_minus_smoothed_auroc",
+        }:
+            raise ValueError(
+                "search.stability_metric must be calibration_drift_v1, or the superseded "
+                "one_minus_smoothed_auroc for archived studies."
+            )
         if self.search.alarm_burden_metric != "normal_high_risk_rate":
             raise ValueError("The controlled search requires normal_high_risk_rate alarm burden.")
         if not self.artifacts.save_predictions or not self.artifacts.save_models:
@@ -387,6 +403,26 @@ def _coerce_tuple_fields(cls: type, values: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+_LEGACY_KEYS = {"search": {"pdm_metric": "stability_metric"}}
+
+
+def _upgrade_legacy_keys(section_name: str, section: dict[str, Any]) -> dict[str, Any]:
+    """Accept superseded key names so archived study configurations still load."""
+    renames = _LEGACY_KEYS.get(section_name)
+    if not renames:
+        return section
+    upgraded = dict(section)
+    for legacy, current in renames.items():
+        if legacy in upgraded:
+            if current in upgraded:
+                raise ValueError(
+                    f"Configuration section {section_name!r} sets both {legacy!r} and "
+                    f"{current!r}; keep only {current!r}."
+                )
+            upgraded[current] = upgraded.pop(legacy)
+    return upgraded
+
+
 def load_study_config(path: str | Path) -> StudyConfig:
     source = Path(path).expanduser().resolve()
     if not source.is_file():
@@ -403,6 +439,7 @@ def load_study_config(path: str | Path) -> StudyConfig:
         section = payload.get(name, {}) or {}
         if not isinstance(section, dict):
             raise ValueError(f"Configuration section {name!r} must be a mapping.")
+        section = _upgrade_legacy_keys(name, section)
         valid_fields = set(cls.__dataclass_fields__)
         unknown = sorted(set(section) - valid_fields)
         if unknown:

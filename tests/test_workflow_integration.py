@@ -118,7 +118,17 @@ def test_empty_evaluation_cycle_preserves_lineage_and_validates(tmp_path) -> Non
         ("2020-01-01 04:11:00", "2020-01-01 04:20:00", "#2", "high"),
         ("2020-01-01 07:10:00", "2020-01-01 07:20:00", "#3", "high"),
     )
-    config = replace(config, data=replace(config.data, maintenance_windows=adjacent_events))
+    # Merging is disabled here on purpose: this test covers the zero-anchor cycle path,
+    # which must keep working for cycles that are empty for other reasons such as
+    # telemetry gaps. Failure merging itself is covered in test_data_contract.
+    config = replace(
+        config,
+        data=replace(
+            config.data,
+            maintenance_windows=adjacent_events,
+            failure_merge_gap_minutes=0,
+        ),
+    )
     prepared = prepare_metropt(config.data, config.preprocessing.policy)
     anchor_counts = [
         int(cycle_source_and_anchor_masks(prepared, cycle, config.data.test_phases)[1].sum())

@@ -58,7 +58,7 @@ def search_contract(config: StudyConfig, prepared: PreparedMetroPTData) -> dict[
         "training": asdict(config.training),
         "objectives": {
             "error": config.search.reconstruction_metric,
-            "pdm": config.search.pdm_metric,
+            "stability": config.search.stability_metric,
             "alarm_burden": config.search.alarm_burden_metric,
             "alarm_burden_risk_threshold": config.search.alarm_burden_risk_threshold,
             "smoothing_window_minutes": config.evaluation.risk_window_minutes,
@@ -249,7 +249,7 @@ class SearchEngine:
             "selected_distance": selected["distance"],
             "selected_objectives": {
                 "obj_error": selected["candidate"]["obj_error"],
-                "obj_pdm": selected["candidate"]["obj_pdm"],
+                "obj_stability": selected["candidate"]["obj_pdm"],
                 "obj_alarm_burden": selected["candidate"]["obj_alarm_burden"],
             },
             "architecture": selected["candidate"]["architecture"],
