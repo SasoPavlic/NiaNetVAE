@@ -50,6 +50,29 @@ def _calibration_drift(
     late = float(np.mean(normal[midpoint:] >= threshold))
     return float(abs(late - early)), early, late
 
+
+def _calibration_level_error(
+    risk: pd.Series,
+    labels,
+    *,
+    exceedance_quantile: float,
+) -> tuple[float, float]:
+    """Distance between the observed and nominal exceedance rate on normal windows.
+
+    Recorded as a diagnostic rather than an objective. Level and alarm burden
+    both measure over-firing, and in the v5 search the superseded objective
+    correlated with alarm burden at r=+0.50; promoting level would recreate
+    that redundancy. Keeping it observable lets the choice be revisited against
+    evidence instead of argument.
+    """
+    normal = risk.to_numpy(dtype=float)[labels == 0]
+    if len(normal) < 1:
+        return 1.0, 1.0
+    nominal = 1.0 - float(exceedance_quantile)
+    observed = float(np.mean(normal >= float(exceedance_quantile)))
+    return float(abs(observed - nominal)), observed
+
+
 class CandidateEvaluator:
     def __init__(
         self,
@@ -132,8 +155,14 @@ class CandidateEvaluator:
                         >= self.config.search.alarm_burden_risk_threshold
                     )
                 )
+                aligned_risk = risk.reindex(smoothed.index)
                 obj_stability, early_rate, late_rate = _calibration_drift(
-                    risk.reindex(smoothed.index),
+                    aligned_risk,
+                    labels,
+                    exceedance_quantile=self.config.calibration.exceedance_quantile,
+                )
+                level_error, observed_exceedance = _calibration_level_error(
+                    aligned_risk,
                     labels,
                     exceedance_quantile=self.config.calibration.exceedance_quantile,
                 )
@@ -141,6 +170,7 @@ class CandidateEvaluator:
             else:
                 normal_high_risk_rate = 1.0
                 obj_stability, early_rate, late_rate = 1.0, None, None
+                level_error, observed_exceedance = None, None
                 invalid_reason = "cycle_zero_search_population_has_no_normal_windows"
             # Retained as a diagnostic only. On the single-failure cycle-0 population this
             # is below chance for every architecture, which is why it is no longer an
@@ -170,6 +200,8 @@ class CandidateEvaluator:
                 "calibration_drift": obj_stability,
                 "early_exceedance_rate": early_rate,
                 "late_exceedance_rate": late_rate,
+                "calibration_level_error": level_error,
+                "normal_exceedance_rate": observed_exceedance,
                 "stability_invalid_reason": invalid_reason,
                 "parameter_count": parameters,
             }
