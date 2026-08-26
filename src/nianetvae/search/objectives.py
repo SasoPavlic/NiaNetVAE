@@ -100,8 +100,8 @@ class CandidateEvaluator:
         if cached is not None:
             return (
                 float(cached["obj_error"]),
-                float(cached["obj_pdm"]),  # column name is historical
-                float(cached["obj_alarm_burden"]),
+                float(cached["obj_level"]),
+                float(cached["obj_stability"]),
             )
 
         penalty = float(self.config.search.invalid_penalty)
@@ -170,7 +170,7 @@ class CandidateEvaluator:
             else:
                 normal_high_risk_rate = 1.0
                 obj_stability, early_rate, late_rate = 1.0, None, None
-                level_error, observed_exceedance = None, None
+                level_error, observed_exceedance = 1.0, None
                 invalid_reason = "cycle_zero_search_population_has_no_normal_windows"
             # Retained as a diagnostic only. On the single-failure cycle-0 population this
             # is below chance for every architecture, which is why it is no longer an
@@ -180,7 +180,10 @@ class CandidateEvaluator:
                 if positive_count and negative_count
                 else None
             )
-            objectives = (obj_error, obj_stability, normal_high_risk_rate)
+            # (reconstruction, calibration level, calibration drift). Alarm burden is
+            # still measured, but it correlates with both calibration terms and with
+            # reconstruction error, so it is reported rather than optimised.
+            objectives = (obj_error, level_error, obj_stability)
             if not np.isfinite(np.asarray(objectives, dtype=float)).all():
                 raise ValueError("Candidate produced non-finite objectives.")
             parameters = int(sum(parameter.numel() for parameter in runtime.model.parameters()))
@@ -196,7 +199,7 @@ class CandidateEvaluator:
                 "negative_windows": negative_count,
                 "smoothed_auroc": auroc,
                 "smoothed_rank_gap": (2.0 * auroc - 1.0) if auroc is not None else None,
-                "normal_high_risk_rate": normal_high_risk_rate,
+                "normal_high_risk_rate": normal_high_risk_rate,  # diagnostic only
                 "calibration_drift": obj_stability,
                 "early_exceedance_rate": early_rate,
                 "late_exceedance_rate": late_rate,

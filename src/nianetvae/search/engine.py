@@ -58,8 +58,8 @@ def search_contract(config: StudyConfig, prepared: PreparedMetroPTData) -> dict[
         "training": asdict(config.training),
         "objectives": {
             "error": config.search.reconstruction_metric,
+            "level": config.search.level_metric,
             "stability": config.search.stability_metric,
-            "alarm_burden": config.search.alarm_burden_metric,
             "alarm_burden_risk_threshold": config.search.alarm_burden_risk_threshold,
             "smoothing_window_minutes": config.evaluation.risk_window_minutes,
         },
@@ -249,8 +249,8 @@ class SearchEngine:
             "selected_distance": selected["distance"],
             "selected_objectives": {
                 "obj_error": selected["candidate"]["obj_error"],
-                "obj_stability": selected["candidate"]["obj_pdm"],
-                "obj_alarm_burden": selected["candidate"]["obj_alarm_burden"],
+                "obj_level": selected["candidate"]["obj_level"],
+                "obj_stability": selected["candidate"]["obj_stability"],
             },
             "architecture": selected["candidate"]["architecture"],
             "genome": list(selected["candidate"]["genome"]),
@@ -348,18 +348,18 @@ def select_winner(
         if row.get("status") == "valid"
         and all(
             np.isfinite(float(row[key])) and float(row[key]) < float(penalty)
-            for key in ("obj_error", "obj_pdm", "obj_alarm_burden")
+            for key in ("obj_error", "obj_level", "obj_stability")
         )
     ]
     if not valid:
         raise ValueError("Search completed without a valid architecture candidate.")
     matrix = np.asarray(
-        [[row["obj_error"], row["obj_pdm"], row["obj_alarm_burden"]] for row in valid],
+        [[row["obj_error"], row["obj_level"], row["obj_stability"]] for row in valid],
         dtype=float,
     )
     pareto = [row for row, keep in zip(valid, _pareto_mask(matrix), strict=True) if bool(keep)]
     pareto_matrix = np.asarray(
-        [[row["obj_error"], row["obj_pdm"], row["obj_alarm_burden"]] for row in pareto],
+        [[row["obj_error"], row["obj_level"], row["obj_stability"]] for row in pareto],
         dtype=float,
     )
     minima = pareto_matrix.min(axis=0)
@@ -377,8 +377,8 @@ def select_winner(
     ]
     ties.sort(
         key=lambda item: (
-            float(item[0]["obj_alarm_burden"]),
-            float(item[0]["obj_pdm"]),
+            float(item[0]["obj_stability"]),
+            float(item[0]["obj_level"]),
             float(item[0]["obj_error"]),
             str(item[0]["created_at"]),
             int(item[0]["id"]),

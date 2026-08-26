@@ -154,6 +154,11 @@ class SearchConfig:
     # exceeded chance on it, so the term contributed noise at the heaviest weight.
     # It is replaced by a label-free calibration-drift term; see search/objectives.py.
     stability_metric: str = "calibration_drift_v1"
+    # Promoted from diagnostic after the v6 pilot: across 270 candidates the
+    # alarm-burden term correlated with drift at r=+0.55 and with level at
+    # r=+0.65, while (error, drift, level) had a worst pair of |r|=0.06.
+    # Alarm burden stays reported, but a search objective must be independent.
+    level_metric: str = "calibration_level_v1"
     alarm_burden_metric: str = "normal_high_risk_rate"
     alarm_burden_risk_threshold: float = 0.95
     winner_weights: tuple[float, float, float] = (0.20, 0.50, 0.30)
@@ -309,8 +314,10 @@ class StudyConfig:
                 "search.stability_metric must be calibration_drift_v1, or the superseded "
                 "one_minus_smoothed_auroc for archived studies."
             )
+        if self.search.level_metric != "calibration_level_v1":
+            raise ValueError("search.level_metric must be calibration_level_v1.")
         if self.search.alarm_burden_metric != "normal_high_risk_rate":
-            raise ValueError("The controlled search requires normal_high_risk_rate alarm burden.")
+            raise ValueError("The alarm-burden diagnostic must be normal_high_risk_rate.")
         if not self.artifacts.save_predictions or not self.artifacts.save_models:
             raise ValueError("Controlled evidence requires predictions and model checkpoints.")
         if not 0.0 < self.calibration.exceedance_quantile < 1.0:
