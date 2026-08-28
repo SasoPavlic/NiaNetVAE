@@ -47,6 +47,12 @@ def test_binary_derived_features_are_passthrough_and_contract_is_frozen() -> Non
 
 
 REPOSITORY = Path(__file__).resolve().parents[1]
+V7_LADDER = (
+    ("configs/search_ladder/metropt_study_v7_gen025.yaml", 25),
+    ("configs/search_ladder/metropt_study_v7_gen050.yaml", 50),
+    ("configs/search_ladder/metropt_study_v7_gen075.yaml", 75),
+    ("configs/metropt_study_v7.yaml", 100),
+)
 V5_LADDER = (
     ("configs/search_ladder/metropt_study_v5_gen025.yaml", 25),
     ("configs/search_ladder/metropt_study_v5_gen050.yaml", 50),
@@ -100,3 +106,36 @@ def test_v7_uses_the_renamed_candidate_table() -> None:
         assert archived.search.database_table == "architecture_candidates_v1", (
             f"{relative} is a completed study; changing its table would alter its identity"
         )
+
+
+def test_v7_search_ladder_shares_one_study_contract() -> None:
+    """The production ladder must be one study, as the v5 ladder was.
+
+    Each step resumes the previous NSGA-III checkpoint, which the engine accepts
+    only while the study contract is unchanged. Drift between steps would be
+    rejected days into a multi-week search.
+    """
+    configs = [
+        (load_study_config(REPOSITORY / relative), relative, generations)
+        for relative, generations in V7_LADDER
+    ]
+    reference, reference_relative, _ = configs[0]
+    for config, relative, generations in configs:
+        assert config.artifacts.study_id == "metropt_controlled_v7", relative
+        assert config.search.max_generations == generations, relative
+        assert config.search.stability_metric == "calibration_drift_v1", relative
+        assert config.search.level_metric == "calibration_level_v1", relative
+        assert config.fingerprint() == reference.fingerprint(), (
+            f"{relative} does not share the study contract of {reference_relative}"
+        )
+    budgets = [config.search.max_generations for config, _r, _g in configs]
+    assert budgets == sorted(set(budgets)), "ladder budgets must strictly increase"
+
+
+def test_search_ladder_submitter_defaults_to_the_production_ladder() -> None:
+    """A stale default would submit a ladder belonging to a superseded study."""
+    script = (REPOSITORY / "slurm_scripts/submit_search_ladder.sh").read_text(encoding="utf-8")
+    default = next(line for line in script.splitlines() if line.startswith("LADDER="))
+    for relative, _generations in V7_LADDER:
+        assert relative in default, f"{relative} missing from the submitter default"
+    assert "metropt_study_v5" not in default, "submitter still defaults to the v5 ladder"

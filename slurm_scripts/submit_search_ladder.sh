@@ -18,7 +18,7 @@ CONFIG_PATH="${CONFIG_PATH:-configs/metropt_study_v5.yaml}"
 IMAGE_PATH="${IMAGE_PATH:?IMAGE_PATH must identify the immutable target SIF}"
 SEARCH_WALLTIME="${SEARCH_WALLTIME:-4-00:00:00}"
 BASELINE_WALLTIME="${BASELINE_WALLTIME:-02:00:00}"
-LADDER="${LADDER:-configs/search_ladder/metropt_study_v5_gen025.yaml configs/search_ladder/metropt_study_v5_gen050.yaml configs/search_ladder/metropt_study_v5_gen075.yaml configs/metropt_study_v5.yaml}"
+LADDER="${LADDER:-configs/search_ladder/metropt_study_v7_gen025.yaml configs/search_ladder/metropt_study_v7_gen050.yaml configs/search_ladder/metropt_study_v7_gen075.yaml configs/metropt_study_v7.yaml}"
 
 for command in sbatch singularity; do
     command -v "${command}" >/dev/null || { echo "Missing command: ${command}" >&2; exit 1; }
