@@ -180,6 +180,36 @@ def build_features(frame: pd.DataFrame, config: DataConfig) -> pd.DataFrame:
     return rolled.astype(np.float32)
 
 
+def merge_contiguous_events(
+    events: tuple[MaintenanceEvent, ...],
+    gap_minutes: int,
+) -> tuple[MaintenanceEvent, ...]:
+    """Join reported rows that describe one physical failure.
+
+    The expert failure report in Davari et al. (2021) Table II is written one
+    calendar day at a time, so a failure spanning midnight appears as two rows
+    separated by a single minute. Treating those rows as separate failures
+    inflates the event count, and makes the pre-failure window of the second
+    row fall inside the first row's ongoing failure.
+    """
+    if gap_minutes <= 0 or len(events) < 2:
+        return events
+    tolerance = pd.Timedelta(minutes=int(gap_minutes))
+    merged: list[MaintenanceEvent] = [events[0]]
+    for event in events[1:]:
+        previous = merged[-1]
+        if event.start - previous.end <= tolerance:
+            merged[-1] = MaintenanceEvent(
+                event_id=f"{previous.event_id}+{event.event_id}",
+                start=previous.start,
+                end=max(previous.end, event.end),
+                severity=previous.severity,
+            )
+        else:
+            merged.append(event)
+    return tuple(merged)
+
+
 def build_events(config: DataConfig) -> tuple[MaintenanceEvent, ...]:
     events = tuple(
         MaintenanceEvent(str(event_id), pd.Timestamp(start), pd.Timestamp(end), str(severity))
@@ -191,7 +221,11 @@ def build_events(config: DataConfig) -> tuple[MaintenanceEvent, ...]:
         raise ValueError("Maintenance events must be sorted chronologically.")
     if any(event.end < event.start for event in events):
         raise ValueError("Maintenance event end precedes its start.")
-    return events
+    merged = merge_contiguous_events(events, config.failure_merge_gap_minutes)
+    pairs = zip(merged, merged[1:], strict=False)
+    if any(later.start <= earlier.end for earlier, later in pairs):
+        raise ValueError("Merged failure events must not overlap.")
+    return merged
 
 
 def build_operation_phase(

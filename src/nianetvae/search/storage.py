@@ -13,7 +13,7 @@ import pandas as pd
 
 
 class CandidateStore:
-    def __init__(self, path: str | Path, table: str = "architecture_candidates_v1") -> None:
+    def __init__(self, path: str | Path, table: str = "architecture_candidates_v2") -> None:
         self.path = Path(path).expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not table.replace("_", "").isalnum():
@@ -52,8 +52,8 @@ class CandidateStore:
                     architecture_json TEXT NOT NULL,
                     status TEXT NOT NULL,
                     obj_error REAL NOT NULL,
-                    obj_pdm REAL NOT NULL,
-                    obj_alarm_burden REAL NOT NULL,
+                    obj_level REAL NOT NULL,
+                    obj_stability REAL NOT NULL,
                     diagnostics_json TEXT NOT NULL,
                     error_type TEXT,
                     error_message TEXT,
@@ -117,7 +117,7 @@ class CandidateStore:
                 INSERT OR IGNORE INTO {self.table} (
                     study_id, search_contract_fingerprint, architecture_hash,
                     genome_json, architecture_json, status,
-                    obj_error, obj_pdm, obj_alarm_burden, diagnostics_json,
+                    obj_error, obj_level, obj_stability, diagnostics_json,
                     error_type, error_message, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,

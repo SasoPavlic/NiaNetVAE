@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import pandas as pd
 import pytest
@@ -8,7 +9,8 @@ import yaml
 
 from nianetvae.artifacts import StudyArtifactStore, read_json
 from nianetvae.cli import main
-from nianetvae.dataloaders.metropt import prepare_metropt
+from nianetvae.config import StudyConfig
+from nianetvae.dataloaders.metropt import build_events, prepare_metropt
 from nianetvae.dataloaders.sequences import sequence_anchor_mask
 
 from .helpers import synthetic_config
@@ -75,3 +77,34 @@ def test_shared_manifest_updates_are_serialized(tmp_path) -> None:
         list(executor.map(record, range(12)))
     manifest = read_json(store.manifest_path)
     assert sorted(manifest["concurrent_test_values"]) == list(range(12))
+
+
+def test_reported_failure_rows_merge_into_physical_failures() -> None:
+    """Davari et al. (2021) Table II splits multi-day failures at midnight.
+
+    Five consecutive rows sit one minute apart at midnight because the expert
+    reported each calendar day separately. Treating them as distinct failures
+    inflates the event count and places the pre-failure window of the
+    continuation inside the still-running failure it is meant to predict.
+    """
+    config = StudyConfig()
+    verbatim = build_events(replace(config.data, failure_merge_gap_minutes=0))
+    merged = build_events(config.data)
+
+    assert len(verbatim) == 21, "the reported schedule must stay verbatim in configuration"
+    assert len(merged) == 16, "21 reported rows describe 16 physical failures"
+    assert [event.event_id for event in merged if "+" in event.event_id] == [
+        "#2+#3",
+        "#9+#10",
+        "#12+#13",
+        "#16+#17+#18",
+    ]
+    for earlier, later in zip(merged, merged[1:], strict=False):
+        gap = (later.start - earlier.end).total_seconds() / 60.0
+        assert gap > config.data.failure_merge_gap_minutes
+
+
+def test_failure_merging_is_disabled_by_a_zero_tolerance() -> None:
+    config = StudyConfig()
+    verbatim = build_events(replace(config.data, failure_merge_gap_minutes=0))
+    assert [event.event_id for event in verbatim[:3]] == ["#1", "#2", "#3"]

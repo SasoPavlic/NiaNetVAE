@@ -21,6 +21,58 @@ from .genome import decode_genome
 from .storage import CandidateStore
 
 
+def _calibration_drift(
+    risk: pd.Series,
+    labels,
+    *,
+    exceedance_quantile: float,
+) -> tuple[float, float | None, float | None]:
+    """Measure how far a model's calibration slips across the scoring window.
+
+    Scores are calibrated once against the frozen initial baseline, so a
+    well-behaved architecture should keep exceeding the calibration quantile at
+    roughly the nominal rate for the whole cycle. In practice reconstruction
+    error grows as the machine drifts away from the training period, and the
+    observed exceedance rate climbs far above nominal, which is what makes a
+    stale detector fire on ordinary operation.
+
+    The objective is the absolute change in exceedance rate between the first
+    and second chronological half of the normal windows. It needs no failure
+    labels, so unlike a supervised term it does not depend on the single
+    failure present in the cycle-0 search population.
+    """
+    normal = risk.to_numpy(dtype=float)[labels == 0]
+    if len(normal) < 2:
+        return 1.0, None, None
+    midpoint = len(normal) // 2
+    threshold = float(exceedance_quantile)
+    early = float(np.mean(normal[:midpoint] >= threshold))
+    late = float(np.mean(normal[midpoint:] >= threshold))
+    return float(abs(late - early)), early, late
+
+
+def _calibration_level_error(
+    risk: pd.Series,
+    labels,
+    *,
+    exceedance_quantile: float,
+) -> tuple[float, float]:
+    """Distance between the observed and nominal exceedance rate on normal windows.
+
+    Recorded as a diagnostic rather than an objective. Level and alarm burden
+    both measure over-firing, and in the v5 search the superseded objective
+    correlated with alarm burden at r=+0.50; promoting level would recreate
+    that redundancy. Keeping it observable lets the choice be revisited against
+    evidence instead of argument.
+    """
+    normal = risk.to_numpy(dtype=float)[labels == 0]
+    if len(normal) < 1:
+        return 1.0, 1.0
+    nominal = 1.0 - float(exceedance_quantile)
+    observed = float(np.mean(normal >= float(exceedance_quantile)))
+    return float(abs(observed - nominal)), observed
+
+
 class CandidateEvaluator:
     def __init__(
         self,
@@ -48,8 +100,8 @@ class CandidateEvaluator:
         if cached is not None:
             return (
                 float(cached["obj_error"]),
-                float(cached["obj_pdm"]),
-                float(cached["obj_alarm_burden"]),
+                float(cached["obj_level"]),
+                float(cached["obj_stability"]),
             )
 
         penalty = float(self.config.search.invalid_penalty)
@@ -96,22 +148,42 @@ class CandidateEvaluator:
             ).astype(int)
             positive_count = int(labels.sum())
             negative_count = int((labels == 0).sum())
-            if positive_count and negative_count:
-                auroc = float(roc_auc_score(labels, smoothed.to_numpy(dtype=float)))
-                obj_pdm = float(np.clip(1.0 - auroc, 0.0, 1.0))
+            if negative_count:
                 normal_high_risk_rate = float(
                     np.mean(
                         smoothed.to_numpy(dtype=float)[labels == 0]
                         >= self.config.search.alarm_burden_risk_threshold
                     )
                 )
+                aligned_risk = risk.reindex(smoothed.index)
+                obj_stability, early_rate, late_rate = _calibration_drift(
+                    aligned_risk,
+                    labels,
+                    exceedance_quantile=self.config.calibration.exceedance_quantile,
+                )
+                level_error, observed_exceedance = _calibration_level_error(
+                    aligned_risk,
+                    labels,
+                    exceedance_quantile=self.config.calibration.exceedance_quantile,
+                )
                 invalid_reason = None
             else:
-                auroc = None
-                obj_pdm = 1.0
                 normal_high_risk_rate = 1.0
-                invalid_reason = "cycle_zero_search_population_missing_positive_or_negative_class"
-            objectives = (obj_error, obj_pdm, normal_high_risk_rate)
+                obj_stability, early_rate, late_rate = 1.0, None, None
+                level_error, observed_exceedance = 1.0, None
+                invalid_reason = "cycle_zero_search_population_has_no_normal_windows"
+            # Retained as a diagnostic only. On the single-failure cycle-0 population this
+            # is below chance for every architecture, which is why it is no longer an
+            # objective; it stays recorded so the effect remains auditable.
+            auroc = (
+                float(roc_auc_score(labels, smoothed.to_numpy(dtype=float)))
+                if positive_count and negative_count
+                else None
+            )
+            # (reconstruction, calibration level, calibration drift). Alarm burden is
+            # still measured, but it correlates with both calibration terms and with
+            # reconstruction error, so it is reported rather than optimised.
+            objectives = (obj_error, level_error, obj_stability)
             if not np.isfinite(np.asarray(objectives, dtype=float)).all():
                 raise ValueError("Candidate produced non-finite objectives.")
             parameters = int(sum(parameter.numel() for parameter in runtime.model.parameters()))
@@ -127,8 +199,13 @@ class CandidateEvaluator:
                 "negative_windows": negative_count,
                 "smoothed_auroc": auroc,
                 "smoothed_rank_gap": (2.0 * auroc - 1.0) if auroc is not None else None,
-                "normal_high_risk_rate": normal_high_risk_rate,
-                "pdm_invalid_reason": invalid_reason,
+                "normal_high_risk_rate": normal_high_risk_rate,  # diagnostic only
+                "calibration_drift": obj_stability,
+                "early_exceedance_rate": early_rate,
+                "late_exceedance_rate": late_rate,
+                "calibration_level_error": level_error,
+                "normal_exceedance_rate": observed_exceedance,
+                "stability_invalid_reason": invalid_reason,
                 "parameter_count": parameters,
             }
             self.store.insert(
