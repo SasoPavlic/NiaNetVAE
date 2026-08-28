@@ -13,7 +13,8 @@ CONFIG_PATH="${CONFIG_PATH:-configs/metropt_study_v5.yaml}"
 IMAGE_PATH="${IMAGE_PATH:?IMAGE_PATH must identify the immutable target SIF}"
 FIRST_CYCLE_WALLTIME="${FIRST_CYCLE_WALLTIME:-08:00:00}"
 CYCLE_WALLTIME="${CYCLE_WALLTIME:-04:00:00}"
-FINAL_CYCLE="${FINAL_CYCLE:-21}"
+# FINAL_CYCLE is derived from the prepared data contract below unless set here.
+FINAL_CYCLE="${FINAL_CYCLE:-}"
 
 for command in sbatch singularity; do
     command -v "${command}" >/dev/null || { echo "Missing command: ${command}" >&2; exit 1; }
@@ -36,6 +37,19 @@ grep -q '"status": "completed"' "${SEARCH_MANIFEST}" || {
     echo "Architecture search for ${STUDY_ID} is not completed. Refusing to freeze it." >&2
     exit 1
 }
+
+# The cycle count follows the failure schedule, so it changes when failures are
+# merged: 22 cycles for the reported rows, 17 for the merged failures. Deriving
+# it from the prepared contract avoids submitting jobs for cycles that do not
+# exist, which a hardcoded default silently did.
+CONTRACT="artifacts/${STUDY_ID}/shared/data_contract.json"
+if [ -z "${FINAL_CYCLE}" ]; then
+    [ -f "${CONTRACT}" ] || { echo "Missing data contract: ${CONTRACT}" >&2; exit 1; }
+    CYCLE_COUNT=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))['cycles']))"         "${CONTRACT}") || { echo "Could not read cycle count from ${CONTRACT}" >&2; exit 1; }
+    [ "${CYCLE_COUNT}" -ge 1 ] 2>/dev/null || { echo "Invalid cycle count: ${CYCLE_COUNT}" >&2; exit 1; }
+    FINAL_CYCLE=$((CYCLE_COUNT - 1))
+    echo "Derived ${CYCLE_COUNT} cycles from the data contract (0..${FINAL_CYCLE})."
+fi
 
 mkdir -p artifacts outputs logs /d/hpc/home/sasop/outputs
 
