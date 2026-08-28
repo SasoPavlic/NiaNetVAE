@@ -165,7 +165,7 @@ class SearchConfig:
     invalid_penalty: float = 9e10
     database_backend: str = "sqlite"
     database_path: str = "search/candidates.sqlite"
-    database_table: str = "architecture_candidates_v1"
+    database_table: str = "architecture_candidates_v2"
 
 
 @dataclass(frozen=True)

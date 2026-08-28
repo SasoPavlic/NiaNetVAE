@@ -81,7 +81,10 @@ search:
   invalid_penalty: 90000000000.0
   database_backend: "sqlite"
   database_path: "search/candidates.sqlite"
-  database_table: "architecture_candidates_v1"
+  # Bumped with the objective rename: rows now carry obj_error, obj_level and
+  # obj_stability. Studies before v7 keep the v1 table and its obj_pdm /
+  # obj_alarm_burden columns.
+  database_table: "architecture_candidates_v2"
 
 calibration:
   method: "empirical_cdf_v1"

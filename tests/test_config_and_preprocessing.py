@@ -81,3 +81,22 @@ def test_v5_search_ladder_shares_one_study_contract() -> None:
 
     resolved = {config.resolved_fingerprint() for config, _relative, _gens in configs}
     assert len(resolved) == len(configs), "each ladder step must record a distinct budget"
+
+
+def test_v7_uses_the_renamed_candidate_table() -> None:
+    """The ledger table must track the objective rename.
+
+    Columns became obj_error, obj_level and obj_stability when alarm burden was
+    replaced by calibration level. A configuration that still names the v1 table
+    would write the new columns under the old name, so studies before and after
+    the rename could not be told apart by table alone.
+    """
+    production = load_study_config(REPOSITORY / "configs/metropt_study_v7.yaml")
+    assert production.search.database_table == "architecture_candidates_v2"
+    assert StudyConfig().search.database_table == "architecture_candidates_v2"
+
+    for relative in ("configs/metropt_study_v4.yaml", "configs/metropt_study_v6_pilot.yaml"):
+        archived = load_study_config(REPOSITORY / relative)
+        assert archived.search.database_table == "architecture_candidates_v1", (
+            f"{relative} is a completed study; changing its table would alter its identity"
+        )

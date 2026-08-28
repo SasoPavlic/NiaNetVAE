@@ -51,9 +51,7 @@ def short(value: Any, size: int = 16) -> str:
 
 
 def table(headers: list[str], rows: list[list[str]], numeric_from: int = 1) -> list[str]:
-    separators = [
-        "---:" if index >= numeric_from else "---" for index in range(len(headers))
-    ]
+    separators = ["---:" if index >= numeric_from else "---" for index in range(len(headers))]
     out = ["| " + " | ".join(headers) + " |", "|" + "|".join(separators) + "|"]
     out.extend("| " + " | ".join(row) + " |" for row in rows)
     out.append("")
@@ -176,16 +174,27 @@ def render(root: Path) -> str:
         )
         objectives = selected.get("selected_objectives") or {}
         if objectives:
-            add(
-                "Winning objective values: reconstruction `"
-                + fmt(objectives.get("obj_error"))
-                + "`, PdM `"
-                + fmt(objectives.get("obj_pdm"))
-                + "`, alarm burden `"
-                + fmt(objectives.get("obj_alarm_burden"))
-                + "`."
+            # Objective names changed with the search contract, so a fixed label per
+            # slot would misreport archived studies: obj_pdm held one_minus_smoothed_auroc
+            # in v2-v6, while obj_level holds calibration_level_v1 from v7. Take the
+            # names from the study's own search manifest instead of assuming.
+            declared = (search or {}).get("objectives") or {}
+            slots = (
+                ("obj_error", "error"),
+                ("obj_level", "level"),
+                ("obj_pdm", "pdm"),
+                ("obj_stability", "stability"),
+                ("obj_alarm_burden", "alarm_burden"),
             )
-            add("")
+            rendered = []
+            for stored_key, contract_key in slots:
+                if objectives.get(stored_key) is None:
+                    continue
+                name = declared.get(contract_key) or contract_key
+                rendered.append(f"{name} `{fmt(objectives[stored_key])}`")
+            if rendered:
+                add("Winning objective values: " + ", ".join(rendered) + ".")
+                add("")
 
     if not present:
         add("## Workflows")
@@ -227,9 +236,7 @@ def render(root: Path) -> str:
     add("## Alarm burden")
     add("")
     burden = {
-        "coverage_percent": best(
-            {w: summaries[w].get("coverage_percent") for w in present}, False
-        ),
+        "coverage_percent": best({w: summaries[w].get("coverage_percent") for w in present}, False),
         "far_per_day": best({w: summaries[w].get("far_per_day") for w in present}, False),
         "false_alarm_islands": best(
             {w: summaries[w].get("false_alarm_islands") for w in present}, False
