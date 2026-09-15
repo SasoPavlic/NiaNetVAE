@@ -287,9 +287,20 @@ reintroduce without new evidence.
 3. **Cycle 0 is unrepresentative.** Never fine-tuned, accumulates 41 days of
    drift, and its pre-failure risk is *inverted*. The v7 winner's recorded
    `smoothed_auroc` on cycle 0 is 0.292, below chance, consistent with every
-   candidate ever measured. Adapted cycles are correct in 11 of 13. This is
-   evidence for adaptation, but it also means architecture selection is guided by
-   the worst available cycle.
+   candidate ever measured.
+
+   Recomputed from v7 predictions on 2026-09-15: the pre-failure signal runs the
+   correct way in **12 of the 14 cycles where it can be scored**, pooled lift
+   **1.56x**. Three cycles are unscoreable — cycle 7 has no normal rows, cycles
+   15 and 16 no pre-failure window. Cycle 0 is one of only two exceptions and by
+   far the worse, at **0.21x**: the model reads the two hours before a failure as
+   five times more ordinary than ordinary operation. The other, cycle 3, is
+   marginal at 0.88x on 1,980 normal rows.
+
+   These figures supersede the "11 of 13" and "11 of 14" previously carried here
+   and on the wiki; both were stale and neither should be cited. This is evidence
+   for adaptation, but it also means architecture selection is guided by the
+   worst available cycle.
 
 4. **Architecture ranking rests on a 4-epoch fit.** Candidates are capped at
    `candidate_max_epochs: 4`; the winner used all four with its best at epoch 2.
